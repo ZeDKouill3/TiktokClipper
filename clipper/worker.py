@@ -447,12 +447,39 @@ def _cancel_interrupted(video_id: str, config: Config) -> None:
     mark_interrupted(video_id, config, cancelled=True)
 
 
+def _kill_descendants(pid: int) -> None:
+    """Tue l'arbre de ``pid`` (ffmpeg, yt-dlp, ``claude -p`` lances par l'enfant : audit 10/10, coeur-I6) : un
+    simple arret du pid les laisse orphelins et vivants. Windows : ``taskkill /T /F`` ; ailleurs : le groupe du
+    processus quand il en est le chef (lance par ``_popen_logged`` en nouvelle session). Un echec est journalise,
+    l'arret du pid lui-meme reste fait par l'appelant."""
+    if sys.platform == "win32":
+        import subprocess
+
+        result = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, check=False)
+        if result.returncode != 0 and _pid_alive(pid):
+            log.error("processus %s : taskkill /T a échoué (code %s) : %s", pid, result.returncode,
+                      result.stderr.decode("utf-8", "replace").strip())
+        return
+    try:
+        if os.getpgid(pid) == pid:
+            os.killpg(pid, signal.SIGKILL)
+    except OSError as exc:
+        log.warning("processus %s : groupe non arrêté : %s", pid, exc)
+
+
+def terminate_tree(pid: int | None, grace: float, *, created_at: int | None = None) -> None:
+    """Arrete ``pid`` et tout son arbre de processus (``serve`` l'utilise pour son worker enfant)."""
+    _terminate_pid(pid, grace, created_at=created_at)
+
+
 def _terminate_pid(pid: int | None, grace: float, *, created_at: int | None = None) -> None:
-    """Arrete le processus ``pid`` s'il vit encore : demande d'arret, ``grace`` secondes, puis kill.
-    ``created_at`` (heure de creation enregistree au lancement) : un processus qui a herite du pid mais pas de
-    cette heure n'est pas le notre, rien n'est envoye (coeur-I3)."""
+    """Arrete le processus ``pid`` et son arbre de descendants s'il vit encore : arret, ``grace`` secondes pour
+    que le pid disparaisse, puis kill de nouveau. ``created_at`` (heure de creation enregistree au
+    lancement) : un processus qui a herite du pid mais pas de cette heure n'est pas le notre, rien n'est envoye
+    (coeur-I3)."""
     if not process_alive(pid, created_at):
         return
+    _kill_descendants(pid)
     try:
         os.kill(pid, signal.SIGTERM)  # Windows : TerminateProcess
     except OSError as exc:
@@ -464,9 +491,15 @@ def _terminate_pid(pid: int | None, grace: float, *, created_at: int | None = No
         time.sleep(0.05)
     if _pid_alive(pid):
         try:
+            _kill_descendants(pid)
             os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
         except OSError as exc:
             log.error("processus %s : kill impossible après %g s : %s", pid, grace, exc)
+
+
+def _group_kwargs() -> dict[str, Any]:
+    """Hors Windows, l'enfant est chef de son propre groupe : ``_kill_tree`` peut alors tuer tout l'arbre."""
+    return {} if sys.platform == "win32" else {"start_new_session": True}
 
 
 _STILL_ACTIVE = 259
@@ -1573,7 +1606,7 @@ class Worker:
         path.parent.mkdir(parents=True, exist_ok=True)
         handle = open(path, "wb")
         try:
-            process = self._popen(cmd, stdout=handle, stderr=subprocess.STDOUT)
+            process = self._popen(cmd, stdout=handle, stderr=subprocess.STDOUT, **_group_kwargs())
         except BaseException:
             handle.close()
             raise
@@ -1697,7 +1730,7 @@ class Worker:
         path.parent.mkdir(parents=True, exist_ok=True)
         handle = open(path, "wb")
         try:
-            process = self._popen(cmd, stdout=handle, stderr=subprocess.STDOUT)
+            process = self._popen(cmd, stdout=handle, stderr=subprocess.STDOUT, **_group_kwargs())
         except BaseException:
             handle.close()
             raise

@@ -5,7 +5,7 @@ slug: audit-lot-a2-arbre-de-processus
 title: "Audit lot A2 : arbre de processus"
 created: 2026-10-10T18:25:20Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/__main__.py
   - clipper/worker.py
@@ -16,6 +16,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: diagnose
+proof:
+  - type: test
+    ref: local/445244434502@b63e524
+    tree: scope/05e65db88f87
+    criteria: a130055974b9
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---

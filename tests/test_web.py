@@ -4334,9 +4334,11 @@ def _serve_setup(tmp_path, monkeypatch, web_toml: str = ""):
     spawned: list[list[str]] = []
 
     class _Proc:
-        def terminate(self) -> None:
-            spawned.append(["terminate"])
+        pid = 4242
 
+    from clipper import worker
+
+    monkeypatch.setattr(worker, "terminate_tree", lambda pid, grace, **kw: spawned.append(["terminate"]))
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: runs.append((app, kw)))
     monkeypatch.setattr(cli, "_popen", lambda cmd, *a, **kw: spawned.append(cmd) or _Proc())
     return cli, runs, spawned

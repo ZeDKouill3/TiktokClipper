@@ -405,7 +405,10 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 uvicorn.run(create_app(config=config), host=host, port=int(port))
             finally:
-                worker_proc.terminate()
+                # le worker ET son enfant en cours (ffmpeg, yt-dlp...) : pas d'orphelin (audit 10/10, A2)
+                from clipper import worker as worker_mod
+
+                worker_mod.terminate_tree(worker_proc.pid, float(config.section("worker")["cancel_grace_s"]))
             return 0
         else:
             if args.watch:
