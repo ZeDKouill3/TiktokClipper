@@ -1370,6 +1370,7 @@ def render(
 
     scratch_dir = video_dir / "render" / clip_id
     scratch_dir.mkdir(parents=True, exist_ok=True)
+    tmp_out = mp4_out.with_suffix(".mp4.tmp")
     try:
         hook_path: Path | None = None
         part_path: Path | None = None
@@ -1443,7 +1444,6 @@ def render(
 
         device = get_device()
 
-        tmp_out = mp4_out.with_suffix(".mp4.tmp")
         out_dir.mkdir(parents=True, exist_ok=True)
         _run_ffmpeg(
             ffmpeg_bin, source, filter_complex, vout_label, target_fps, device.type, settings, scratch_dir, tmp_out,
@@ -1452,6 +1452,7 @@ def render(
         tmp_out.replace(mp4_out)
     finally:
         shutil.rmtree(scratch_dir, ignore_errors=True)
+        tmp_out.unlink(missing_ok=True)  # sortie partielle d'un ffmpeg en echec (rien apres un replace)
 
     data = {
         "video_id": video_id,
@@ -1475,6 +1476,10 @@ def render(
         "transcript": _clip_transcript(transcript, clip["start"], clip["end"]),
         "layout": reframe_data["layout"],
         "cta": cta_applies,
+        # ce qui a reellement ete dessine (la qa ne relit pas la config courante)
+        "title_shown": letterbox and title_enabled,
+        "badge_shown": letterbox and badge_enabled,
+        "cta_handle_shown": handle_shown,
         "qa": dict(_QA_DEFAULT),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }

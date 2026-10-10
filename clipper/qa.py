@@ -546,7 +546,7 @@ def response_schema(letterbox: bool = False, part: int = 1, split: bool = False)
 
 def _prompt(
     clip: dict[str, Any], frames: list[tuple[Path, float, list[str]]], letterbox: bool = False,
-    title_enabled: bool = True,
+    title_shown: bool = True,
 ) -> str:
     part = int(clip.get("part", 1))
     excluded = _excluded_defects(letterbox, part, clip.get("layout") == "stream_split")
@@ -557,7 +557,7 @@ def _prompt(
     )
     if clip.get("layout") == "stream_split":
         # SPEC-76dc : webcam en haut, jeu en bas, badge de chaine optionnel a leur jonction ;
-        # le titre d'ecran n'est dessine que si [render] title_enabled.
+        # le titre d'ecran n'est cite que s'il a ete dessine (sidecar title_shown).
         format_line = (
             "## Format\n"
             "Clip stream_split : webcam en haut (celle du createur), jeu en bas, un badge de chaine "
@@ -566,7 +566,7 @@ def _prompt(
         )
         hook_line = (
             f"Titre d'ecran affiche en permanence (accroche) : {clip.get('screen_title', '')}\n"
-            if title_enabled else ""
+            if title_shown else ""
         )
     elif clip.get("layout") == "stream":
         format_line = (
@@ -574,7 +574,10 @@ def _prompt(
             "Clip stream : titre d'ecran sur encadre blanc en haut, la facecam (webcam du "
             "createur) agrandie dessous, le jeu ou l'ecran en bas, sous-titres sur le jeu.\n\n"
         )
-        hook_line = f"Titre d'ecran affiche en permanence (accroche) : {clip.get('screen_title', '')}\n"
+        hook_line = (
+            f"Titre d'ecran affiche en permanence (accroche) : {clip.get('screen_title', '')}\n"
+            if title_shown else ""
+        )
     elif letterbox:
         format_line = (
             "## Format\n"
@@ -583,7 +586,10 @@ def _prompt(
             "volontairement les bords et les sous-titres sont hors de l'image : normal, ne "
             "pas le signaler.\n\n"
         )
-        hook_line = f"Titre d'ecran affiche en permanence (accroche) : {clip.get('screen_title', '')}\n"
+        hook_line = (
+            f"Titre d'ecran affiche en permanence (accroche) : {clip.get('screen_title', '')}\n"
+            if title_shown else ""
+        )
     else:
         format_line = ""
         hook_line = f"Texte d'accroche affiche les 2 premieres secondes : {clip.get('hook_text', '')}\n"
@@ -689,18 +695,23 @@ def check_clip(
     mp4 = json_path.with_suffix(".mp4")
     if not mp4.exists():
         raise QAError(f"video du clip absente : {mp4}")
-    title_enabled = True
-    if layout == "stream_split":
+    # Ce que le rendu a dessine (sidecar title_shown). Un sidecar anterieur a ce
+    # champ n'a que la config : relue seulement pour le split, comme avant.
+    if "title_shown" in clip:
+        title_shown = bool(clip["title_shown"])
+    elif layout == "stream_split":
         if config is None:
             from clipper.config import load_config
 
             config = load_config()
-        title_enabled = bool(config.section("render")["title_enabled"])
+        title_shown = bool(config.section("render")["title_enabled"])
+    else:
+        title_shown = True
 
     issues = _local_issues(mp4, clip, settings, ffmpeg_bin, ffprobe_bin, crop=crop)
     frames = _extract_frames(mp4, frames_dir, settings)
     answer = llm.ask(
-        "qa", _prompt(clip, frames, letterbox=letterbox, title_enabled=title_enabled), [p for p, _, _ in frames],
+        "qa", _prompt(clip, frames, letterbox=letterbox, title_shown=title_shown), [p for p, _, _ in frames],
         response_schema(letterbox=letterbox, part=int(clip.get("part", 1)), split=layout == "stream_split"),
         config=config,
     )

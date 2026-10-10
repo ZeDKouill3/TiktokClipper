@@ -1429,3 +1429,22 @@ def test_preview_empty_text_is_an_explicit_error():
 
     with pytest.raises(SubtitlesError, match="texte"):
         render_preview({}, "   ")
+
+
+# --------------------------------------------------------------------------
+# TASK-0aff43d73607 (image-M3) : la regle « plus de 3 fois la meme lettre
+# ramenee a 3 » vaut aussi en split, pas seulement en letterbox.
+# --------------------------------------------------------------------------
+
+
+def test_split_repeated_letters_run_is_shortened_to_three_like_letterbox(tmp_path, video_dir, caplog):
+    words = [_word(" G" + "R" * 100, 0.0, 1.0), _word(" ok", 1.0, 1.2)]
+    with caplog.at_level("INFO", logger="clipper.subtitles"):
+        path = run_split(tmp_path, video_dir, words=words)
+    base, highlights = _split_layers(path)
+    texts = [line_text(ev).strip() for ev in base]
+    assert texts == ["GRRR OK"]
+    assert "R" * 4 not in "".join(line_text(ev) for ev in base + highlights)
+    assert any("1 mot" in r.getMessage() for r in caplog.records)
+    saved = json.loads((video_dir / "transcript.json").read_text(encoding="utf-8"))
+    assert saved["segments"][0]["words"][0]["word"] == " G" + "R" * 100

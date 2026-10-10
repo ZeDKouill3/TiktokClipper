@@ -86,9 +86,9 @@ def test_report_has_one_point_per_documented_check(isolated_cwd, tmp_path):
 
     names = {p["name"] for p in points}
     assert names == {
-        "python", "ffmpeg", "ffprobe", "claude", "chrome", "gpu",
+        "python", "ffmpeg", "ffprobe", "claude", "chrome", "gpu", "nvenc",
         "mediapipe_model", "whisper_model", "config", "data_dirs",
-    }
+    }  # nvenc : seulement quand le device est cuda (image-I3)
 
 
 # --------------------------------------------------------------------------
@@ -278,3 +278,74 @@ def test_cli_doctor_json_is_valid_and_reflects_a_failure(isolated_cwd, tmp_path,
     points = json.loads(out)
     assert any(p["name"] == "claude" and p["status"] == doctor.STATUS_MISSING for p in points)
     assert exit_code == 1
+
+
+# --------------------------------------------------------------------------
+# TASK-0aff43d73607 (image-I3) : point « nvenc » quand le device est cuda,
+# verifie cote ffmpeg (un encodage d'une image), jamais sur la foi de ctranslate2.
+# --------------------------------------------------------------------------
+
+
+def _run_nvenc(returncode, stderr=""):
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(list(cmd))
+        if "h264_nvenc" in cmd:
+            return subprocess.CompletedProcess(cmd, returncode, stdout="", stderr=stderr)
+        return _run_connected(cmd, **kwargs)
+
+    run.calls = calls
+    return run
+
+
+def test_report_nvenc_ok_when_cuda_and_ffmpeg_encodes_one_frame(isolated_cwd, tmp_path):
+    _write_config(isolated_cwd)
+    kwargs = _happy_kwargs(tmp_path)
+    kwargs["run"] = _run_nvenc(0)
+
+    points = doctor.report(isolated_cwd, **kwargs)
+
+    assert _point(points, "nvenc")["status"] == doctor.STATUS_OK
+    cmd = next(c for c in kwargs["run"].calls if "h264_nvenc" in c)
+    assert cmd[0] == "/usr/bin/ffmpeg"
+
+
+def test_report_nvenc_failure_is_a_warning_naming_ffmpeg_error_never_a_failure(isolated_cwd, tmp_path):
+    _write_config(isolated_cwd)
+    kwargs = _happy_kwargs(tmp_path)
+    kwargs["run"] = _run_nvenc(1, "Driver does not support the required nvenc API version\n")
+
+    points = doctor.report(isolated_cwd, **kwargs)
+
+    nvenc = _point(points, "nvenc")
+    assert nvenc["status"] == doctor.STATUS_WARNING
+    assert "Driver does not support" in nvenc["detail"]
+    assert nvenc["fix"]
+    assert doctor.exit_code(points) == 0
+
+
+def test_report_nvenc_probe_unreachable_is_a_warning(isolated_cwd, tmp_path):
+    _write_config(isolated_cwd)
+    kwargs = _happy_kwargs(tmp_path)
+
+    def run(cmd, **kwargs_):
+        if "h264_nvenc" in cmd:
+            raise subprocess.TimeoutExpired(cmd, 20)
+        return _run_connected(cmd, **kwargs_)
+
+    kwargs["run"] = run
+    points = doctor.report(isolated_cwd, **kwargs)
+
+    assert _point(points, "nvenc")["status"] == doctor.STATUS_WARNING
+
+
+def test_report_has_no_nvenc_point_on_cpu_or_without_ffmpeg(isolated_cwd, tmp_path):
+    _write_config(isolated_cwd)
+    cpu = _happy_kwargs(tmp_path)
+    cpu["device_factory"] = _cpu_device
+    assert "nvenc" not in {p["name"] for p in doctor.report(isolated_cwd, **cpu)}
+
+    no_ffmpeg = _happy_kwargs(tmp_path)
+    no_ffmpeg["which"] = lambda name: None if name == "ffmpeg" else f"/usr/bin/{name}"
+    assert "nvenc" not in {p["name"] for p in doctor.report(isolated_cwd, **no_ffmpeg)}

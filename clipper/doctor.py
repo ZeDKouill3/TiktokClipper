@@ -135,6 +135,26 @@ def _check_gpu(device_factory: Callable[[], Device], nvidia_present: Callable[[]
     return _point("gpu", STATUS_WARNING, detail)
 
 
+def _check_nvenc(ffmpeg: str, run: Callable[..., Any]) -> dict[str, Any]:
+    """Un encodage reel d'une image en h264_nvenc : « GPU detecte » vient de
+    ctranslate2, pas de ffmpeg (build sans nvenc, pilote trop ancien pour son
+    SDK NVENC : chaque rendu echouerait). Avertissement seulement."""
+    fix = "mets a jour le pilote NVIDIA ou ffmpeg (build avec h264_nvenc) ; sinon le rendu echoue"
+    cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.1",
+        "-frames:v", "1", "-c:v", "h264_nvenc", "-f", "null", "-",
+    ]
+    try:
+        proc = run(cmd, capture_output=True, text=True, timeout=20)
+    except Exception as exc:  # noqa: BLE001 - sonde injoignable, jamais un plantage de doctor
+        return _point("nvenc", STATUS_WARNING, f"encodage d'essai injoignable ({type(exc).__name__})", fix)
+    if proc.returncode == 0:
+        return _point("nvenc", STATUS_OK, "h264_nvenc encode une image")
+    lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+    reason = lines[-1] if lines else f"code {proc.returncode}"
+    return _point("nvenc", STATUS_WARNING, f"h264_nvenc echoue : {reason}", fix)
+
+
 def _check_mediapipe_model(config: Config | None, path_fn: Callable[[Config | None], Path]) -> dict[str, Any]:
     path = path_fn(config)
     if path.exists():
@@ -201,13 +221,22 @@ def report(
     ``ok``/``avertissement``/``manquant``, ``detail``, ``fix`` ou ``None``)."""
     root = Path(cwd) if cwd is not None else Path.cwd()
     config, config_point = _check_config(root)
+    ffmpeg_point = _check_binary(which, "ffmpeg")
+    device = device_factory()
+    gpu_point = _check_gpu(lambda: device, nvidia_present)
+    # le rendu choisit h264_nvenc des que le device est cuda (render._encoder)
+    nvenc_points = (
+        [_check_nvenc(ffmpeg_point["detail"], run)]
+        if device.type == "cuda" and ffmpeg_point["status"] == STATUS_OK else []
+    )
     return [
         _check_python(),
-        _check_binary(which, "ffmpeg"),
+        ffmpeg_point,
         _check_binary(which, "ffprobe"),
         _check_claude(which, run),
         _check_chrome(chrome_finder, config),
-        _check_gpu(device_factory, nvidia_present),
+        gpu_point,
+        *nvenc_points,
         _check_mediapipe_model(config, mediapipe_path_fn),
         _check_whisper_model(config, whisper_cache_probe, whisper_name_fn),
         config_point,

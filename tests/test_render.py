@@ -2550,3 +2550,54 @@ def test_video_thumbnail_seek_ratio_default_is_ten_percent():
     from clipper.render import CONFIG_DEFAULTS
 
     assert CONFIG_DEFAULTS["video_thumbnail_seek_ratio"] == 0.1
+
+
+# --------------------------------------------------------------------------
+# TASK-0aff43d73607 (image-M1, image-M4) : pas de .mp4.tmp orphelin quand
+# ffmpeg echoue ; le sidecar dit ce qui a vraiment ete dessine.
+# --------------------------------------------------------------------------
+
+
+def test_failing_ffmpeg_leaves_no_mp4_tmp_in_output(tmp_path, video_dir, monkeypatch, cpu_device):
+    from clipper.render import RenderError, render
+
+    def failing(cmd, cwd, out_path):
+        Path(out_path).write_bytes(b"partiel")  # ffmpeg a commence a ecrire puis echoue
+        raise RenderError("ffmpeg a echoue")
+
+    monkeypatch.setattr("clipper.render._exec_ffmpeg", failing)
+    (video_dir / f"{VIDEO_ID}.mp4").write_bytes(b"")
+    out_dir = tmp_path / "output"
+    with pytest.raises(RenderError, match="ffmpeg a echoue"):
+        render(VIDEO_ID, CLIP_ID, workspace_dir=video_dir.parent, output_dir=out_dir, config=make_config())
+    assert list((out_dir / VIDEO_ID).iterdir()) == []
+
+
+def _sidecar(tmp_path):
+    return json.loads((tmp_path / "output" / VIDEO_ID / f"{CLIP_ID}.json").read_text(encoding="utf-8"))
+
+
+def test_split_sidecar_records_title_shown_false_when_title_disabled(
+    tmp_path, stream_split_dir, fake_ffmpeg, cpu_device
+):
+    from clipper.render import render
+
+    (stream_split_dir / f"{VIDEO_ID}.mp4").write_bytes(b"")
+    render(VIDEO_ID, CLIP_ID, workspace_dir=stream_split_dir.parent, output_dir=tmp_path / "output",
+           config=make_config(title_enabled=False))
+    data = _sidecar(tmp_path)
+    assert data["title_shown"] is False
+    assert data["badge_shown"] is False
+    assert data["cta_handle_shown"] is False
+
+
+def test_split_sidecar_records_title_shown_true_when_title_drawn(tmp_path, video_dir, fake_ffmpeg, cpu_device):
+    from clipper.render import render
+
+    (video_dir / "reframe" / f"{CLIP_ID}.json").write_text(
+        json.dumps(_reframe_json_stream_split(with_title=True)), encoding="utf-8")
+    (video_dir / f"{VIDEO_ID}.mp4").write_bytes(b"")
+    render(VIDEO_ID, CLIP_ID, workspace_dir=video_dir.parent, output_dir=tmp_path / "output", config=make_config())
+    data = _sidecar(tmp_path)
+    assert data["title_shown"] is True
+    assert data["badge_shown"] is False
