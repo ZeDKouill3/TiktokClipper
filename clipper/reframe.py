@@ -1348,7 +1348,11 @@ def _size_camera_rect(
         bh = bw / aspect
     else:
         bw = bh * aspect
-    w, h = _even(bw), _even(bh)
+    # Arrondi pair de w, puis h derive de w (pas arrondi a part) : le rectangle
+    # garde le format du panneau a l'arrondi pres (audit 10/10 image-M2 : 112x78
+    # arrondi separement s'ecartait de 2,1 % et etait refuse par _reframe_stream).
+    w = _even(bw)
+    h = _even(w / aspect)
     max_area = float(settings["facecam_max_area"])
     if w > width or h > height or w * h >= max_area * width * height:
         return None, (
@@ -2101,7 +2105,8 @@ def _persistent(candidate: dict[str, Any], periods: Sequence[list[dict[str, Any]
     """Le rectangle du candidat revient (IoU >= 0.5) dans au moins
     ``facecam_face_stable_share`` des periodes qui ont des candidats : une
     webcam est la meme sur toute la video, un visage de menu n'apparait que par
-    moments. Une seule periode : persistant par construction."""
+    moments. Une seule periode : persistant par construction (l'appelant,
+    ``_stable_face_over_null``, ne renverse toutefois jamais Claude dans ce cas)."""
     if len(periods) <= 1:
         return True
     box = _rect_box(candidate["rect"])
@@ -2120,17 +2125,21 @@ def _stable_face_over_null(
     de la video (``periods`` : candidats de chacune), est retenu malgre la
     reponse de Claude (override journalise). Renvoie (retenu | None, ecartes) :
     les candidats stables mais non persistants (visages de menus) ne
-    contredisent pas Claude ; plusieurs persistants = erreur explicite (ADR-ad2e)."""
+    contredisent pas Claude ; plusieurs persistants = erreur explicite (ADR-ad2e).
+    Avec au plus une periode, rien n'est persistant : jamais d'override, tous
+    les candidats stables sont rendus comme ecartes (TASK-cee612eefa16)."""
     top = max(c["support"] for c in candidates)
     floor = float(settings["facecam_face_stable_share"]) * top - 1e-9
     stable = [c for c in candidates if c["support"] >= floor and (c.get("face_support") or 0) >= floor]
+    if len(periods) <= 1:
+        # Une seule periode ne prouve aucune persistance, quel que soit le nombre
+        # de candidats (ecran d'attente dessine dont la mascotte ou les nuages
+        # passent pour des visages, cas Hellraiser, audit 10/10 image-I1) :
+        # Claude fait foi, pas d'erreur bloquante ; l'appelant journalise les
+        # candidats ecartes.
+        return None, stable
     keep = [c for c in stable if _persistent(c, periods, settings)]
     dropped = [c for c in stable if c not in keep]
-    if len(keep) > 1 and len(periods) <= 1:
-        # Une seule periode ne prouve aucune persistance (ecran d'attente dessine
-        # dont les nuages passent pour des visages) : Claude fait foi, pas d'erreur
-        # bloquante ; l'appelant journalise les candidats ecartes.
-        return None, stable
     if len(keep) > 1:
         raise ReframeError(
             "[reframe] Claude a repondu aucune webcam alors que plusieurs candidats visage stables et persistants "
@@ -2272,6 +2281,11 @@ def detect_facecam(
 
     for before, after in zip(period_inputs, period_inputs[1:]):
         before["end"] = after["start"]  # periodes jointives
+    boards_dir = video_dir / "facecam"
+    if boards_dir.exists():
+        # Planches d'un calcul precedent (plus de periodes) : jamais referencees
+        # par le nouveau facecam.json, elles sont retirees (audit 10/10 image-M5).
+        shutil.rmtree(boards_dir)
     periods: list[dict[str, Any]] = []
     for index, item in enumerate(period_inputs):
         candidates = item["candidates"]
@@ -2595,6 +2609,24 @@ def _game_window(
     return best[2]
 
 
+def _check_camera_rect_ratio(rect: dict[str, int], settings: dict[str, Any]) -> None:
+    """Le rectangle de facecam.json est au format du panneau camera courant,
+    a l'erreur d'arrondi pres : ``_size_camera_rect`` arrondit chaque cote au
+    pair (jusqu'a 1,5 px par cote, soit ``2/w + 2/h`` en relatif), ce qui pese
+    sur une petite webcam (112x78 : 2,1 % du ratio). Un ecart au-dela de ce
+    plancher et de 2 % trahit un ``stream_camera_ratio`` change depuis la
+    localisation (audit 10/10 image-M2)."""
+    cam_w, cam_h, _ = _camera_size(settings)
+    aspect = cam_w / cam_h
+    w, h = rect["w"], rect["h"]
+    tolerance = max(0.02, 2 / w + 2 / h)
+    if abs(w / h - aspect) > tolerance * aspect:
+        raise ReframeError(
+            f"facecam.json ({w}x{h}) calcule pour un autre panneau camera ({cam_w}x{cam_h}, "
+            f"stream_camera_ratio = {settings['stream_camera_ratio']}) : relancer reframe --force"
+        )
+
+
 def _reframe_stream(
     video_id: str,
     clip_id: str,
@@ -2611,11 +2643,7 @@ def _reframe_stream(
     source_w, source_h = facecam["source"]["width"], facecam["source"]["height"]
     out_w, out_h = int(settings["output_width"]), int(settings["output_height"])
     cam_w, cam_h, top = _camera_size(settings)
-    if abs(rect["w"] / rect["h"] - cam_w / cam_h) > 0.02 * cam_w / cam_h:
-        raise ReframeError(
-            f"facecam.json ({rect['w']}x{rect['h']}) calcule pour un autre panneau camera ({cam_w}x{cam_h}) : "
-            "relancer reframe --force"
-        )
+    _check_camera_rect_ratio(rect, settings)
     game_top = top + cam_h
     game_h = out_h - game_top
     if top < 0 or game_h <= 0:
