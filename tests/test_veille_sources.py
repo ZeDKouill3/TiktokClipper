@@ -1364,3 +1364,11 @@ def test_twitch_stops_before_the_vod_requests_and_counts_the_games_not_read(tmp_
 def test_collectors_without_deadline_still_return_the_exact_documented_shape(tmp_path):
     http = FakeHttp(_followers_routes({"7": _members(5)}))
     assert _followers(tmp_path, http, ["7"]) == {"followers": {"7": 5}, "skipped": 0, "rate_limited": 0}
+
+
+def test_token_without_expires_in_never_leaks_the_access_token(tmp_path):
+    body = {"access_token": "JETON-SECRET-XYZ", "token_type": "bearer"}
+    http = FakeHttp(_twitch_routes({("POST", "/oauth2/token"): [(200, body)]}))
+    with pytest.raises(veille_sources.SourceError) as err:
+        _twitch(tmp_path, http)
+    assert "expires_in" in str(err.value) and "JETON-SECRET-XYZ" not in str(err.value)

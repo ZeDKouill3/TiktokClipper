@@ -3204,3 +3204,63 @@ def test_veille_does_not_import_the_download_step():
             imported.update(f"{module}.{alias.name}" for alias in node.names)
 
     assert "clipper.download" not in imported
+
+
+# --- TASK-3e7c : audit lot K (veille-I1, I2, M2, M3, M4) ---------------------
+
+
+def test_twitch_vod_with_a_workspace_folder_under_its_worker_id_is_already_known(tmp_path, config):
+    (tmp_path / "workspace" / "v2893407960").mkdir(parents=True)
+    veille.collect(NOW, collectors=_collectors(vods=[_twitch_vod("2893407960"), _twitch_vod("2893407961")]),
+                   config=config)
+    day = _read(_sdir(tmp_path) / "days" / f"{TODAY}.json")
+    assert [c["video_id"] for c in day["candidates"]] == ["2893407961"]
+    assert day["excluded"]["already_known"] == 1
+
+
+def test_a_collect_crash_finishes_the_day_in_error_and_the_survey_is_not_replayed(tmp_path):
+    config = _make_config(tmp_path, enabled=True)
+    for offset in range(1, 8):  # J-7..J-1 lisibles, J-10 corrompu : _history_window échoue après les collecteurs
+        day = (AFTER_RUN_AT - timedelta(days=offset)).date().isoformat()
+        _write_history(tmp_path, day, viewers=900, players=4000)
+    bad = _sdir(tmp_path) / "history" / "2026-09-26.json"
+    bad.write_text("{corrompu", encoding="utf-8")
+    collectors = _run_collectors()
+    with llm.use_backend(FakeBackend([_picks()])):
+        for _ in range(3):
+            try:
+                veille.run_if_due(AFTER_RUN_AT, config, collectors)
+            except veille.VeilleError:
+                pass
+    assert collectors["twitch"].calls == 1
+    day = _read(_sdir(tmp_path) / "days" / f"{TODAY}.json")
+    assert day["finished_at"] and day["llm"]["status"] == "error" and "2026-09-26.json" in day["llm"]["error"]
+
+
+def test_prompt_keeps_the_releases_of_a_partial_igdb_with_the_incomplete_note(tmp_path):
+    releases = {"recent": [{"igdb_id": "7", "name": "Jeu Neuf", "days": -1, "hypes": 20, "date": "2026-10-05",
+                            "platforms": ["PC"], "portage": False}],
+                "upcoming": [], "excluded_low_hypes": 0, "truncated": {"recent": 0, "upcoming": 0}}
+    igdb = {"status": "partial", "error": "échéance de 480 s atteinte : 1 page(s) non relevé(s)", "counts": {}}
+    prompt = _decide_prompt(tmp_path, _prompt_state(releases=releases, igdb=igdb))
+    assert "indisponibles" not in prompt and "- Jeu Neuf" in prompt
+
+
+@pytest.mark.parametrize("key,value", [
+    ("youtube_max_results", 0), ("youtube_max_results", 51), ("twitch_top_games", 0), ("twitch_top_games", 101),
+    ("twitch_vods_per_game", 0), ("twitch_vods_per_game", 101), ("vod_min_duration_s", -1),
+    ("youtube_min_duration_s", -1), ("vod_max_age_h", 0), ("http_timeout_s", 0), ("http_timeout_s", "20"),
+    ("steam_top", 0), ("steam_sellers_top", 0), ("steam_name_lookups_max", -1), ("rise_min_pct", -1),
+    ("youtube_max_results", True), ("steam_top", "100")])
+def test_settings_reject_out_of_range_values_naming_the_key(tmp_path, key, value):
+    with pytest.raises(veille.VeilleError, match=key):
+        veille.settings(_make_config(tmp_path, **{key: value}))
+
+
+def test_steam_rate_limited_appids_are_not_also_counted_unknown(tmp_path):
+    collectors = _community_collectors(releases=[_rel(1, "Hytale", "2026-10-05", hypes=80, steam_appid="60")])
+    collectors["steam_followers"] = Lookup("followers", {"42": 120000}, rate_limited=1)
+    state = veille.collect(NOW, collectors=collectors, config=_make_config(tmp_path))
+    counts = state["sources"]["steam_followers"]["counts"]
+    assert counts["found"] == 1 and counts["rate_limited"] == 1
+    assert counts["unknown"] == counts["requested"] - counts["found"] - counts["rate_limited"]

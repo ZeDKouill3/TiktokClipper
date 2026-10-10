@@ -1410,3 +1410,25 @@ def test_a_list_queued_in_the_same_minute_keeps_claudes_order(tmp_path):
         {**_prop("matin", "queued", 1), "decided_at": "2026-10-07T08:08:00+00:00"},
     ])
     assert _ids(html.split("<details", 1)[1]) == ["un", "deux", "matin"]
+
+
+# --- TASK-3e7c : audit lot K (veille-I3) : choix de Claude reporté (limite de session) --------------------
+
+
+def retry_data(**day):
+    llm_state = {"status": "retry", "error": "usage limit reached (429)", "model": "strong",
+                 "retry_at": "2026-10-07T09:30:00+00:00", "attempts": 2}
+    data = cal_data()
+    data["day"].update(llm=llm_state, finished_at="2026-10-07T05:00:00+00:00", skipped_note="", **day)
+    return data
+
+
+def test_a_retry_day_shows_the_postponed_choice_and_the_429_not_pas_appele(tmp_path):
+    html = run_js(tmp_path, ["veilleSources", retry_data()])[0]
+    assert "pas appelé" not in html
+    assert "choix reporté" in html and "usage limit reached (429)" in html and "tentative 2" in html
+
+
+def test_a_retry_day_does_not_say_no_vod_was_proposed(tmp_path):
+    html = run_js(tmp_path, ["veilleProposals", retry_data(), []])[0]
+    assert "Aucune VOD proposée aujourd'hui" not in html and "en attente" in html

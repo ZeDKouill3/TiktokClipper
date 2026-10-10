@@ -202,6 +202,22 @@ def settings(config: Config) -> dict[str, object]:
         value = table[key]
         if not isinstance(value, (int, float)) or isinstance(value, bool) or not low <= value <= high:
             raise VeilleError(f"[veille] {key} doit être un nombre entre {low} et {high} (reçu {value!r})")
+    for key, low, high in (("youtube_max_results", 1, 50), ("twitch_top_games", 1, 100), ("twitch_vods_per_game", 1, 100)):
+        value = table[key]
+        if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
+            raise VeilleError(f"[veille] {key} doit être un entier entre {low} et {high} (reçu {value!r})")
+    for key in ("steam_top", "steam_sellers_top"):
+        value = table[key]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise VeilleError(f"[veille] {key} doit être un entier >= 1 (reçu {value!r})")
+    for key in ("vod_min_duration_s", "youtube_min_duration_s", "steam_name_lookups_max", "rise_min_pct"):
+        value = table[key]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise VeilleError(f"[veille] {key} doit être un entier >= 0 (reçu {value!r})")
+    for key, low, high in (("vod_max_age_h", 0.0, 8760.0), ("http_timeout_s", 1.0, 300.0)):
+        value = table[key]
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not low < value <= high:
+            raise VeilleError(f"[veille] {key} doit être un nombre entre {low} (exclu) et {high} (reçu {value!r})")
     min_chars = table["youtube_game_min_chars"]
     if not isinstance(min_chars, int) or isinstance(min_chars, bool) or min_chars < 1:
         raise VeilleError(f"[veille] youtube_game_min_chars doit être un entier >= 1 (reçu {min_chars!r})")
@@ -594,9 +610,10 @@ def _run_lookup(source: str, appids: list[str], collectors: dict[str, Collector]
             raise VeilleError(f"{source} : valeur non entière dans la réponse")
         found = sum(v is not None for v in values.values())
         stopped = int(result.get("deadline_stopped") or 0)
-        status["counts"] = {"requested": len(kept), "found": found, "unknown": len(kept) - found - stopped,
-                            "skipped": cut + int(result.get("skipped", 0))}
         limited = int(result.get("rate_limited", 0))
+        status["counts"] = {"requested": len(kept), "found": found,
+                            "unknown": max(0, len(kept) - found - stopped - limited),  # un appid limité n'est pas « inconnu »
+                            "skipped": cut + int(result.get("skipped", 0))}
         if limited:  # ADR-ad2e : jamais « ok » muet, la lecture partielle se voit sur l'écran Veille
             status.update(status="partial", error=f"HTTP 429 (limite de Steam) : {limited} appid(s) non relevé(s) sur {len(kept)}")
             status["counts"]["rate_limited"] = limited
@@ -1170,7 +1187,8 @@ def collect(
         elif now - _parse_published(vod["published_at"]) > max_age:
             excluded["too_old"] += 1
         elif (vod["video_id"] in known or _worker_video_id(vod) in known
-              or (workspace / vod["video_id"]).exists()):
+              or (workspace / vod["video_id"]).exists()
+              or (bool(_worker_video_id(vod)) and (workspace / _worker_video_id(vod)).exists())):
             excluded["already_known"] += 1
         else:
             candidates.append(_to_candidate(source, vod))
@@ -1372,7 +1390,7 @@ def _release_line(entry: dict[str, Any], *, upcoming: bool) -> str:
 def _releases_block(day_state: dict[str, Any], table: dict[str, object]) -> list[str]:
     """Bloc « Sorties de jeux (IGDB) » du prompt (R15) ; source en erreur : indisponible avec l'erreur."""
     igdb = (day_state.get("sources") or {}).get("igdb")
-    if not igdb or igdb.get("status") != "ok":
+    if not igdb or igdb.get("status") not in ("ok", "partial"):
         reason = igdb["error"] if igdb else "relevé sans source IGDB"
         return ["", f"Sorties de jeux : indisponibles ({reason})"]
     releases = day_state.get("releases") or _empty_releases()
@@ -1649,7 +1667,15 @@ def run_if_due(
     _write(_day_path(sdir, day), skeleton)  # l'écran voit « en cours » dès maintenant
 
     read_clock = clock or _elapsed_clock(now)  # la même horloge pour l'échéance et pour l'heure de fin
-    state = collect(now, collectors=collectors, config=config, finalize=False, clock=read_clock)
+    try:
+        state = collect(now, collectors=collectors, config=config, finalize=False, clock=read_clock)
+    except Exception as exc:  # noqa: BLE001 : le jour finit en erreur, le relevé n'est pas rejoué à chaque tour (ADR-ad2e)
+        log.exception("veille : le relevé a échoué")
+        failed = {**skeleton, "llm": {"status": "error", "error": f"relevé interrompu : {exc}", "model": _model_used(config)},
+                  "finished_at": read_clock().isoformat()}
+        with channel_mod.file_lock(_state_lock(sdir)):
+            _write(_day_path(sdir, day), failed)
+        raise
     state["refresh_requested_at"] = requested_at
     state = _safe_decide(state, config, now)
     state["finished_at"] = read_clock().isoformat()  # vraie heure de fin, jamais celle du départ
