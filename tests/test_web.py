@@ -11733,3 +11733,58 @@ def test_publish_screen_makes_a_to_verify_post_not_draggable_and_without_the_uns
     assert "data-retry" in out["verifyDetail"]                 # « Réessayer » reste la seule sortie
     assert "TikTok Studio" in out["verifyDetail"]              # l'aide dit de contrôler TikTok Studio d'abord
     assert "repasse le clip en attente" not in out["verifyDetail"]
+
+
+# --- TASK-abc31eb1723e (audit 10/10, lot C) : la validation rejoue les exclusions
+
+def _rep_exclude_after_compute(tmp_path, day: str):
+    """Plan calculé sans exclusion, puis ``ma_chaine`` ajoutée à ``excluded_sources`` : le client voit la nouvelle liste."""
+    _rep_two_accounts(tmp_path, day)
+    return _rep_client(tmp_path, repartition={"excluded_sources": ["ma_chaine"]})
+
+
+def test_repartition_get_shows_a_refusal_on_a_line_whose_source_was_excluded_after_the_compute(tmp_path, isolated_cwd):
+    day = _rep_day()
+    c = _rep_exclude_after_compute(tmp_path, day)
+
+    data = c.get("/api/repartition", params={"day": day}).json()
+
+    refusals = [line["refusal"] for account in data["accounts"] for line in account["lines"]]
+    assert len(refusals) == 4 and all(r and "excluded_source" in r for r in refusals), refusals
+
+
+def test_repartition_validate_refuses_a_line_whose_source_was_excluded_after_the_compute(tmp_path, isolated_cwd):
+    day = _rep_day()
+    c = _rep_exclude_after_compute(tmp_path, day)
+
+    resp = c.post(f"/api/repartition/{day}/validate")
+
+    assert resp.status_code == 409, resp.text
+    assert "excluded_source" in resp.json()["detail"] and resp.json()["created"] == []
+    assert _rep_scheduled(tmp_path) == []
+    plan = _rep_read(tmp_path, day)
+    assert plan["status"] == "proposed" and plan["created"] == [] and "excluded_source" in plan["last_error"]
+
+
+def test_repartition_validate_refuses_a_line_of_a_video_put_back_in_the_queue(tmp_path, isolated_cwd):
+    c, day = _rep_client(tmp_path), _rep_day()
+    _rep_two_accounts(tmp_path, day)
+    _write_json(tmp_path / "state" / "queue.json", [{"video_id": CLIPS_VIDEO, "action": "run", "status": "waiting"}])
+
+    resp = c.post(f"/api/repartition/{day}/validate")
+
+    assert resp.status_code == 409 and "in_processing_queue" in resp.json()["detail"], resp.text
+    assert _rep_scheduled(tmp_path) == []
+
+
+def test_repartition_get_does_not_refuse_the_lines_already_created_by_a_partial_validation(tmp_path, isolated_cwd):
+    c, day = _rep_client(tmp_path), _rep_day()
+    _rep_two_accounts(tmp_path, day)
+    _rep_pause(tmp_path, SPARE)
+    assert c.post(f"/api/repartition/{day}/validate").status_code == 409  # READY créé, SPARE refusé
+
+    data = c.get("/api/repartition", params={"day": day}).json()
+
+    ready, spare = data["accounts"]
+    assert [(line["created"], line["refusal"]) for line in ready["lines"]] == [(True, None), (True, None)]
+    assert [line["created"] for line in spare["lines"]] == [False, False]
