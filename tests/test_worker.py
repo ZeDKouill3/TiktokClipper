@@ -4954,3 +4954,53 @@ def test_cancel_kills_the_whole_process_tree_within_the_grace(tmp_path):
         _end(child)
         if worker._pid_alive(grandchild_pid):
             os.kill(grandchild_pid, signal.SIGTERM)
+
+
+# ---- config.toml relu pour le plan de repartition (TASK-f90efe186b9a)
+
+def _write_toml(path, excluded):
+    items = ", ".join(f'"{s}"' for s in excluded)
+    path.write_text(f"[repartition]\nexcluded_sources = [{items}]\n", encoding="utf-8")
+
+
+def test_repartition_sees_a_source_added_to_config_toml_without_restart(tmp_path):
+    import os
+
+    toml = tmp_path / "config.toml"
+    _write_toml(toml, [])
+    seen = []
+    w = worker.Worker(
+        config=_learning_config(tmp_path), config_path=toml, spawner=FakeSpawner(),
+        learning_runner=lambda now, *, config: {},
+        repartition_runner=lambda now, *, config: seen.append(config.section("repartition")["excluded_sources"]),
+    )
+    w._veille_due = lambda: None
+    w.tick()
+    _write_toml(toml, ["streamer_x"])
+    stat = toml.stat()
+    os.utime(toml, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+    w.tick()
+    w.tick()
+    assert seen == [[], ["streamer_x"], ["streamer_x"]]
+
+
+def test_a_broken_config_toml_is_logged_once_and_skips_the_repartition_turn(tmp_path, caplog):
+    import os
+
+    toml = tmp_path / "config.toml"
+    _write_toml(toml, [])
+    calls = []
+    w = worker.Worker(
+        config=_learning_config(tmp_path), config_path=toml, spawner=FakeSpawner(),
+        learning_runner=lambda now, *, config: {},
+        repartition_runner=lambda now, *, config: calls.append(1),
+    )
+    w._veille_due = lambda: None
+    toml.write_text("[repartition\n", encoding="utf-8")
+    stat = toml.stat()
+    os.utime(toml, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+    with caplog.at_level("ERROR"):
+        w.tick()
+        w.tick()
+    assert calls == []
+    assert len([r for r in caplog.records if "répartition" in r.getMessage()]) == 1
