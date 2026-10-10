@@ -208,7 +208,9 @@ def save_channel(
     if dropped:
         data = {**data, "channel": {k: v for k, v in table.items() if k not in LEGACY_KEYS}}
         logger.info("style %s : [channel] %s retiré à la sauvegarde", name, " et ".join(dropped))
-    write_config(_preset_path(presets_dir, name), data, base=base)
+    path = _preset_path(presets_dir, name)
+    with file_lock(path):
+        write_config(path, data, base=base)
 
 
 def migrate_legacy_presets(
