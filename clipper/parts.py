@@ -22,9 +22,21 @@ Sortie : workspace/<video_id>/parts.json
                              "overlap", "hook_text", "suspense"}]}],
      "rejected": [{"id", "start", "end", "duration", "reason"}]}
 
+Phrases « du moment » : celles entierement comprises dans [start, end]
+(marge 0,1 s) et celle qui contient ``start``, reduite a ses mots a partir
+de ``start`` (moments fait commencer un clip au mot qui suit un connecteur
+de tete, dans la phrase) ; la partie 1 porte donc la meme accroche que
+moments.json.
+
 Decision, bornes de [durations] de la grille, ``tolerance`` comprise
 (la marge de recalage sur des frontieres de phrase) :
+- moment ``source: action`` (SPEC-b0f3 R11 : passage sans parole, ou dont
+  la parole deborde) : clip unique avec le ``hook_text`` de moments.json
+  (parole ou image), aucune phrase requise, sans appel au LLM ; hors
+  single_min..single_max il est rejete avec la raison ;
 - duree dans single_min..single_max : clip unique, sans appel au LLM ;
+  l'accroche est la premiere phrase du moment ou, sans phrase, le
+  ``hook_text`` de moments.json ;
 - sinon N parties de part_min..part_max, reprise comprise, N entre
   min_parts et max_parts : clipper.llm (usage ``parts``) choisit les N-1
   coupes, la ou une partie finit sur un suspense ; chaque coupe cut_k est
@@ -40,9 +52,9 @@ Decision, bornes de [durations] de la grille, ``tolerance`` comprise
   partie 1 commence au debut du moment, la derniere finit a sa fin ;
   ``overlap`` donne les secondes reprises (0 pour la partie 1) et
   ``hook_text`` le texte a partir du debut de la partie ;
-- aucun N possible, ou aucune suite de fins de phrase qui tienne les
-  bornes : le moment va dans ``rejected`` avec la raison, jamais de
-  decoupage de secours (ADR-ad2e).
+- aucun N possible, aucune phrase a decouper, ou aucune suite de fins de
+  phrase qui tienne les bornes : le moment va dans ``rejected`` avec la
+  raison, jamais de decoupage de secours (ADR-ad2e).
 
 Reponse LLM invalide ou Claude indisponible : l'erreur remonte, rien n'est
 ecrit.
@@ -228,7 +240,23 @@ def split_sentences(transcript: dict[str, Any]) -> list[Sentence]:
 
 
 def _inside(sents: list[Sentence], start: float, end: float) -> list[Sentence]:
-    return [s for s in sents if s.start >= start - _EDGE - _EPS and s.end <= end + _EDGE + _EPS]
+    """Phrases du moment [start, end] : celles qui y tiennent entierement
+    (marge _EDGE) et celle qui contient ``start`` (moments fait commencer un
+    clip au mot qui suit un connecteur de tete, dans la phrase), reduite a ses
+    mots a partir de ``start``. Une phrase qui deborde de ``end`` n'en est
+    pas."""
+    out: list[Sentence] = []
+    for s in sents:
+        if s.end > end + _EDGE + _EPS:
+            continue
+        if s.start >= start - _EDGE - _EPS:
+            out.append(s)
+        elif s.end > start + _EPS:
+            words = tuple(w for w in s.words if w.start >= start - _EDGE - _EPS)
+            text = "".join(w.text for w in words).strip()
+            if words and text:
+                out.append(Sentence(words[0].start, s.end, text, words))
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -447,12 +475,36 @@ def _split(
     tol = d["tolerance"]
     record = {"id": moment["id"], "start": start, "end": end, "duration": round(duration, 2)}
     inside = _inside(sents, start, end)
+    single = is_single(duration, d)
+
+    def single_clip(hook_text: str) -> tuple[dict[str, Any], None]:
+        return {**record, "format": "single", "parts_total": 1, "proposed_cuts": [],
+                "parts": [_part(1, start, end, 0, hook_text, None)]}, None
+
+    if moment.get("source") == "action":
+        # Candidat d'action (SPEC-b0f3 R11) : un passage sans parole, ou dont
+        # la parole deborde, est un clip unique dont l'accroche (parole ou
+        # image) est celle de moments.json ; aucune phrase n'est requise.
+        if not single:
+            return None, (
+                f"passage d'action de {duration:.1f} s hors clip unique "
+                f"({_fmt(d['single_min'])}-{_fmt(d['single_max'])} s, tolerance {_fmt(tol)} s)"
+            )
+        hook_text = str(moment.get("hook_text") or "").strip()
+        if not hook_text:
+            return None, "passage d'action sans accroche dans moments.json"
+        return single_clip(hook_text)
+
     if not inside:
+        if single:
+            hook_text = str(moment.get("hook_text") or "").strip()
+            if not hook_text:
+                return None, "aucune phrase de la transcription dans le moment ni accroche dans moments.json"
+            return single_clip(hook_text)
         return None, "aucune phrase de la transcription dans le moment"
 
-    if is_single(duration, d):
-        return {**record, "format": "single", "parts_total": 1, "proposed_cuts": [],
-                "parts": [_part(1, start, end, 0, inside[0].text, None)]}, None
+    if single:
+        return single_clip(inside[0].text)
 
     n_range = part_count_range(duration, d, ov.seconds)
     if n_range[0] > n_range[1]:

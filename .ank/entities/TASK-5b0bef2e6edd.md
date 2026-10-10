@@ -5,7 +5,7 @@ slug: audit-lot-e-parts-accroche-et-moments-d-action
 title: "Audit lot E : parts : accroche et moments d'action"
 created: 2026-10-10T18:25:22Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/parts.py
   - tests/test_parts.py
@@ -15,6 +15,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: diagnose
+proof:
+  - type: test
+    ref: local/1ed57fcff03e@31d42ef
+    tree: scope/edd47dd5da1e
+    criteria: 4b188e53017b
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
