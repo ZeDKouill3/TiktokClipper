@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -508,6 +509,7 @@ def mark_published(
         entry["error"], entry["capture"], entry["halted"] = None, None, False
         entry["waiting_reason"] = None
         entry["in_progress_since"] = None
+        entry["in_progress_pid"], entry["in_progress_pid_created_at"] = None, None
         if tiktok_state is not None:
             if service not in SERVICE_STATES:
                 raise PublishError(f"service invalide : {service!r} (attendu : {' | '.join(SERVICE_STATES)})")
@@ -593,7 +595,8 @@ def mark_failed(
             raise PublishError(f"echec impossible pour {video_id}/{clip_id} : statut {entry['status']!r}")
         entry = dict(entry)
         entry.update(status="failed", error=reason, capture=str(capture) if capture else None, halted=halted,
-                     failed_at=_iso(_now(now)), waiting_reason=None, in_progress_since=None, to_verify=to_verify)
+                     failed_at=_iso(_now(now)), waiting_reason=None, in_progress_since=None, in_progress_pid=None,
+                     in_progress_pid_created_at=None, to_verify=to_verify)
         if to_verify and publish_at:  # heure reellement programmee (arrondie par TikTok) : sert au rapprochement
             entry["tiktok_publish_at"] = publish_at
         _upsert_entry(entries, entry)
@@ -627,7 +630,8 @@ def resolve_to_verify(
         entry = dict(entry)
         publish_at = entry.get("tiktok_publish_at") or entry.get("slot_at")  # heure effective si connue (arrondie par TikTok)
         entry.update(status="published", published_at=_iso(_now(now)), error=None, capture=None, halted=False,
-                     to_verify=False, waiting_reason=None, in_progress_since=None, tiktok_state="scheduled_on_tiktok",
+                     to_verify=False, waiting_reason=None, in_progress_since=None, in_progress_pid=None,
+                     in_progress_pid_created_at=None, tiktok_state="scheduled_on_tiktok",
                      post_url=post_url, post_id=str(post_id), tiktok_publish_at=publish_at, post_note=note,
                      service="tiktok")
         _upsert_entry(entries, entry)
@@ -692,7 +696,8 @@ def mark_refused_by_platform(
             raise PublishError(f"refus de plateforme impossible pour {video_id}/{clip_id} : statut {entry['status']!r}")
         entry = dict(entry)
         entry.update(status=REFUSED_BY_PLATFORM, error=reason, capture=str(capture) if capture else None, halted=False,
-                     refused_at=_iso(_now(now)), slot_at=None, waiting_reason=None, in_progress_since=None)
+                     refused_at=_iso(_now(now)), slot_at=None, waiting_reason=None, in_progress_since=None,
+                     in_progress_pid=None, in_progress_pid_created_at=None)
         _upsert_entry(entries, entry)
         _save_entries(path, entries)
     return entry
@@ -736,7 +741,8 @@ def mark_removed_from_platform(
         stamp = _iso(_now(now))
         entry = dict(entry)
         entry.update(status=REMOVED_FROM_PLATFORM, removed_at=stamp, removed_reason=reason or None, slot_at=None,
-                     waiting_reason=None, in_progress_since=None, halted=False)
+                     waiting_reason=None, in_progress_since=None, in_progress_pid=None, in_progress_pid_created_at=None,
+                     halted=False)
         _upsert_entry(entries, entry)
         _save_entries(path, entries)
     log.info("%s/%s : post déclaré supprimé de la plateforme (%s)", video_id, clip_id, reason or "sans raison")
@@ -1500,10 +1506,25 @@ def mark_in_progress(
                 raise PublishError(f"prise en main refusée pour {video_id}/{clip_id} : publication modifiée "
                                    f"depuis sa lecture ({', '.join(changed)}), relue au prochain passage")
         entry = dict(entry)
+        # le pilote est identifie par son pid et l'heure de creation de son processus (clipper.worker) : un
+        # worker qui redemarre ne passe en echec que l'entree d'un pilote mort (publication-I2)
+        from clipper import worker as worker_mod  # import tardif : worker importe publish
+
         entry["in_progress_since"] = _iso(_now(now))
+        entry["in_progress_pid"] = os.getpid()
+        entry["in_progress_pid_created_at"] = worker_mod._process_created_at(os.getpid())
         _upsert_entry(entries, entry)
         _save_entries(path, entries)
     return entry
+
+
+def _holder_alive(entry: dict[str, Any]) -> bool:
+    """Le processus qui a pris l'entree en main vit-il encore (pid + heure de creation) ? Une entree sans pid
+    (ecrite avant cet enregistrement) n'a plus de pilote connu : interrompue."""
+    from clipper import worker as worker_mod  # import tardif : worker importe publish
+
+    pid = entry.get("in_progress_pid")
+    return pid is not None and worker_mod.process_alive(int(pid), entry.get("in_progress_pid_created_at"))
 
 
 def release_in_progress(video_id: str, clip_id: str, channel: str, reason: str, *,
@@ -1517,23 +1538,26 @@ def release_in_progress(video_id: str, clip_id: str, channel: str, reason: str, 
         if entry is None:
             raise PublishError(f"clip absent de la file de publication : {video_id}/{clip_id}")
         entry = dict(entry)
-        entry.update(in_progress_since=None, waiting_reason=reason)
+        entry.update(in_progress_since=None, in_progress_pid=None, in_progress_pid_created_at=None,
+                     waiting_reason=reason)
         _upsert_entry(entries, entry)
         _save_entries(path, entries)
 
 
 def fail_interrupted(channel: str, *, now: datetime | None = None, state_dir: str | Path | None = None) -> int:
-    """Une entree restee « en cours » alors que le worker demarre (arret pendant la publication) passe en echec
-    explicite, reessayable : jamais bloquee en « en cours ». Rend le nombre d'entrees touchees."""
+    """Une entree restee « en cours » alors que son pilote est mort (worker arrete pendant la publication) passe
+    en echec explicite, reessayable : jamais bloquee en « en cours ». Une entree dont le pilote vit encore (un
+    autre worker, publication-I2) n'est pas touchee : son post part ou echoue par lui. Rend le nombre d'entrees
+    touchees."""
     path = _state_path(channel, state_dir)
     with _locked(path):
         entries = _load_entries(path)
-        stale = [e for e in entries if e.get("in_progress_since")]
+        stale = [e for e in entries if e.get("in_progress_since") and not _holder_alive(e)]
         for entry in stale:
             updated = dict(entry)
             updated.update(
-                status="failed", in_progress_since=None, halted=False, capture=None, waiting_reason=None,
-                failed_at=_iso(_now(now)),
+                status="failed", in_progress_since=None, in_progress_pid=None, in_progress_pid_created_at=None,
+                halted=False, capture=None, waiting_reason=None, failed_at=_iso(_now(now)),
                 error="publication interrompue (le worker s'est arrêté pendant la publication) : "
                       "vérifie sur TikTok Studio que le post n'existe pas avant de réessayer")
             _upsert_entry(entries, updated)

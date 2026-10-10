@@ -1255,6 +1255,11 @@ def test_interrupted_entries_are_failed_with_an_explicit_reason(isolated_cwd):
     _setup(isolated_cwd)
     _post(isolated_cwd)
     publish.mark_in_progress("vid1", "03", "ma_chaine", now=NOW)
+    dead_pid, dead_created = _dead_process()  # le pilote est mort (worker arrete pendant la publication)
+    path = isolated_cwd / "state" / "publish" / "ma_chaine.json"
+    entries = json.loads(path.read_text(encoding="utf-8"))
+    entries[0].update(in_progress_pid=dead_pid, in_progress_pid_created_at=dead_created)
+    path.write_text(json.dumps(entries), encoding="utf-8")
 
     assert publish.fail_interrupted("ma_chaine", now=NOW) == 1
 
@@ -2861,3 +2866,98 @@ def test_removed_post_frees_slot_and_caps_and_is_never_republished(isolated_cwd)
             call()
     assert publish.approval_refusal(publish.list_entries("ma_chaine")[0]) is not None
     assert publish.list_entries("ma_chaine")[0]["status"] == "removed_from_platform"
+
+
+# --------------------------------------------------------------------------
+# TASK-4ca998e97789 (audit 10/10, publication-I2) : l'entree « en cours » porte le pid du worker qui la pilote ;
+# un redemarrage ne passe en echec qu'une entree dont ce processus est mort
+# --------------------------------------------------------------------------
+
+
+def _dead_process():
+    import subprocess
+    import sys
+
+    from clipper import worker
+
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    created = worker._process_created_at(proc.pid)
+    proc.wait()
+    return proc.pid, created
+
+
+def test_mark_in_progress_writes_the_pid_and_creation_time_of_the_holder(isolated_cwd):
+    import os
+
+    from clipper import publish, worker
+
+    _setup(isolated_cwd)
+    _post(isolated_cwd)
+
+    entry = publish.mark_in_progress("vid1", "03", "ma_chaine", now=NOW)
+
+    assert entry["in_progress_pid"] == os.getpid()
+    assert entry["in_progress_pid_created_at"] == worker._process_created_at(os.getpid())
+    stored = _read_state(isolated_cwd, "ma_chaine")[0]
+    assert stored["in_progress_pid"] == os.getpid()
+
+
+def test_fail_interrupted_leaves_an_entry_driven_by_a_live_process_alone(isolated_cwd):
+    from clipper import publish
+
+    _setup(isolated_cwd)
+    _post(isolated_cwd)
+    publish.mark_in_progress("vid1", "03", "ma_chaine", now=NOW)  # pilotee par CE processus, vivant
+
+    assert publish.fail_interrupted("ma_chaine", now=NOW) == 0
+
+    entry = _read_state(isolated_cwd, "ma_chaine")[0]
+    assert entry["status"] == "scheduled" and entry["in_progress_since"] == NOW.isoformat()
+
+
+def test_fail_interrupted_fails_an_entry_whose_holder_is_dead_or_unknown(isolated_cwd):
+    import os
+
+    from clipper import publish, worker
+
+    _setup(isolated_cwd)
+    _write_sidecar(isolated_cwd, "vid1", "01")
+    _write_sidecar(isolated_cwd, "vid1", "02")
+    _post(isolated_cwd, clip="03")
+    _post(isolated_cwd, clip="01", now=NOW + timedelta(days=1))  # plafond : une publication par jour
+    _post(isolated_cwd, clip="02", now=NOW + timedelta(days=2))
+    dead_pid, dead_created = _dead_process()
+    path = isolated_cwd / "state" / "publish" / "ma_chaine.json"
+    entries = json.loads(path.read_text(encoding="utf-8"))
+    for entry in entries:
+        entry["in_progress_since"] = NOW.isoformat()
+        if entry["clip_id"] == "03":  # processus mort
+            entry.update(in_progress_pid=dead_pid, in_progress_pid_created_at=dead_created)
+        elif entry["clip_id"] == "01":  # pid reattribue : notre pid, mais une autre heure de creation
+            entry.update(in_progress_pid=os.getpid(), in_progress_pid_created_at=12345)
+        # "02" : ancienne entree sans pid (worker d'avant la version) : interrompue
+    path.write_text(json.dumps(entries), encoding="utf-8")
+
+    assert publish.fail_interrupted("ma_chaine", now=NOW) == 3
+
+    for entry in _read_state(isolated_cwd, "ma_chaine"):
+        assert entry["status"] == "failed" and "interrompue" in entry["error"]
+        assert entry["in_progress_since"] is None and entry["in_progress_pid"] is None
+        assert entry["in_progress_pid_created_at"] is None
+    assert worker.process_alive(os.getpid(), 12345) is False
+
+
+def test_release_and_publish_clear_the_holder_pid(isolated_cwd):
+    from clipper import publish
+
+    _setup(isolated_cwd)
+    _post(isolated_cwd)
+    publish.mark_in_progress("vid1", "03", "ma_chaine", now=NOW)
+    publish.release_in_progress("vid1", "03", "ma_chaine", "pause", state_dir=None)
+    entry = _read_state(isolated_cwd, "ma_chaine")[0]
+    assert entry["in_progress_pid"] is None and entry["in_progress_pid_created_at"] is None
+
+    publish.mark_in_progress("vid1", "03", "ma_chaine", now=NOW)
+    publish.mark_failed("vid1", "03", "ma_chaine", "captcha", halted=False)
+    entry = _read_state(isolated_cwd, "ma_chaine")[0]
+    assert entry["in_progress_pid"] is None and entry["in_progress_pid_created_at"] is None

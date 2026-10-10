@@ -8,7 +8,14 @@ les publications dues de state/publish/<chaine>.json vers TikTok, une a la fois
 
 Entree de file (SPEC-74e9 §2.1) : {id, video_id, url, channel | null,
 action ("run" | "render"), force_steps, enqueued_at, status ("waiting" |
-"running"), pid | null}.
+"running"), pid | null}. Une entree ``running`` porte aussi ``pid_created_at``
+(heure de creation du processus, voir ``process_alive`` : un pid reattribue a un
+autre processus n'est pas « vivant ») et ``launched_at``.
+
+Une seule instance par file (audit 10/10, lot A1) : ``startup`` refuse de
+demarrer si le battement ``worker.json`` designe un autre processus vivant ; et
+une seule entree ``running`` : un enfant d'un worker precedent encore vivant est
+adopte (surveille jusqu'a sa fin), jamais double.
 """
 
 from __future__ import annotations
@@ -104,7 +111,7 @@ def read_heartbeat(config: Config, now: datetime | None = None) -> dict[str, Any
     age = (now or datetime.now(timezone.utc)) - at
     age_s = age.total_seconds()
     out.update(pid=pid, at=beat["at"], age_s=age_s)
-    if not _pid_alive(pid):
+    if not process_alive(pid, beat.get("pid_created_at")):  # pid reattribue a un autre processus : worker arrete
         return {**out, "state": "stopped", "reason": f"le processus {pid} du worker n'existe plus"}
     if age_s > float(section["heartbeat_interval_s"]) * _STALE_AFTER_BEATS:
         return {**out, "state": "stale", "reason": f"battement périmé : dernier il y a {int(age_s)} s"}
@@ -263,12 +270,12 @@ def move_to_front(video_id: str, *, config: Config | None = None) -> None:
     with _locked(path):
         entries = _read_queue(path)
 
-        running = None
+        running: list[dict[str, Any]] = []  # toutes conservees (coeur-I1 : jamais une entree perdue)
         target = None
         rest: list[dict[str, Any]] = []
         for entry in entries:
             if entry["status"] == "running":
-                running = entry
+                running.append(entry)
             elif target is None and entry["video_id"] == video_id and entry["status"] == "waiting":
                 target = entry
             else:
@@ -277,7 +284,7 @@ def move_to_front(video_id: str, *, config: Config | None = None) -> None:
         if target is None:
             raise WorkerError(f"aucune entree en attente pour {video_id!r}")
 
-        reordered = ([running] if running is not None else []) + [target] + rest
+        reordered = running + [target] + rest
         _write_queue(path, reordered)
 
 
@@ -295,17 +302,24 @@ def remove(video_id: str, *, config: Config | None = None) -> None:
     prefetching = [e for e in entries if e["video_id"] == video_id and e["status"] == "waiting"
                    and e.get("prefetch") == "running"]
     for entry in prefetching:  # retrait d'une entree en prechargement : son processus s'arrete avec elle
-        _terminate_pid(entry.get("prefetch_pid"), float(config.section("worker")["cancel_grace_s"]))
+        _terminate_pid(entry.get("prefetch_pid"), float(config.section("worker")["cancel_grace_s"]),
+                       created_at=entry.get("prefetch_pid_created_at"))
         _reset_download_step(video_id, config)
 
 
 _INTERRUPTED_REASON = "interrompue"
 
 
+def _entry_process_alive(entry: dict[str, Any]) -> bool:
+    """Le processus d'une entree ``running`` vit-il encore ? Pid ET heure de creation (coeur-I3 : apres un
+    redemarrage du PC, le pid d'une entree appartient vite a un autre processus)."""
+    return process_alive(entry.get("pid"), entry.get("pid_created_at"))
+
+
 def _live_in_queue(video_id: str, config: Config) -> bool:
     """Vrai si la file a une entrée ``running`` pour ``video_id`` dont le processus existe encore."""
     entries = _read_queue(_queue_path(config))  # lecture seule : l'ecriture de la file est atomique
-    return any(e["video_id"] == video_id and e["status"] == "running" and _pid_alive(e.get("pid")) for e in entries)
+    return any(e["video_id"] == video_id and e["status"] == "running" and _entry_process_alive(e) for e in entries)
 
 
 def _worker_busy_inline(config: Config) -> bool:
@@ -314,7 +328,7 @@ def _worker_busy_inline(config: Config) -> bool:
     path = heartbeat_path(config)
     try:
         beat = json.loads(path.read_text(encoding="utf-8"))
-        return bool(beat.get("busy")) and _pid_alive(int(beat["pid"]))
+        return bool(beat.get("busy")) and process_alive(int(beat["pid"]), beat.get("pid_created_at"))
     except FileNotFoundError:
         return False
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -336,13 +350,21 @@ def mark_interrupted(video_id: str, config: Config, *, cancelled: bool = False) 
     from clipper import pipeline
 
     state = pipeline.load_state(video_id, config=config)
-    orphan = next((n for n, st in state["steps"].items() if st.get("status") == "running"), None)
-    if orphan is not None:
-        state["steps"][orphan].update(status="pending", reason=None, started_at=None, finished_at=None, progress=None)
+    orphan = _pending_orphan_step(state)
     detail = f"{_INTERRUPTED_REASON} à l'étape {orphan}" if orphan else _INTERRUPTED_REASON
     state.update(status="failed", reason=f"{_CANCEL_REASON} ({detail})" if cancelled else detail, retry_at=None)
     pipeline.save_state(state, config=config)
     log.warning("%s : traitement interrompu (%s), plus aucun processus ne travaille dessus", video_id, detail)
+    return orphan
+
+
+def _pending_orphan_step(state: dict[str, Any]) -> str | None:
+    """L'étape restée ``running`` d'une vidéo dont plus aucun processus ne travaille repasse ``pending`` (les
+    étapes terminées restent ``done``) : jamais une étape « en cours » sous une vidéo ``failed`` (coeur-M1).
+    Renvoie l'étape remise, None si aucune."""
+    orphan = next((n for n, st in state["steps"].items() if st.get("status") == "running"), None)
+    if orphan is not None:
+        state["steps"][orphan].update(status="pending", reason=None, started_at=None, finished_at=None, progress=None)
     return orphan
 
 
@@ -392,7 +414,10 @@ def cancel(video_id: str, *, config: Config | None = None) -> None:
         _cancel_interrupted(video_id, config)
         return
 
-    _terminate_pid(entry["pid"], float(config.section("worker")["cancel_grace_s"]))
+    # seul le processus dont l'heure de creation correspond est arrete : un pid reattribue (PC redemarre) designe
+    # un processus etranger que Clipper ne touche pas (coeur-I3)
+    _terminate_pid(entry["pid"], float(config.section("worker")["cancel_grace_s"]),
+                   created_at=entry.get("pid_created_at"))
     with _locked(path):
         _write_queue(path, [e for e in _read_queue(path) if e["id"] != entry["id"]])
 
@@ -403,6 +428,7 @@ def cancel(video_id: str, *, config: Config | None = None) -> None:
     except pipeline.PipelineError:
         state = pipeline.new_state(video_id, entry["url"], config.mode, channel=entry.get("channel"))
     state.pop("dismissed_at", None)
+    _pending_orphan_step(state)
     state.update(status="failed", reason=_CANCEL_REASON, retry_at=None)
     pipeline.save_state(state, config=config)
 
@@ -421,9 +447,11 @@ def _cancel_interrupted(video_id: str, config: Config) -> None:
     mark_interrupted(video_id, config, cancelled=True)
 
 
-def _terminate_pid(pid: int | None, grace: float) -> None:
-    """Arrete le processus ``pid`` s'il vit encore : demande d'arret, ``grace`` secondes, puis kill."""
-    if not _pid_alive(pid):
+def _terminate_pid(pid: int | None, grace: float, *, created_at: int | None = None) -> None:
+    """Arrete le processus ``pid`` s'il vit encore : demande d'arret, ``grace`` secondes, puis kill.
+    ``created_at`` (heure de creation enregistree au lancement) : un processus qui a herite du pid mais pas de
+    cette heure n'est pas le notre, rien n'est envoye (coeur-I3)."""
+    if not process_alive(pid, created_at):
         return
     try:
         os.kill(pid, signal.SIGTERM)  # Windows : TerminateProcess
@@ -468,6 +496,101 @@ def _pid_alive(pid: int | None) -> bool:
     return True
 
 
+def _process_created_at(pid: int | None) -> int | None:
+    """Identite d'un processus au-dela de son pid : son heure de creation, entier opaque propre a la plateforme
+    (Windows : FILETIME de ``GetProcessTimes`` ; Linux : ``starttime`` de ``/proc/<pid>/stat``), stable tant
+    que le processus vit et differente pour tout processus qui heriterait du meme pid apres un redemarrage.
+    None si le processus n'existe pas, ou si la plateforme ne la donne pas (macOS) : l'identite se reduit
+    alors a l'existence du pid, comme avant l'audit."""
+    if pid is None:
+        return None
+    if sys.platform == "win32":
+        import ctypes.wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return None
+        try:
+            times = [ctypes.wintypes.FILETIME() for _ in range(4)]  # creation, exit, kernel, user
+            ok = kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times))
+            if not ok:
+                return None
+            return (int(times[0].dwHighDateTime) << 32) | int(times[0].dwLowDateTime)
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return None
+    # champs apres le nom « (comm) » : state=3, ..., starttime=22 ; le nom peut contenir des parentheses
+    fields = stat.rsplit(")", 1)[-1].split()
+    try:
+        return int(fields[22 - 3])
+    except (IndexError, ValueError):
+        return None
+
+
+def process_alive(pid: int | None, created_at: int | None) -> bool:
+    """Le processus ``pid`` enregistre avec ``created_at`` vit-il encore ? Faux si le pid n'existe plus, ou s'il
+    appartient maintenant a un autre processus (heure de creation differente). ``created_at`` None (entree
+    ecrite avant cet enregistrement) : existence du pid seule."""
+    if not _pid_alive(pid):
+        return False
+    if created_at is None:
+        return True
+    return _process_created_at(pid) == created_at
+
+
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+EXIT_UNKNOWN = "inconnu"  # code de sortie d'un processus adopte que la plateforme ne permet pas de lire
+
+
+class _AdoptedProcess:
+    """Enfant d'un worker precedent encore vivant (coeur-I1) : surveille par pid et heure de creation jusqu'a sa
+    fin, jamais double par un second enfant. Meme surface que ``subprocess.Popen`` pour ``tick`` : ``pid`` et
+    ``poll()`` (None tant qu'il vit, puis son code de sortie ; Windows : lu sur un handle garde ouvert des
+    l'adoption ; ailleurs ``EXIT_UNKNOWN``, et c'est ``pipeline.json`` qui dit si l'enfant a ecrit sa fin)."""
+
+    def __init__(self, pid: int, created_at: int | None) -> None:
+        self.pid = pid
+        self._created_at = created_at
+        self._handle = None
+        if sys.platform == "win32":
+            handle = ctypes.windll.kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            self._handle = handle or None
+
+    def poll(self) -> Any:
+        if process_alive(self.pid, self._created_at):
+            return None
+        code: Any = EXIT_UNKNOWN
+        if self._handle:
+            exit_code = ctypes.c_ulong()
+            ok = ctypes.windll.kernel32.GetExitCodeProcess(self._handle, ctypes.byref(exit_code))
+            if ok and exit_code.value != _STILL_ACTIVE:
+                code = int(exit_code.value)
+            ctypes.windll.kernel32.CloseHandle(self._handle)
+            self._handle = None
+        return code
+
+
+def _requeue_dead_running(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Les entrees ``running`` dont le processus est mort repassent ``waiting`` en tete de file, dans leur ordre
+    (SPEC-74e9 §2.4), sans pid ni heure de lancement ; ``entries`` est modifiee en place. Renvoie, pour chacune,
+    ``{video_id, pid}`` tels qu'ils etaient."""
+    dead = [e for e in entries if e["status"] == "running" and not _entry_process_alive(e)]
+    seen = [{"video_id": e["video_id"], "pid": e["pid"]} for e in dead]  # pour le journal : le pid avant remise
+    for entry in dead:
+        entries.remove(entry)
+    for entry in reversed(dead):
+        entry["status"] = "waiting"
+        entry["pid"] = None
+        for field in _LAUNCH_FIELDS:
+            entry.pop(field, None)
+        entries.insert(0, entry)
+    return seen
+
+
 def _reset_download_step(video_id: str, config: Config) -> None:
     """Etape download laissee ``running`` par un prechargement tue (retrait, arret du worker) : elle repasse
     ``pending`` (le prochain ``run`` la refait), jamais « en cours » sans processus."""
@@ -483,7 +606,8 @@ def _reset_download_step(video_id: str, config: Config) -> None:
         pipeline.save_state(state, config=config)
 
 
-_PREFETCH_FIELDS = ("prefetch", "prefetch_pid")
+_PREFETCH_FIELDS = ("prefetch", "prefetch_pid", "prefetch_pid_created_at")
+_LAUNCH_FIELDS = ("pid_created_at", "launched_at")  # ecrits avec le pid au lancement, retires avec lui
 
 
 def _preset_arg(entry: dict[str, Any], config: Config | None) -> str:
@@ -499,7 +623,7 @@ def _build_prefetch_command(entry: dict[str, Any], config: Config | None = None)
     cmd = [sys.executable, "-m", "clipper"]
     if entry.get("channel"):
         cmd += ["--config", _preset_arg(entry, config)]
-    return cmd + ["download", entry["url"]]
+    return cmd + ["download", "--", entry["url"]]
 
 
 def _build_command(entry: dict[str, Any], config: Config | None = None) -> list[str]:
@@ -507,12 +631,14 @@ def _build_command(entry: dict[str, Any], config: Config | None = None) -> list[
     cmd = [sys.executable, "-m", "clipper"]
     if entry.get("channel"):
         cmd += ["--config", _preset_arg(entry, config)]
-    cmd += [entry["action"], entry["url"] if entry["action"] == "run" else entry["video_id"]]
+    # « -- » : un identifiant YouTube peut commencer par « - » (web-I6), argparse le lirait comme une option.
+    # Les options de la sous-commande passent avant lui.
+    cmd += [entry["action"]]
     for step in entry.get("force_steps") or []:
         cmd += ["--force-step", step]
     if "short_clips" in entry:  # absent : valeur du style (anciennes entrees)
         cmd.append("--short-clips" if entry["short_clips"] else "--no-short-clips")
-    return cmd
+    return cmd + ["--", entry["url"] if entry["action"] == "run" else entry["video_id"]]
 
 
 class Worker:
@@ -568,16 +694,36 @@ class Worker:
         self._prefetch_entry_id: str | None = None
         self._prefetch_log_handle: Any | None = None
         self._low_disk_logged: set[str] = set()
+        self._pid_created_at = _process_created_at(os.getpid())  # identite de ce worker dans le battement
 
     def startup(self) -> None:
-        """Reprises de demarrage du vrai worker (``clipper worker``, appelees par ``loop`` seulement) : orphelins
-        de la file, publications interrompues, migration des anciens styles. Jamais dans le constructeur : un
-        autre processus qui construirait un Worker passerait en echec la publication que le worker pilote."""
+        """Reprises de demarrage du vrai worker (``clipper worker``, appelees par ``loop`` seulement) : refus si un
+        autre worker tourne sur cette file (coeur-I2), place prise par un premier battement, puis orphelins de la
+        file, publications interrompues, migration des anciens styles. Jamais dans le constructeur : un autre
+        processus qui construirait un Worker passerait en echec la publication que le worker pilote."""
+        self._refuse_second_instance()
+        self._beat(force=True)
         self._recover_orphans()
         self._recover_prefetch()
         self._recover_interrupted_videos()
         self._recover_interrupted_publications()
         self._migrate_legacy_presets()
+
+    def _refuse_second_instance(self) -> None:
+        """Un seul worker par file (ADR-fb9b, ADR-35b7 §1) : si ``worker.json`` designe un autre processus encore
+        vivant (meme a battement perime : il travaille peut-etre), ce worker refuse de demarrer, avec le pid de
+        l'autre (ADR-ad2e : jamais deux boucles en silence). Un battement illisible est journalise et ignore : le
+        premier battement de ce worker le remplace."""
+        try:
+            beat = read_heartbeat(self.config)
+        except WorkerError as exc:
+            log.error("%s : ignoré, remplacé par le battement de ce worker", exc)
+            return
+        if beat["state"] == "stopped" or beat["pid"] == os.getpid():
+            return
+        raise WorkerError(
+            f"un worker tourne déjà (pid {beat['pid']}, dernier battement il y a {int(beat['age_s'])} s) : "
+            "arrête-le avant d'en lancer un autre (« clipper serve » lance déjà le sien)")
 
     def _migrate_legacy_presets(self) -> None:
         """Au demarrage : creneaux et compte d'un ancien style repris sur le compte (SPEC-6076 R2), journalise."""
@@ -624,8 +770,8 @@ class Worker:
         path = heartbeat_path(self.config)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps({"pid": os.getpid(), "at": datetime.now(timezone.utc).isoformat(), "busy": busy}),
-                       encoding="utf-8")
+        tmp.write_text(json.dumps({"pid": os.getpid(), "at": datetime.now(timezone.utc).isoformat(), "busy": busy,
+                                   "pid_created_at": self._pid_created_at}), encoding="utf-8")
         try:
             channel_mod.replace_retrying(tmp, path)  # un lecteur (API web) peut tenir worker.json ouvert sous Windows
         except PermissionError as exc:
@@ -638,20 +784,13 @@ class Worker:
         self._last_beat = now
 
     def _recover_orphans(self) -> None:
-        """Au demarrage, une entree ``running`` dont le pid est mort
-        (worker precedent tombe) repasse ``waiting`` en tete (SPEC-74e9
-        §2.4). Une seule entree ``running`` possible a la fois."""
+        """Au demarrage, une entree ``running`` dont le processus est mort (worker precedent tombe, ou pid
+        reattribue apres un redemarrage du PC) repasse ``waiting`` en tete (SPEC-74e9 §2.4). Une entree
+        ``running`` dont l'enfant vit encore est laissee : ``_launch_head`` l'adopte au premier tick."""
         with _locked(self._path):
             entries = _read_queue(self._path)
-            for i, entry in enumerate(entries):
-                if entry["status"] == "running":
-                    if not _pid_alive(entry["pid"]):
-                        entry["status"] = "waiting"
-                        entry["pid"] = None
-                        entries.pop(i)
-                        entries.insert(0, entry)
-                        _write_queue(self._path, entries)
-                    break
+            if _requeue_dead_running(entries):
+                _write_queue(self._path, entries)
 
     def _recover_prefetch(self) -> None:
         """Au demarrage, un prechargement ``running`` laisse par un worker arrete : son processus, s'il vit encore,
@@ -669,7 +808,7 @@ class Worker:
             if stale:
                 _write_queue(self._path, entries)
         for entry in stale:
-            _terminate_pid(entry.get("prefetch_pid"), grace)
+            _terminate_pid(entry.get("prefetch_pid"), grace, created_at=entry.get("prefetch_pid_created_at"))
             _reset_download_step(entry["video_id"], self.config)
             log.warning("%s : prechargement du download interrompu par l'arret du worker, abandonne", entry["video_id"])
 
@@ -788,13 +927,16 @@ class Worker:
         """Une publication TikTok due par iteration (SPEC-9225 R3) ; vrai si une tentative a eu lieu.
         Une file, un preset ou un reglage illisible est journalise une fois (ADR-ad2e) et ne tue
         pas le worker. ``OSError``/``ValueError`` (dont ``JSONDecodeError``) couvrent un fichier de
-        publication tronque ou un ``slot_at`` mal forme (M2, revue r-fable-publication) : sans eux,
-        l'exception traversait jusqu'a ``tick``/``loop`` et tuait le worker."""
+        publication tronque ou un ``slot_at`` mal forme (M2, revue r-fable-publication) ; toute autre
+        exception (``accounts.json`` dont une entree n'est pas un objet, compte supprime entre deux
+        lectures...) est journalisee avec son type, jamais propagee a ``loop`` (publication-M1)."""
         try:
             return self._publish_next()
-        except (publish_mod.PublishError, channel_mod.ChannelError, ConfigError, tiktok.TikTokError,
-                youtube.YouTubeError, accounts_mod.AccountsError, OSError, ValueError) as exc:
-            message = str(exc)
+        except Exception as exc:  # noqa: BLE001 - jamais un worker mort : l'echec est journalise une fois
+            message = str(exc) if isinstance(
+                exc, (publish_mod.PublishError, channel_mod.ChannelError, ConfigError, tiktok.TikTokError,
+                      youtube.YouTubeError, accounts_mod.AccountsError, OSError, ValueError)
+            ) else f"{type(exc).__name__} : {exc}"
             if message not in self._logged_publish_errors:
                 self._logged_publish_errors.add(message)
                 log.error("publication TikTok impossible : %s", message)
@@ -1335,25 +1477,68 @@ class Worker:
     def _launch_head(self) -> bool:
         """Lance la tete de file ``waiting`` ; le cycle relecture-lancement-
         ecriture est sous verrou, la file ayant pu changer (API web) depuis
-        le dernier tick. Faux si rien n'attend."""
+        le dernier tick. Faux si rien n'attend. Avant tout lancement, une
+        entree ``running`` etrangere (enfant d'un worker precedent, coeur-I1)
+        est adoptee si son processus vit encore (rien d'autre n'est lance
+        tant qu'il tourne : un seul enfant, ADR-fb9b), ou remise ``waiting``
+        en tete s'il est mort (SPEC-74e9 §2.4)."""
         with _locked(self._path):
             entries = _read_queue(self._path)
+            running = [e for e in entries if e["status"] == "running"]
+            if running:
+                alive = [e for e in running if _entry_process_alive(e)]
+                if alive:
+                    self._adopt(alive[0])
+                    for extra in alive[1:]:
+                        log.error("%s : deuxième entrée en cours (pid %s) à côté de %s : non surveillée, elle sera "
+                                  "reprise à la mort de son processus", extra["video_id"], extra["pid"],
+                                  alive[0]["video_id"])
+                    return True
+                requeued = _requeue_dead_running(entries)
+                _write_queue(self._path, entries)
+                for dead in requeued:
+                    log.warning("%s : processus %s d'un worker précédent terminé sans retirer son entrée : "
+                                "remise en tête de file", dead["video_id"], dead["pid"])
+                    self._mark_interrupted_if_running(dead["video_id"])
             entry = next((e for e in entries if e["status"] == "waiting"), None)
             if entry is None:
                 return False
             if entry.get("channel"):
                 self._sync_channel_mode(entry["channel"])
-            self._launched_at = datetime.now(timezone.utc)
             self._keep_channel(entry)
+            # apres _keep_channel : son ecriture de pipeline.json ne doit pas passer pour un etat ecrit par
+            # l'enfant (coeur-M2 : un enfant mort tout de suite gardait l'ancienne raison d'echec)
+            self._launched_at = datetime.now(timezone.utc)
             process = self._spawn(entry, _build_command(entry, self.config))
             entry["status"] = "running"
             entry["pid"] = process.pid
+            entry["pid_created_at"] = _process_created_at(process.pid)
+            entry["launched_at"] = self._launched_at.isoformat()
             for field in _PREFETCH_FIELDS:
                 entry.pop(field, None)  # le `run` saute un download fait ou refait un download en echec
             _write_queue(self._path, entries)
         self._process = process
         self._entry = entry
         return True
+
+    def _adopt(self, entry: dict[str, Any]) -> None:
+        """Surveille l'enfant encore vivant d'un worker precedent comme s'il etait le notre : son entree quitte la
+        file a sa mort (``_finish_current``), et rien d'autre n'est lance d'ici la."""
+        self._entry = entry
+        self._process = _AdoptedProcess(entry["pid"], entry.get("pid_created_at"))
+        launched = entry.get("launched_at")
+        self._launched_at = datetime.fromisoformat(launched) if launched else None
+        log.warning("%s : processus %s d'un worker précédent encore en cours : adopté et surveillé, aucun autre "
+                    "enfant n'est lancé avant sa fin", entry["video_id"], entry["pid"])
+
+    def _mark_interrupted_if_running(self, video_id: str) -> None:
+        from clipper import pipeline
+
+        try:
+            if pipeline.load_state(video_id, config=self.config).get("status") == "running":
+                mark_interrupted(video_id, self.config)
+        except (pipeline.PipelineError, OSError, ValueError, KeyError) as exc:
+            log.error("%s : état illisible après la mort de son processus : %s", video_id, exc)
 
     def _keep_channel(self, entry: dict[str, Any]) -> None:
         """Ecrit le style de l'entree dans ``pipeline.json`` avant le lancement (TASK-9d24) : l'enfant
@@ -1413,14 +1598,20 @@ class Worker:
         except pipeline.PipelineError:
             state = pipeline.new_state(video_id, entry["url"], self.config.mode, channel=entry.get("channel"))
         else:
+            if code == EXIT_UNKNOWN and state.get("status") != "running":
+                # processus adopte dont le code n'est pas lisible : l'etat dit s'il a ecrit sa fin
+                log.warning("%s : processus adopté terminé (code inconnu), état écrit par l'enfant conservé : %s",
+                            video_id, state.get("status"))
+                return
             written = state.get("updated_at")
-            if (state.get("status") in ("failed", "queued") and written
-                    and datetime.fromisoformat(written) >= self._launched_at):
+            since_launch = self._launched_at is None or (written and datetime.fromisoformat(written) >= self._launched_at)
+            if state.get("status") in ("failed", "queued") and written and since_launch:
                 log.error("%s : processus enfant terminé avec le code %s (état écrit par l'enfant conservé)", video_id, code)
                 return
         path = log_path(video_id, self.config)
         reason = f"le processus enfant s'est terminé avec le code {code} (journal : {path}) : {_log_tail(path)}"
         state.pop("dismissed_at", None)
+        _pending_orphan_step(state)
         state.update(status="failed", reason=reason, retry_at=None)
         pipeline.save_state(state, config=self.config)
         log.error("%s : %s", video_id, reason)
@@ -1490,6 +1681,7 @@ class Worker:
             process = self._spawn_prefetch(entry, _build_prefetch_command(entry, self.config))
             entry["prefetch"] = "running"
             entry["prefetch_pid"] = process.pid
+            entry["prefetch_pid_created_at"] = _process_created_at(process.pid)
             _write_queue(self._path, entries)
         self._prefetch_process = process
         self._prefetch_entry_id = entry["id"]
@@ -1534,6 +1726,7 @@ class Worker:
                 return  # retiree ou annulee pendant le download : rien d'autre a ecrire
             entry["prefetch"] = "done" if code == 0 else "failed"
             entry["prefetch_pid"] = None
+            entry.pop("prefetch_pid_created_at", None)
             _write_queue(self._path, entries)
         if code != 0:
             self._record_prefetch_failure(entry, code)

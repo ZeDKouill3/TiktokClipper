@@ -243,8 +243,8 @@ def test_tick_launches_head_entry_with_exact_command_line_run_action(tmp_path):
     assert spawner.calls == [[
         sys.executable, "-m", "clipper",
         "--config", "presets/ma_chaine.toml",
-        "run", URL_A,
-        "--force-step", "parts", "--force-step", "render",
+        "run", "--force-step", "parts", "--force-step", "render",
+        "--", URL_A,  # « -- » : un identifiant qui commence par « - » reste un positionnel (web-I6)
     ]]
 
 
@@ -256,7 +256,7 @@ def test_tick_launches_head_entry_with_exact_command_line_render_action(tmp_path
     w = worker.Worker(config=config, spawner=spawner)
     w.tick()
 
-    assert spawner.calls == [[sys.executable, "-m", "clipper", "render", VIDEO_A]]
+    assert spawner.calls == [[sys.executable, "-m", "clipper", "render", "--", VIDEO_A]]
 
 
 def test_tick_records_pid_and_marks_entry_running(tmp_path):
@@ -3554,7 +3554,7 @@ def test_prefetch_starts_the_download_alone_of_the_first_waiting_entry_once_the_
 
     w.tick()
 
-    assert spawner.calls[1] == [sys.executable, "-m", "clipper", "download", URL_B]
+    assert spawner.calls[1] == [sys.executable, "-m", "clipper", "download", "--", URL_B]
     entries = _by_video(config)
     assert entries[VIDEO_B]["prefetch"] == "running"
     assert entries[VIDEO_B]["prefetch_pid"] == 7002
@@ -3574,7 +3574,7 @@ def test_prefetch_command_carries_the_channel_preset_before_the_subcommand(tmp_p
 
     w.tick()
 
-    assert spawner.calls[1] == [sys.executable, "-m", "clipper", "--config", "presets/ma_chaine.toml", "download", URL_B]
+    assert spawner.calls[1] == [sys.executable, "-m", "clipper", "--config", "presets/ma_chaine.toml", "download", "--", URL_B]
 
 
 def test_prefetch_command_is_accepted_by_the_real_parser(tmp_path):
@@ -3620,7 +3620,7 @@ def test_prefetched_entry_is_launched_as_a_normal_run_and_loses_its_prefetch_fie
 
     w.tick()
 
-    assert spawner.calls[2] == [sys.executable, "-m", "clipper", "run", URL_B]  # le run saute le download fait
+    assert spawner.calls[2] == [sys.executable, "-m", "clipper", "run", "--", URL_B]  # le run saute le download fait
     entry = _by_video(config)[VIDEO_B]
     assert entry["status"] == "running"
     assert "prefetch" not in entry and "prefetch_pid" not in entry
@@ -3638,7 +3638,7 @@ def test_current_video_finishing_while_its_successor_is_still_downloading_waits_
     assert _by_video(config)[VIDEO_B]["status"] == "waiting"
     spawner.processes[1].finish(0)
     w.tick()
-    assert spawner.calls[2] == [sys.executable, "-m", "clipper", "run", URL_B]
+    assert spawner.calls[2] == [sys.executable, "-m", "clipper", "run", "--", URL_B]
 
 
 def test_prefetch_failure_is_logged_visible_and_does_not_fail_the_current_video(tmp_path, caplog):
@@ -3691,7 +3691,7 @@ def test_failed_prefetched_entry_retries_its_download_when_it_becomes_the_curren
 
     w.tick()
 
-    assert spawner.calls[2] == [sys.executable, "-m", "clipper", "run", URL_B]
+    assert spawner.calls[2] == [sys.executable, "-m", "clipper", "run", "--", URL_B]
     assert "prefetch" not in _by_video(config)[VIDEO_B]
 
 
@@ -4287,3 +4287,367 @@ def test_a_scheduled_entry_is_compared_at_its_effective_time_not_the_requested_m
     entry = _entries(tmp_path, NO_CHANNEL)[0]
     assert "missing_on_tiktok" not in entry
     assert "rien conclu" not in caplog.text
+
+
+# --------------------------------------------------------------------------
+# TASK-4ca998e97789 (audit 10/10, lot A1) : une seule instance, une seule entree running,
+# identite d'un processus = pid + heure de creation
+# --------------------------------------------------------------------------
+
+
+def _sleeper():
+    return subprocess.Popen(_SLEEPER)
+
+
+def _end(proc) -> None:
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait()
+
+
+def _running_entry(video_id: str, url: str, proc, *, created_at="real") -> dict:
+    """Entree ``running`` pilotee par un vrai processus ; ``created_at="real"`` : son heure de creation,
+    sinon la valeur donnee (une heure qui ne correspond pas = pid reattribue a un etranger)."""
+    created = worker._process_created_at(proc.pid) if created_at == "real" else created_at
+    return {**_entry(video_id, url, status="running", pid=proc.pid), "pid_created_at": created}
+
+
+def _write_heartbeat(config: Config, pid: int, created_at) -> None:
+    path = worker.heartbeat_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"pid": pid, "at": datetime.now(timezone.utc).isoformat(), "busy": False,
+                                "pid_created_at": created_at}), encoding="utf-8")
+
+
+def test_process_created_at_identifies_a_process_and_process_alive_turns_false_at_its_death():
+    proc = _sleeper()
+    try:
+        created = worker._process_created_at(proc.pid)
+        assert isinstance(created, int) and created > 0
+        assert worker._process_created_at(proc.pid) == created  # stable tant que le processus vit
+        assert worker.process_alive(proc.pid, created) is True
+        assert worker.process_alive(proc.pid, created - 1) is False  # meme pid, autre processus
+        assert worker.process_alive(proc.pid, None) is True  # entree ancienne sans heure : existence seule
+    finally:
+        _end(proc)
+    assert worker.process_alive(proc.pid, created) is False
+
+
+def test_startup_and_tick_adopt_a_live_foreign_running_entry_and_launch_nothing(tmp_path):
+    """coeur-I1 : serve relance (ou worker tombe) pendant qu'un enfant tourne encore : le nouveau worker
+    n'en lance pas un second a cote, il surveille l'enfant survivant et retire son entree a sa mort."""
+    config = _config(tmp_path)
+    orphan = _sleeper()
+    try:
+        _write_queue(config, [_running_entry(VIDEO_A, URL_A, orphan), _entry(VIDEO_B, URL_B)])
+        _pipeline_state(VIDEO_A, config, status="running")
+        _pipeline_state(VIDEO_B, config, status="pending")
+        spawner = FakeSpawner()
+        w = worker.Worker(config=config, spawner=spawner)
+
+        w.startup()
+        w.tick()
+        w.tick()
+
+        assert spawner.calls == []  # rien lance tant que l'enfant d'avant vit (ADR-fb9b, ADR-35b7 §1)
+        assert [(e["video_id"], e["status"]) for e in _queue(config)] == [(VIDEO_A, "running"), (VIDEO_B, "waiting")]
+        assert w._entry is not None and w._entry["video_id"] == VIDEO_A  # entree adoptee
+        assert worker.is_interrupted(pipeline.load_state(VIDEO_A, config=config), config) is False
+
+        _end(orphan)
+        w.tick()
+
+        assert [(e["video_id"], e["status"]) for e in _queue(config)] == [(VIDEO_B, "running")]
+        assert len(spawner.calls) == 1 and spawner.calls[0][-1] == URL_B
+        assert pipeline.load_state(VIDEO_A, config=config)["status"] == "failed"  # mort sans ecrire : visible
+    finally:
+        _end(orphan)
+
+
+def test_an_adopted_child_that_finishes_cleanly_keeps_the_state_it_wrote(tmp_path):
+    config = _config(tmp_path)
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.3)"])
+    try:
+        _write_queue(config, [_running_entry(VIDEO_A, URL_A, child)])
+        _pipeline_state(VIDEO_A, config, status="running")
+        w = worker.Worker(config=config, spawner=FakeSpawner())
+        w.startup()
+        w.tick()
+        assert w._entry["video_id"] == VIDEO_A
+        state = pipeline.load_state(VIDEO_A, config=config)
+        state["status"] = "done"
+        pipeline.save_state(state, config=config)  # l'enfant ecrit sa fin...
+        child.wait()  # ... et quitte avec le code 0
+
+        w.tick()
+
+        assert _queue(config) == []
+        assert pipeline.load_state(VIDEO_A, config=config)["status"] == "done"
+    finally:
+        _end(child)
+
+
+def test_a_foreign_running_entry_whose_process_died_is_requeued_at_tick_time(tmp_path):
+    config = _config(tmp_path)
+    dead = _sleeper()
+    created = worker._process_created_at(dead.pid)
+    _end(dead)
+    _write_queue(config, [_entry(VIDEO_B, URL_B),
+                          {**_entry(VIDEO_A, URL_A, status="running", pid=dead.pid), "pid_created_at": created}])
+    _pipeline_state(VIDEO_A, config, status="running")
+    spawner = FakeSpawner()
+    w = worker.Worker(config=config, spawner=spawner)
+
+    w.tick()  # sans startup : la file a change depuis (autre worker mort)
+
+    assert len(spawner.calls) == 1 and spawner.calls[0][-1] == URL_A  # reprise en tete (SPEC-74e9 §2.4)
+    assert [(e["video_id"], e["status"]) for e in _queue(config)] == [(VIDEO_A, "running"), (VIDEO_B, "waiting")]
+
+
+def test_second_worker_startup_refuses_with_the_pid_of_the_other(tmp_path):
+    """coeur-I2 / publication-I2 : deux workers sur la meme file = deux enfants lourds ; le second refuse."""
+    config = _config(tmp_path)
+    other = _sleeper()
+    try:
+        _write_heartbeat(config, other.pid, worker._process_created_at(other.pid))
+
+        with pytest.raises(worker.WorkerError, match=rf"un worker tourne déjà \(pid {other.pid},"):
+            worker.Worker(config=config, spawner=FakeSpawner()).startup()
+    finally:
+        _end(other)
+
+
+def test_startup_proceeds_when_the_heartbeat_pid_is_dead_or_reused(tmp_path):
+    config = _config(tmp_path)
+    stranger = _sleeper()
+    try:
+        _write_heartbeat(config, stranger.pid, worker._process_created_at(stranger.pid) - 1)  # pid reattribue
+        worker.Worker(config=config, spawner=FakeSpawner()).startup()
+        assert worker.read_heartbeat(config)["pid"] == os.getpid()  # la place est prise tout de suite
+    finally:
+        _end(stranger)
+    dead = _sleeper()
+    created = worker._process_created_at(dead.pid)
+    _end(dead)
+    _write_heartbeat(config, dead.pid, created)
+    worker.Worker(config=config, spawner=FakeSpawner()).startup()
+
+
+def test_read_heartbeat_reports_stopped_when_the_pid_belongs_to_another_process(tmp_path):
+    config = _config(tmp_path)
+    stranger = _sleeper()
+    try:
+        _write_heartbeat(config, stranger.pid, worker._process_created_at(stranger.pid) - 1)
+        beat = worker.read_heartbeat(config)
+        assert beat["state"] == "stopped" and str(stranger.pid) in beat["reason"]
+        _write_heartbeat(config, stranger.pid, worker._process_created_at(stranger.pid))
+        assert worker.read_heartbeat(config)["state"] == "active"
+    finally:
+        _end(stranger)
+
+
+def test_the_heartbeat_carries_the_creation_time_of_the_worker_process(tmp_path):
+    config = _config(tmp_path)
+    worker.Worker(config=config, spawner=FakeSpawner()).tick()
+    beat = json.loads(worker.heartbeat_path(config).read_text(encoding="utf-8"))
+    assert beat["pid"] == os.getpid() and beat["pid_created_at"] == worker._process_created_at(os.getpid())
+
+
+def test_main_worker_command_reports_a_worker_already_running(tmp_path, monkeypatch, capsys):
+    from clipper.__main__ import main
+
+    config = _config(tmp_path)
+    monkeypatch.setattr("clipper.__main__.load_config", lambda path="config.toml": config)
+
+    class FakeWorker:
+        def __init__(self, *, config):
+            pass
+
+        def loop(self):
+            raise worker.WorkerError("un worker tourne déjà (pid 4242) : arrête-le avant d'en lancer un autre")
+
+    monkeypatch.setattr("clipper.worker.Worker", FakeWorker)
+
+    assert main(["worker"]) == 1
+    assert "un worker tourne déjà (pid 4242)" in capsys.readouterr().err
+
+
+def test_launch_records_the_creation_time_and_launch_time_of_the_child_in_the_entry(tmp_path):
+    config = _config(tmp_path)
+    child = _sleeper()
+    try:
+        worker.enqueue(URL_A, None, "run", config=config)
+        worker.Worker(config=config, spawner=FakeSpawner(FakeProcess(pid=child.pid))).tick()
+        entry = _queue(config)[0]
+        assert entry["status"] == "running" and entry["pid"] == child.pid
+        assert entry["pid_created_at"] == worker._process_created_at(child.pid)
+        assert datetime.fromisoformat(entry["launched_at"]) <= datetime.now(timezone.utc)
+    finally:
+        _end(child)
+
+
+def test_cancel_does_not_kill_a_process_whose_creation_time_differs(tmp_path):
+    """coeur-I3 : PC rallume, le pid de l'entree appartient maintenant a un autre processus : Annuler ne le
+    tue pas, la video est bien « interrompue » et reprenable."""
+    config = _config(tmp_path)
+    stranger = _sleeper()
+    try:
+        _write_queue(config, [_running_entry(VIDEO_A, URL_A, stranger, created_at=12345)])
+        state = _pipeline_state(VIDEO_A, config, status="running")
+        assert worker.is_interrupted(state, config) is True
+
+        worker.cancel(VIDEO_A, config=config)
+
+        assert stranger.poll() is None  # l'etranger vit toujours
+        assert _queue(config) == []
+        assert pipeline.load_state(VIDEO_A, config=config)["status"] == "failed"
+    finally:
+        _end(stranger)
+
+
+def test_cancel_kills_the_process_whose_creation_time_matches(tmp_path):
+    config = _config(tmp_path, cancel_grace_s=2)
+    child = _sleeper()
+    try:
+        _write_queue(config, [_running_entry(VIDEO_A, URL_A, child)])
+        _pipeline_state(VIDEO_A, config, status="running")
+
+        worker.cancel(VIDEO_A, config=config)
+
+        assert child.wait(timeout=5) is not None
+    finally:
+        _end(child)
+
+
+def test_resume_accepts_a_running_entry_whose_pid_was_reused(tmp_path):
+    config = _config(tmp_path)
+    stranger = _sleeper()
+    try:
+        _write_queue(config, [_running_entry(ORPHAN_ID, f"https://youtu.be/{ORPHAN_ID}", stranger, created_at=1)])
+        _orphan_state(config)
+        worker.resume(ORPHAN_ID, config=config)
+        assert any(e["video_id"] == ORPHAN_ID and e["status"] == "waiting" for e in _queue(config))
+    finally:
+        _end(stranger)
+
+
+def test_startup_requeues_a_running_entry_whose_pid_was_reused(tmp_path):
+    config = _config(tmp_path)
+    stranger = _sleeper()
+    try:
+        _write_queue(config, [_running_entry(VIDEO_A, URL_A, stranger, created_at=1)])
+        worker.Worker(config=config, spawner=FakeSpawner()).startup()
+        assert [(e["status"], e["pid"]) for e in _queue(config)] == [("waiting", None)]
+        assert stranger.poll() is None
+    finally:
+        _end(stranger)
+
+
+def test_move_to_front_keeps_every_running_entry(tmp_path):
+    config = _config(tmp_path)
+    _write_queue(config, [_entry(VIDEO_A, URL_A, status="running", pid=1), _entry(VIDEO_B, URL_B, status="running", pid=2),
+                          _entry("C", "https://youtu.be/C"), _entry("D", "https://youtu.be/D")])
+
+    worker.move_to_front("D", config=config)
+
+    assert [e["video_id"] for e in _queue(config)] == [VIDEO_A, VIDEO_B, "D", "C"]
+
+
+def test_publish_due_survives_an_unexpected_error_and_logs_it_once(tmp_path, monkeypatch, caplog):
+    """publication-M1 : une exception hors liste dans le chemin de publication ne tue plus le worker."""
+    config = _pub_env(tmp_path, monkeypatch)
+    w = _pub_worker(config, FakePublisher())
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("accounts.json : entrée qui n'est pas un objet")
+
+    monkeypatch.setattr(worker.accounts_mod, "list_accounts", boom)
+    with caplog.at_level("ERROR", logger="clipper.worker"):
+        w.tick()
+        w.tick()
+
+    messages = [r.getMessage() for r in caplog.records
+                if "publication" in r.getMessage() and "RuntimeError" in r.getMessage()]
+    assert len(messages) == 1 and "entrée qui n'est pas un objet" in messages[0]
+
+
+def test_cancel_resets_the_running_step_to_pending(tmp_path):
+    """coeur-M1 : une video annulee n'a plus d'etape « en cours »."""
+    config = _config(tmp_path)
+    dead = _sleeper()
+    created = worker._process_created_at(dead.pid)
+    _end(dead)
+    _write_queue(config, [{**_entry(VIDEO_A, URL_A, status="running", pid=dead.pid), "pid_created_at": created}])
+    _orphan_state(config, video_id=VIDEO_A, running="render")
+
+    worker.cancel(VIDEO_A, config=config)
+
+    statuses = _statuses(config, VIDEO_A)
+    assert statuses["render"] == "pending" and statuses["subtitles"] == "done"
+    assert "running" not in statuses.values()
+    assert pipeline.load_state(VIDEO_A, config=config)["status"] == "failed"
+
+
+def test_a_child_crash_resets_the_running_step_to_pending(tmp_path):
+    config = _config(tmp_path)
+    worker.enqueue(URL_A, None, "run", config=config)
+    process = FakeProcess()
+    w = worker.Worker(config=config, spawner=FakeSpawner(process))
+    w.tick()
+    _orphan_state(config, video_id=VIDEO_A, running="reframe")  # l'enfant en etait la quand il est mort
+    process.finish(-1073741819)
+
+    w.tick()
+
+    state = pipeline.load_state(VIDEO_A, config=config)
+    statuses = _statuses(config, VIDEO_A)
+    assert state["status"] == "failed" and "-1073741819" in state["reason"]
+    assert statuses["reframe"] == "pending" and statuses["captions"] == "done"
+
+
+def test_a_child_dying_at_once_after_keep_channel_reports_its_exit_code(tmp_path):
+    """coeur-M2 : l'ecriture du style dans pipeline.json avant le lancement ne passe plus pour un etat ecrit
+    par l'enfant ; l'ancienne raison d'echec ne masque plus le crash."""
+    base = _config(tmp_path)
+    presets = tmp_path / "presets"
+    presets.mkdir()
+    (presets / "ma_chaine.toml").write_text('[channel]\ndisplay_name = "Ma chaine"\n', encoding="utf-8")
+    (tmp_path / "config.toml").write_text('mode = "auto"\n', encoding="utf-8")
+    config = Config(mode="auto", workspace_dir=base.workspace_dir, output_dir=base.output_dir,
+                    _sections={**base._sections, "watch": {"state_dir": str(tmp_path / "state" / "watch"),
+                                                           "presets_dir": str(presets),
+                                                           "base_config": str(tmp_path / "config.toml")}})
+    state = _pipeline_state(VIDEO_A, config, status="failed")
+    state["reason"] = "ANCIEN ECHEC : transcribe : TransientLLMError quota"
+    pipeline.save_state(state, config=config)
+    _write_queue(config, [{**_entry(VIDEO_A, URL_A), "channel": "ma_chaine"}])
+    process = FakeProcess()
+    w = worker.Worker(config=config, spawner=FakeSpawner(process))
+    w.tick()
+    process.finish(1)
+
+    w.tick()
+
+    state = pipeline.load_state(VIDEO_A, config=config)
+    assert state["status"] == "failed" and "code 1" in state["reason"]
+    assert "ANCIEN ECHEC" not in state["reason"]
+
+
+def test_build_command_separates_a_video_id_starting_with_a_dash(tmp_path):
+    """web-I6 : un identifiant YouTube commencant par « - » est un positionnel, pas une option."""
+    from clipper.__main__ import build_parser
+
+    entry = {"video_id": "-wtIMTCHWuI", "url": "-wtIMTCHWuI", "channel": None, "action": "render",
+             "force_steps": ["render"]}
+    cmd = worker._build_command(entry)
+    assert cmd[3:] == ["render", "--force-step", "render", "--", "-wtIMTCHWuI"]  # options avant « -- »
+    args = build_parser().parse_args(cmd[3:])
+    assert args.command == "render" and args.video_id == "-wtIMTCHWuI" and args.force_step == ["render"]
+
+    run = worker._build_command({**entry, "action": "run", "url": "https://youtu.be/-wtIMTCHWuI", "force_steps": []})
+    assert run[3:] == ["run", "--", "https://youtu.be/-wtIMTCHWuI"]
+    assert build_parser().parse_args(run[3:]).url == "https://youtu.be/-wtIMTCHWuI"
+
+    prefetch = worker._build_prefetch_command({**entry, "url": "https://youtu.be/-wtIMTCHWuI"})
+    assert prefetch[3:] == ["download", "--", "https://youtu.be/-wtIMTCHWuI"]
+    assert build_parser().parse_args(prefetch[3:]).url == "https://youtu.be/-wtIMTCHWuI"
