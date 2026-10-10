@@ -5,7 +5,7 @@ slug: audit-lot-d-garde-locale-de-l-api
 title: "Audit lot D : garde locale de l'API"
 created: 2026-10-10T18:25:21Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/web/app.py
   - tests/test_web.py
@@ -15,6 +15,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: diagnose
+proof:
+  - type: test
+    ref: local/0254ea56d671@f9de134
+    tree: scope/072815181533
+    criteria: 5069cf1a7526
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
