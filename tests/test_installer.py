@@ -503,7 +503,8 @@ def test_clipper_bat_preview_has_path_and_launch_logic(installer_dir: Path) -> N
     assert "Clipper serve" in stdout
     assert "clipper.exe" in stdout
     assert "127.0.0.1:8000" in stdout
-    assert f"set DATA={data_dir}" in stdout
+    # Paire entiere quotee (audit 10/10 M4), voir test_a1010_m4_*.
+    assert f'set "DATA={data_dir}"' in stdout
     assert 'cd /d "%DATA%"' in stdout
 
 
@@ -858,13 +859,21 @@ def test_c3_venv_removed_even_on_interrupted_fresh_install(installer_dir: Path) 
     venv_dir = app_dir / ".venv"
     venv_dir.mkdir()
     (venv_dir / "marker.txt").write_text("installation precedente interrompue", encoding="utf-8")
+    # Audit 10/10 M6 : uv.exe, la wheel et overrides.txt sont controles avant
+    # la suppression de .venv (prevol), donc le zip doit etre "complet" ici
+    # pour atteindre cette suppression : un faux uv.exe (where.exe, qui sort
+    # en code 1 sur 'python install 3.11', donc Fail a l'etape 2 sans
+    # reseau) et une wheel vide a cote de version.txt.
+    shutil.copy(Path(os.environ["SystemRoot"]) / "System32" / "where.exe", installer_dir / "uv.exe")
+    (installer_dir / f"clipper-{NEW_VERSION}-py3-none-any.whl").write_bytes(b"")
 
     result = run_install(
-        installer_dir, ["--app", str(app_dir), "--data", str(data_dir)], env=_env_with_reduced_path()
+        installer_dir, ["--app", str(app_dir), "--data", str(data_dir)], env=_env_with_reduced_path(), port=_free_port()
     )
 
-    assert result.returncode != 0  # echoue plus tard, a l'etape 2 (uv.exe absent, C1)
+    assert result.returncode != 0  # echoue plus tard, a l'etape 2 (faux uv en echec)
     assert "premiere installation" in result.stdout
+    assert "uv python install 3.11" in result.stdout
     assert not venv_dir.exists()
 
 
@@ -1081,3 +1090,399 @@ def test_m6_premier_clip_txt_does_not_mention_phantom_doctor_menu() -> None:
     console qui n'existe pas (clipper/web/ n'a aucun appel a doctor)."""
     text = (INSTALLER_SRC / "PREMIER-CLIP.txt").read_text(encoding="utf-8")
     assert "Reglages" not in text, text
+
+
+# --------------------------------------------------------------------------
+# Audit complet du 10/10, lot M (TASK-b2235d04aafd ; research/reviews/
+# audit-1010/installeur.md, contre-verif.md) : I1-I5, M1-M6. Chaque test a
+# ete vu ROUGE sur le code d'avant correctif. LOCALAPPDATA est toujours
+# redirige vers tmp_path (jamais le vrai), le Bureau vers -Bureau, le port
+# vers -Port.
+# --------------------------------------------------------------------------
+
+
+def _copy_desinstaller_into_app(app_dir: Path, installer_dir: Path) -> Path:
+    """Reproduit la copie de l'etape 9 (I7) : app\\Desinstaller.bat et
+    app\\installer\\desinstaller.ps1, exactement comme sur une installation
+    reelle (le seul Desinstaller.bat que l'utilisateur a encore une fois le
+    zip supprime, INSTALLATION.md)."""
+    (app_dir / "installer").mkdir(parents=True, exist_ok=True)
+    shutil.copy(installer_dir / "installer" / "Desinstaller.bat", app_dir / "Desinstaller.bat")
+    shutil.copy(installer_dir / "installer" / "desinstaller.ps1", app_dir / "installer" / "desinstaller.ps1")
+    return app_dir / "Desinstaller.bat"
+
+
+def _fake_installed_app(app_dir: Path, data_dir: Path) -> None:
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (app_dir / "install.json").write_text(
+        json.dumps({"app": str(app_dir), "data": str(data_dir), "version": NEW_VERSION}),
+        encoding="utf-8",
+    )
+    (app_dir / "version.txt").write_text(NEW_VERSION, encoding="utf-8")
+    (app_dir / ".venv").mkdir(exist_ok=True)
+    (app_dir / ".venv" / "marker.txt").write_text("venv", encoding="utf-8")
+
+
+def test_a1010_i1_desinstaller_bat_launched_from_app_removes_app_shortcut_and_pointer(
+    tmp_path: Path, installer_dir: Path
+) -> None:
+    """I1 : double-clic sur app\\Desinstaller.bat (le chemin documente) donne
+    a cmd puis a powershell le dossier app comme dossier courant ;
+    Remove-Item refusait alors de supprimer app (« en cours d'utilisation »)
+    et le script s'arretait avant le raccourci et le pointeur."""
+    env, pointer_dir, pointer = _pointer_env(tmp_path)
+    app_dir = pointer_dir / "app"
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "config.toml").write_text("[pipeline]\n", encoding="utf-8")
+    _fake_installed_app(app_dir, data_dir)
+    bat = _copy_desinstaller_into_app(app_dir, installer_dir)
+    pointer.write_text(json.dumps({"app": str(app_dir), "data": str(data_dir)}), encoding="utf-8")
+    bureau = tmp_path / "bureau"
+    bureau.mkdir()
+    (bureau / "Clipper.lnk").write_bytes(b"lnk")
+
+    result = subprocess.run(
+        ["cmd", "/c", str(bat), "-Port", str(_free_port()), "-Bureau", str(bureau), "--app", str(app_dir)],
+        cwd=str(app_dir),
+        env=env,
+        input="N\n",
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, combined
+    assert "en cours d'utilisation" not in combined
+    assert not app_dir.exists(), combined
+    assert not (bureau / "Clipper.lnk").exists()
+    assert not pointer.exists()
+    assert (data_dir / "config.toml").exists()  # reponse N : donnees conservees
+
+
+def test_a1010_i2_desinstaller_without_app_option_finds_install_next_to_its_script(
+    tmp_path: Path, installer_dir: Path
+) -> None:
+    """I2 : app\\Desinstaller.bat copie dans un --app personnalise, lance
+    sans --app, doit retrouver SA propre installation (install.json a cote
+    du script) au lieu de chercher sous %LOCALAPPDATA%\\Clipper\\app."""
+    env, _pointer_dir, _pointer = _pointer_env(tmp_path)
+    app_dir = tmp_path / "perso" / "Clipper"
+    data_dir = tmp_path / "perso" / "clips"
+    _fake_installed_app(app_dir, data_dir)
+    _copy_desinstaller_into_app(app_dir, installer_dir)
+
+    result = run_desinstaller(app_dir, ["--dry-run"], env=env, port=_free_port())
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"{app_dir} sera supprime" in result.stdout
+
+
+def test_a1010_i2_desinstaller_without_app_option_falls_back_to_pointer(
+    tmp_path: Path, installer_dir: Path
+) -> None:
+    """I2 (suite) : le Desinstaller.bat du zip (aucun install.json a cote)
+    lance sans --app lit le pointeur %LOCALAPPDATA%\\Clipper\\install.json
+    (ecrit exactement pour ca par l'etape 11) avant le dossier par defaut."""
+    env, _pointer_dir, pointer = _pointer_env(tmp_path)
+    app_dir = tmp_path / "perso" / "Clipper"
+    data_dir = tmp_path / "perso" / "clips"
+    _fake_installed_app(app_dir, data_dir)
+    pointer.write_text(json.dumps({"app": str(app_dir), "data": str(data_dir)}), encoding="utf-8")
+
+    result = run_desinstaller(installer_dir, ["--dry-run"], env=env, port=_free_port())
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"{app_dir} sera supprime" in result.stdout
+
+
+def test_a1010_i3_app_only_rereads_data_from_app_install_json(tmp_path: Path, installer_dir: Path) -> None:
+    """I3 : --app seul (sans --data) sur une installation existante doit
+    reprendre le data de <app>\\install.json (R2 « relues comme defauts »),
+    jamais retomber sur Documents\\Clipper vide (bibliotheque « perdue »)."""
+    env, _pointer_dir, _pointer = _pointer_env(tmp_path)
+    app_dir = tmp_path / "perso" / "app"
+    data_dir = tmp_path / "perso" / "clips"
+    _fake_installed_app(app_dir, data_dir)
+    (app_dir / "version.txt").write_text(OLDER_VERSION, encoding="utf-8")
+
+    result = run_install(installer_dir, ["--dry-run", "--app", str(app_dir)], env=env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"data={data_dir}" in result.stdout
+    assert "Documents" not in result.stdout.split("[2/11]")[0]
+
+
+def test_a1010_i3_data_only_rereads_app_from_pointer(tmp_path: Path, installer_dir: Path) -> None:
+    """I3 (suite) : --data seul reprend le app du pointeur, pas le dossier
+    par defaut (qui serait une seconde installation vide)."""
+    env, _pointer_dir, pointer = _pointer_env(tmp_path)
+    app_dir = tmp_path / "perso" / "app"
+    data_dir = tmp_path / "perso" / "clips"
+    new_data = tmp_path / "nouveaux-clips"
+    _fake_installed_app(app_dir, data_dir)
+    pointer.write_text(json.dumps({"app": str(app_dir), "data": str(data_dir)}), encoding="utf-8")
+
+    result = run_install(installer_dir, ["--dry-run", "--data", str(new_data)], env=env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"app={app_dir}" in result.stdout
+    assert f"data={new_data}" in result.stdout
+
+
+@pytest.mark.parametrize("data_rel", ["", "data"])
+def test_a1010_i4_data_equal_to_or_under_app_is_refused(installer_dir: Path, data_rel: str) -> None:
+    """I4 : data == app ou data sous app : la desinstallation supprime app
+    sans condition, donc les donnees partiraient malgre la reponse N
+    (INSTALLATION.md « les donnees sont conservees par defaut »)."""
+    app_dir = installer_dir / "x"
+    data_dir = app_dir / data_rel if data_rel else app_dir
+
+    result = run_install(installer_dir, ["--dry-run", "--app", str(app_dir), "--data", str(data_dir)])
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "[installer] ERREUR" in result.stdout
+    assert str(app_dir) in result.stdout
+    assert str(data_dir) in result.stdout
+    assert "[1/11]" not in result.stdout
+
+
+def test_a1010_i4_data_beside_app_is_still_accepted(installer_dir: Path) -> None:
+    """I4 (garde-fou du garde-fou) : un data voisin dont le nom commence
+    par celui de app (C:\\x et C:\\xy) n'est pas « sous app »."""
+    app_dir = installer_dir / "x"
+    data_dir = installer_dir / "xy"
+
+    result = run_install(installer_dir, ["--dry-run", "--app", str(app_dir), "--data", str(data_dir)])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.fixture
+def failing_nvidia_smi(tmp_path: Path) -> Path:
+    """nvidia-smi simule en ECHEC (pilote casse, GPU retire, VM) : message
+    non vide, code de sortie 9, exactement ce qu'ecrit le vrai binaire dans
+    ce cas."""
+    bin_dir = tmp_path / "fakebin-ko"
+    bin_dir.mkdir()
+    script = bin_dir / "nvidia-smi.bat"
+    script.write_text(
+        "@echo off\r\n"
+        "echo NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver.\r\n"
+        "exit /b 9\r\n",
+        encoding="utf-8",
+    )
+    return bin_dir
+
+
+def test_a1010_i5_failing_nvidia_smi_means_cpu(installer_dir: Path, failing_nvidia_smi: Path) -> None:
+    """I5 : un nvidia-smi present mais en echec n'est pas un GPU detecte
+    (R4 : jamais 2 Go telecharges sans GPU) ; seule une sortie non vide
+    avec code 0 vaut detection."""
+    app_dir = installer_dir / "app"
+    data_dir = installer_dir / "data"
+    env = _env_with_prepended_path(failing_nvidia_smi)
+
+    result = run_install(installer_dir, ["--app", str(app_dir), "--data", str(data_dir), "--dry-run"], env=env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[cuda]" not in result.stdout
+    assert "CPU" in result.stdout
+
+
+@pytest.mark.parametrize("content", ["{not json", '{"app": "C:\\\\a|b<x>"}'])
+def test_a1010_m1_corrupt_pointer_fails_cleanly_in_installer(
+    tmp_path: Path, installer_dir: Path, content: str
+) -> None:
+    """M1 : un pointeur illisible ou au chemin invalide donnait une exception
+    .NET brute (ConvertFrom-Json / Test-Path) ; attendu : Fail nommant le
+    fichier et un remede (ADR-ad2e)."""
+    env, _pointer_dir, pointer = _pointer_env(tmp_path)
+    pointer.write_text(content, encoding="utf-8")
+
+    result = run_install(installer_dir, ["--dry-run"], env=env)
+
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, combined
+    assert "[installer] ERREUR" in result.stdout
+    assert str(pointer) in result.stdout
+    assert "remede" in result.stdout
+    assert "ConvertFrom-Json :" not in combined
+    assert "Test-Path :" not in combined
+    assert "Join-Path :" not in combined
+
+
+def test_a1010_m1_corrupt_app_install_json_fails_cleanly_in_desinstaller(
+    tmp_path: Path, installer_dir: Path
+) -> None:
+    """M1 (desinstalleur) : <app>\\install.json illisible = Fail nommant le
+    fichier, jamais l'exception brute de ConvertFrom-Json (observee pendant
+    la preuve A : « Sequence d'echappement non reconnue »)."""
+    env, _pointer_dir, _pointer = _pointer_env(tmp_path)
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "install.json").write_text('{"app": "C:\\x\\y"', encoding="utf-8")
+
+    result = run_desinstaller(installer_dir, ["--app", str(app_dir), "--dry-run"], env=env, port=_free_port())
+
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, combined
+    assert "[desinstaller] ERREUR" in result.stdout
+    assert str(app_dir / "install.json") in result.stdout
+    assert "ConvertFrom-Json :" not in combined
+    assert app_dir.exists()
+
+
+def test_a1010_m2_trailing_backslash_quote_is_trimmed(installer_dir: Path) -> None:
+    """M2 : Installer.bat --data "C:\\Mes Docs\\" (antislash final, completion
+    PowerShell) : powershell -File lit \\" comme un guillemet echappe et le
+    chemin se termine par un guillemet, accepte en --dry-run et casse a
+    New-Item en reel."""
+    app_dir = installer_dir / "app"
+    data_dir = installer_dir / "Mes Docs"
+
+    result = run_install(installer_dir, ["--dry-run", "--app", str(app_dir), "--data", str(data_dir) + '\\"'])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"data={data_dir}" in result.stdout
+    assert f'data={data_dir}"' not in result.stdout
+
+
+def test_a1010_m2_invalid_path_chars_are_refused(installer_dir: Path) -> None:
+    """M2 (suite) : un caractere interdit dans --app/--data est refuse par
+    Fail avant la premiere etape, jamais une exception .NET plus tard."""
+    app_dir = installer_dir / "app"
+
+    result = run_install(installer_dir, ["--dry-run", "--app", str(app_dir), "--data", "C:\\a|b<x>"])
+
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, combined
+    assert "[installer] ERREUR" in result.stdout
+    assert "C:\\a|b<x>" in result.stdout
+    assert "Test-Path :" not in combined
+    assert "Join-Path :" not in combined
+
+
+def test_a1010_m3_desinstaller_app_option_without_value_fails_cleanly(installer_dir: Path) -> None:
+    """M3 : --app sans valeur dans desinstaller.ps1 : meme garde que
+    install.ps1 (message rouge « sans valeur »), jamais « Impossible de lier
+    l'argument au parametre »."""
+    result = run_desinstaller(installer_dir, ["--app"], port=_free_port())
+
+    combined = (result.stdout + result.stderr).lower()
+    assert result.returncode != 0
+    assert "sans valeur" in combined
+    assert "impossible de lier" not in combined
+
+
+def test_a1010_m4_launcher_template_quotes_set_pairs() -> None:
+    """M4 : set APP=C:\\A&B\\app non quote fait executer « B\\app » par cmd et
+    tronque APP ; la paire entiere doit etre quotee (set "APP=...")."""
+    text = (INSTALLER_SRC / "Clipper.bat.template").read_text(encoding="utf-8")
+    assert re.search(r'^set "APP=__APP__"\s*$', text, re.MULTILINE), text
+    assert re.search(r'^set "DATA=__DATA__"\s*$', text, re.MULTILINE), text
+    assert not re.search(r"^set (APP|DATA|PATH)=", text, re.MULTILINE), text
+
+
+def test_a1010_m4_launcher_with_ampersand_in_path_keeps_app_and_data(tmp_path: Path) -> None:
+    """M4 (preuve cmd) : le gabarit rempli avec un chemin contenant « & »
+    doit laisser APP et DATA intacts dans cmd. Seules les lignes set du
+    gabarit sont executees ici (jamais netstat/start)."""
+    template = (INSTALLER_SRC / "Clipper.bat.template").read_text(encoding="utf-8")
+    app = str(tmp_path / "A&B" / "app")
+    data = str(tmp_path / "A&B" / "data")
+    set_lines = [line for line in template.splitlines() if line.strip().lower().startswith("set ")]
+    assert set_lines, template
+    script = tmp_path / "probe.bat"
+    # Expansion retardee (!APP!) pour l'affichage : avec %APP%, c'est la
+    # ligne echo elle-meme que le & couperait, quel que soit le gabarit.
+    script.write_text(
+        "@echo off\r\nsetlocal enabledelayedexpansion\r\n"
+        + "\r\n".join(line.replace("__APP__", app).replace("__DATA__", data) for line in set_lines)
+        + "\r\necho APP=[!APP!]\r\necho DATA=[!DATA!]\r\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["cmd", "/c", str(script)], capture_output=True, text=True, timeout=30)
+
+    combined = result.stdout + result.stderr
+    assert f"APP=[{app}]" in combined, combined
+    assert f"DATA=[{data}]" in combined, combined
+    assert "n'est pas reconnu" not in combined, combined
+
+
+def test_a1010_m5_fresh_install_with_venv_and_console_port_refuses_before_removing_venv(
+    installer_dir: Path, listening_port: int
+) -> None:
+    """M5 : premiere installation interrompue (pas de version.txt) mais
+    console deja lancee : le controle du port (R6) doit avoir lieu des que
+    .venv existe, pas seulement en mise a jour, sinon Remove-Item .venv
+    tombe sur python.exe verrouille."""
+    app_dir = installer_dir / "app"
+    data_dir = installer_dir / "data"
+    app_dir.mkdir()
+    venv_dir = app_dir / ".venv"
+    venv_dir.mkdir()
+    (venv_dir / "marker.txt").write_text("venv existant", encoding="utf-8")
+
+    result = run_install(installer_dir, ["--app", str(app_dir), "--data", str(data_dir)], port=listening_port)
+
+    assert result.returncode != 0
+    assert str(listening_port) in result.stdout
+    assert venv_dir.exists()
+
+
+def test_a1010_m6_update_keeps_venv_when_uv_exe_missing(installer_dir: Path) -> None:
+    """M6 : en mise a jour, uv.exe, la wheel et overrides.txt (aucun reseau)
+    sont controles AVANT la suppression de .venv ; un zip incomplet ne doit
+    jamais detruire l'installation existante."""
+    app_dir = installer_dir / "app"
+    data_dir = installer_dir / "data"
+    app_dir.mkdir()
+    (app_dir / "version.txt").write_text(OLDER_VERSION, encoding="utf-8")
+    venv_dir = app_dir / ".venv"
+    venv_dir.mkdir()
+    (venv_dir / "marker.txt").write_text("venv existant", encoding="utf-8")
+
+    result = run_install(
+        installer_dir, ["--app", str(app_dir), "--data", str(data_dir)], env=_env_with_reduced_path(), port=_free_port()
+    )
+
+    assert result.returncode != 0
+    assert "uv.exe" in result.stdout
+    assert venv_dir.exists(), result.stdout
+
+
+def test_a1010_m6_update_keeps_venv_when_wheel_missing(installer_dir: Path) -> None:
+    """M6 (suite) : uv.exe present mais wheel absente : meme prevol, .venv
+    intact."""
+    (installer_dir / "uv.exe").write_bytes(b"MZ")
+    app_dir = installer_dir / "app"
+    data_dir = installer_dir / "data"
+    app_dir.mkdir()
+    (app_dir / "version.txt").write_text(OLDER_VERSION, encoding="utf-8")
+    venv_dir = app_dir / ".venv"
+    venv_dir.mkdir()
+    (venv_dir / "marker.txt").write_text("venv existant", encoding="utf-8")
+
+    result = run_install(
+        installer_dir, ["--app", str(app_dir), "--data", str(data_dir)], env=_env_with_reduced_path(), port=_free_port()
+    )
+
+    assert result.returncode != 0
+    assert "wheel" in result.stdout
+    assert venv_dir.exists(), result.stdout
+
+
+def test_a1010_m6_dry_run_announces_missing_zip_pieces(installer_dir: Path) -> None:
+    """M6 (dry-run) : le prevol est aussi affiche en --dry-run (uv.exe absent
+    du fixture) sans faire echouer le plan."""
+    app_dir = installer_dir / "app"
+    data_dir = installer_dir / "data"
+
+    result = run_install(installer_dir, ["--dry-run", "--app", str(app_dir), "--data", str(data_dir)])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "uv.exe" in result.stdout
+    assert "s'arreterait" in result.stdout
