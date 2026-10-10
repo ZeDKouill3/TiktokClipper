@@ -45,7 +45,9 @@ Modes (``mode`` de config.toml, ADR-ad2e) :
 - ``auto`` : ``run`` va jusqu'au bout. Une erreur transitoire (quota, reseau,
   surcharge : ``llm.TransientLLMError``, erreurs reseau) met la video en file
   d'attente (statut ``queued``, ``retry_at`` d'apres ``retry_delays``) ;
-  ``process_queue`` la reprend a l'heure dite. Au-dela de ``max_attempts``,
+  le worker la remet en file a l'heure dite pour un enfant ``run|render
+  --resume`` (la CLI ``clipper queue`` / ``process_queue`` la reprend dans
+  le processus courant). Au-dela de ``max_attempts``,
   ou pour toute autre erreur : ``failed``. Aucune valeur de secours.
 
 Etat par video : workspace/<video_id>/pipeline.json, reecrit a chaque
@@ -1181,6 +1183,7 @@ def run(
     step_options: dict[str, dict[str, Any]] | None = None,
     channel: str | None = None,
     short_clips: bool | None = None,
+    manual: bool = True,
 ) -> dict[str, Any]:
     """Traite la video ``url`` : jusqu'a la revue en mode review, jusqu'au
     bout en mode auto. Renvoie l'etat (voir le docstring du module).
@@ -1188,7 +1191,11 @@ def run(
     ``step_options`` : arguments supplementaires par etape (injection pour
     les tests, ex. ``{"download": {"ydl_factory": ...}}``). ``channel`` :
     chaine dont le preset a servi (SPEC-74e9 §3.1), gardee dans l'etat.
-    ``short_clips`` : choix de la video pour les clips courts (None = valeur du style)."""
+    ``short_clips`` : choix de la video pour les clips courts (None = valeur du style).
+    ``manual`` : relance a la main (``attempts`` remis a 0) ; ``False`` (CLI
+    ``--resume``, enfant lance par le worker pour une video ``queued``) garde
+    ``attempts`` : la reprise automatique compte pour ``max_attempts`` (audit
+    10/10, coeur-I5)."""
     step_options = _with_short_clips(step_options, short_clips)
     config = config or load_config()
     try:
@@ -1202,7 +1209,8 @@ def run(
     state["source_url"] = url
     if channel is not None:
         state["channel"] = channel
-    return _advance(_start(state, config, force, step_options, force_steps=force_steps), through_review=False)
+    return _advance(_start(state, config, force, step_options, force_steps=force_steps, manual=manual),
+                    through_review=False)
 
 
 def download_only(
@@ -1261,19 +1269,20 @@ def render(
     channel: str | None = None,
     clips: list[str] | None = None,
     short_clips: bool | None = None,
+    manual: bool = True,
 ) -> dict[str, Any]:
     """Reprend une video deja lancee jusqu'au bout (captions .. qa) ; en mode
     review, exige une decision pour chaque moment (PipelineError sinon).
     ``clips`` restreint reframe/subtitles/render/qa a ces clip_id (render
     cible, SPEC-74e9 §4.5) ; le resume final reste sur tous les clips.
-    ``short_clips`` : voir ``run`` (utile si l'etape moments est relancee)."""
+    ``short_clips`` et ``manual`` : voir ``run``."""
     step_options = _with_short_clips(step_options, short_clips)
     config = config or load_config()
     state = load_state(video_id, config=config)
     if channel is not None:
         state["channel"] = channel
     return _advance(
-        _start(state, config, force, step_options, force_steps=force_steps, clips=clips),
+        _start(state, config, force, step_options, force_steps=force_steps, clips=clips, manual=manual),
         through_review=True,
     )
 
@@ -1361,8 +1370,11 @@ def process_queue(
     now: datetime | None = None,
     step_options: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Reprend chaque video en file dont ``retry_at`` est passe ; renvoie
-    leurs nouveaux etats. Une video rattachee a une chaine repart avec le
+    """Reprend chaque video en file dont ``retry_at`` est passe, dans CE
+    processus ; renvoie leurs nouveaux etats. C'est la reprise de la CLI
+    ``clipper queue`` : le worker, lui, ne l'appelle plus (audit 10/10,
+    coeur-I5) et met chaque video due en file (``state/queue.json``) pour un
+    enfant ``clipper run|render --resume``. Une video rattachee a une chaine repart avec le
     preset de cette chaine, son mode compris (SPEC-74e9 §1.3), pas avec la
     config globale : si la chaine a disparu ou son preset est invalide,
     l'erreur est journalisee, gardee dans ``reason`` et la video reste en
@@ -1387,7 +1399,7 @@ def process_queue(
             run_config = config
             if state.get("channel") is not None:
                 try:
-                    run_config = _channel_config(state["channel"])
+                    run_config = _channel_config(state["channel"], config)
                 except (channel_mod.ChannelError, ConfigError) as exc:
                     reason = f"chaine {state['channel']!r} inutilisable a la reprise : {exc}"
                     if state.get("reason") != reason:
@@ -1403,10 +1415,15 @@ def process_queue(
     return out
 
 
-def _channel_config(name: str) -> Config:
+def _channel_config(name: str, config: Config) -> Config:
     """Config du preset de la chaine ``name``, dont le mode est celui de la
-    chaine (``[channel].mode``, a defaut le mode global)."""
-    preset_config, channel = channel_mod.load_channel(name)
+    chaine (``[channel].mode``, a defaut le mode global). Le preset est lu
+    dans ``[watch] presets_dir`` sur ``[watch] base_config`` de ``config``,
+    jamais dans ``presets/`` et ``config.toml`` du dossier courant (audit
+    10/10, coeur-M3 : avec un dossier de styles configure ailleurs, toute
+    video en file d'une chaine restait « chaine inconnue » pour toujours)."""
+    watch = config.section("watch")
+    preset_config, channel = channel_mod.load_channel(name, presets_dir=watch["presets_dir"], base=watch["base_config"])
     return dataclass_replace(preset_config, mode=str(channel["mode"]))
 
 

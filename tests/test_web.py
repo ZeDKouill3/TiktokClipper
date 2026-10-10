@@ -41,11 +41,14 @@ def _node_run(script: str, *args: str) -> str:
     finally:
         Path(path).unlink(missing_ok=True)
 
-def _busy_worker(tmp_path) -> None:
-    """Un worker vivant qui traite des videos (battement « busy », pid de ce processus) : leurs etapes « running »
-    sans entree dans la file ne sont pas orphelines (TASK-bdd5)."""
-    _write_json(tmp_path / "state" / "worker.json",
-                {"pid": os.getpid(), "at": datetime.now(timezone.utc).isoformat(), "busy": True})
+def _busy_worker(tmp_path, *video_ids: str) -> None:
+    """Les videos « running » du test ont une entree ``running`` vivante dans la file (pid de ce processus) :
+    elles ne sont pas orphelines (TASK-bdd5). Toute video en cours, reprise automatique comprise, passe par la
+    file (audit 10/10, coeur-I5) : le battement n'a plus de drapeau « busy »."""
+    _write_json(tmp_path / "state" / "queue.json", [
+        {"id": f"id-{video_id}", "video_id": video_id, "url": f"https://youtu.be/{video_id}", "channel": None,
+         "action": "run", "force_steps": [], "enqueued_at": datetime.now(timezone.utc).isoformat(),
+         "status": "running", "pid": os.getpid()} for video_id in video_ids])
 
 
 def make_config(tmp_path) -> Config:
@@ -138,7 +141,7 @@ def test_list_videos_empty_workspace_is_an_empty_list(tmp_path, isolated_cwd):
 
 
 def test_get_video_detail_uses_pipeline_load_state(tmp_path, isolated_cwd, monkeypatch):
-    _busy_worker(tmp_path)
+    _busy_worker(tmp_path, VIDEO_ID)
     from clipper import pipeline
 
     state = {"video_id": VIDEO_ID, "status": "running", "steps": {}}
@@ -1341,7 +1344,7 @@ def _seed_videos(tmp_path):
 
 
 def test_list_videos_enriches_each_video_with_title_duration_and_current_step(tmp_path, isolated_cwd):
-    _busy_worker(tmp_path)
+    _busy_worker(tmp_path, "aaaaaaaaaaa")
     _seed_videos(tmp_path)
 
     by_id = {v["video_id"]: v for v in client(tmp_path).get("/api/videos").json()}
@@ -1523,7 +1526,7 @@ def test_dashboard_empty_workspace_has_explicit_empty_sections(tmp_path, isolate
 
 
 def test_dashboard_running_videos_expose_current_step_and_progress(tmp_path, isolated_cwd):
-    _busy_worker(tmp_path)
+    _busy_worker(tmp_path, "aaaaaaaaaaa")
     progress = {"fraction": 0.4, "eta_s": 90.0, "message": "segment 3/8"}
     state = _write_state(tmp_path, "aaaaaaaaaaa", status="running", channel="ma_chaine")
     state["steps"]["download"]["status"] = "done"
@@ -6888,12 +6891,13 @@ def test_a_twitch_video_without_any_recorded_thumbnail_has_none_not_a_made_up_on
 
 
 def test_queue_entries_and_dashboard_rows_carry_the_platform_thumbnail(tmp_path, isolated_cwd):
-    _busy_worker(tmp_path)
+    _busy_worker(tmp_path, "ccccccccccc")  # la video en cours a son entree running (pid vivant)
     entries = [{"id": "e1", "video_id": VIDEO_ID, "url": URL, "channel": None, "action": "run", "force_steps": [],
                 "enqueued_at": "2026-01-01T00:00:00+00:00", "status": "waiting", "pid": None},
                {"id": "e2", "video_id": TWITCH_ID, "url": TWITCH_URL, "channel": None, "action": "run", "force_steps": [],
                 "enqueued_at": "2026-01-01T00:00:01+00:00", "status": "waiting", "pid": None}]
-    _write_json(tmp_path / "state" / "queue.json", entries)
+    _write_json(tmp_path / "state" / "queue.json",
+                json.loads((tmp_path / "state" / "queue.json").read_text(encoding="utf-8")) + entries)
     _write_state(tmp_path, "bbbbbbbbbbb", status="failed", reason="403")
     _write_state(tmp_path, "ccccccccccc", status="running")
     c = client(tmp_path)
@@ -6901,15 +6905,17 @@ def test_queue_entries_and_dashboard_rows_carry_the_platform_thumbnail(tmp_path,
     queue = c.get("/api/queue").json()
     data = c.get("/api/dashboard").json()
 
-    assert [e["platform_thumbnail"] for e in queue] == [f"https://i.ytimg.com/vi/{VIDEO_ID}/hqdefault.jpg", None]
-    assert [(e["video_id"], e["id"]) for e in data["queue"]] == [(VIDEO_ID, "e1"), (TWITCH_ID, "e2")]
-    assert data["queue"][0]["platform_thumbnail"].endswith(f"/{VIDEO_ID}/hqdefault.jpg")
+    assert [e["platform_thumbnail"] for e in queue] == [
+        "https://i.ytimg.com/vi/ccccccccccc/hqdefault.jpg", f"https://i.ytimg.com/vi/{VIDEO_ID}/hqdefault.jpg", None]
+    assert [(e["video_id"], e["id"]) for e in data["queue"]] == [
+        ("ccccccccccc", "id-ccccccccccc"), (VIDEO_ID, "e1"), (TWITCH_ID, "e2")]
+    assert data["queue"][1]["platform_thumbnail"].endswith(f"/{VIDEO_ID}/hqdefault.jpg")
     assert data["failed"][0]["platform_thumbnail"] == "https://i.ytimg.com/vi/bbbbbbbbbbb/hqdefault.jpg"
     assert data["running"][0]["platform_thumbnail"] == "https://i.ytimg.com/vi/ccccccccccc/hqdefault.jpg"
 
 
 def test_dashboard_running_card_carries_the_title_of_the_video(tmp_path, isolated_cwd):
-    _busy_worker(tmp_path)
+    _busy_worker(tmp_path, "aaaaaaaaaaa", "bbbbbbbbbbb")
     _write_state(tmp_path, "aaaaaaaaaaa", status="running")
     _write_state(tmp_path, "bbbbbbbbbbb", status="running")
     _write_json(tmp_path / "workspace" / "aaaaaaaaaaa" / "meta.json", {"title": "Mon titre de vidéo"})
@@ -9049,7 +9055,7 @@ def test_purge_video_frees_heavy_files_and_keeps_the_video_listed_with_its_clips
 
 def test_purge_video_refuses_a_running_video_with_409(tmp_path, isolated_cwd):
     d = _purge_video(tmp_path, status="running")
-    _busy_worker(tmp_path)
+    _busy_worker(tmp_path, "aaaaaaaaaaa")
 
     resp = client(tmp_path).post("/api/purge/aaaaaaaaaaa", json={})
 

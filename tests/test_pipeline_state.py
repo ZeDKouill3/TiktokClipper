@@ -307,6 +307,53 @@ def test_process_queue_without_channel_keeps_the_global_config(tmp_path, monkeyp
     assert seen == [config]
 
 
+def test_process_queue_reads_the_presets_dir_of_the_config_not_the_cwd(tmp_path, monkeypatch):
+    """coeur-M3 (audit 10/10) : ``_channel_config`` lisait ``presets/`` et ``config.toml`` du cwd, jamais
+    ``[watch] presets_dir``/``base_config`` : une vidéo en file d'une chaîne restait en attente pour toujours
+    (« chaîne inconnue ») dès que le dossier de styles était configuré ailleurs."""
+    presets = tmp_path / "styles"
+    presets.mkdir()
+    (presets / "ma_chaine.toml").write_text('[channel]\ndisplay_name = "Ma chaine"\nmode = "review"\n', encoding="utf-8")
+    base = tmp_path / "config.toml"
+    base.write_text('mode = "auto"\n', encoding="utf-8")
+    config = Config(mode="auto", workspace_dir=tmp_path / "workspace", output_dir=tmp_path / "output",
+                    _sections={"watch": {"presets_dir": str(presets), "base_config": str(base)}})
+    _queued_state(config, "ma_chaine")
+    seen = _record_start(monkeypatch)
+    elsewhere = tmp_path / "ailleurs"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)  # aucun presets/ ni config.toml ici (worker lancé depuis Documents\\Clipper)
+
+    pipeline.process_queue(config=config)
+
+    assert [c.mode for c in seen] == ["review"]
+    assert pipeline.load_state(VIDEO_ID, config=config)["reason"] == "quota"  # jamais « chaîne inconnue »
+
+
+def test_a_manual_run_resets_attempts_and_a_resume_keeps_them(tmp_path, monkeypatch):
+    """``run``/``render`` avec ``manual=False`` (option ``--resume`` de la CLI, reprise automatique lancée par le
+    worker) gardent ``attempts`` : un échec transitoire de plus compte pour ``max_attempts``."""
+    config = _config(tmp_path)
+
+    def transient(self):
+        raise ConnectionError("réseau")
+
+    _patch_noop_steps(monkeypatch, except_name="download", except_fn=transient)
+    for manual, expected in ((False, 3), (True, 1)):
+        state = pipeline.new_state(VIDEO_ID, URL, "auto")
+        state.update(status="queued", attempts=2, retry_at="2000-01-01T00:00:00+00:00")
+        pipeline.save_state(state, config=config)
+
+        out = pipeline.run(URL, config=config, manual=manual)
+
+        assert (out["status"], out["attempts"]) == ("queued", expected), manual
+
+    state = pipeline.new_state(VIDEO_ID, URL, "auto")
+    state.update(status="queued", attempts=2, retry_at="2000-01-01T00:00:00+00:00")
+    pipeline.save_state(state, config=config)
+    assert pipeline.render(VIDEO_ID, config=config, manual=False)["attempts"] == 3
+
+
 def test_process_queue_vanished_channel_logs_and_keeps_the_video_waiting(tmp_path, monkeypatch, caplog):
     config = _config(tmp_path)
     _queued_state(config, "disparue")
