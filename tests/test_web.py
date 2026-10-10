@@ -11677,3 +11677,59 @@ def test_plan_section_offers_the_pool_of_each_account_and_bounds_the_time_to_the
     assert "Pool neuf" in first and "Pool de B" not in first      # chaque compte propose son vivier
     assert "Pool de B" in second and "Pool neuf" not in second
     assert f'min="{_REP_DAY}T00:00"' in html and f'max="{_REP_DAY}T23:59"' in html
+
+
+# --------------------------------------------------------------------------
+# TASK-14699025fdd6 (audit 10/10, publication-I1) : une programmation « à vérifier » (post peut-être déjà
+# programmé sur TikTok) est signalée à l'écran : ni glissable sur le calendrier, ni « Repasser en attente »
+# --------------------------------------------------------------------------
+
+
+def test_get_publish_exposes_to_verify_on_a_failed_entry(tmp_path, isolated_cwd):
+    _publish_setup(tmp_path, [
+        _entry("01", "failed", slot_at=PUB_THU, error="programmation à vérifier : aucun post retrouvé", to_verify=True),
+        _entry("02", "failed", slot_at=PUB_MON, error="captcha détecté"),
+        _entry("03", "scheduled", slot_at=PUB_NEXT_MON),
+    ])
+
+    data = _get_publish(tmp_path).json()
+
+    done = {c["clip_id"]: c for c in data["done"]}
+    assert done["01"]["to_verify"] is True
+    assert done["02"]["to_verify"] is False
+    assert all(c["to_verify"] is False for c in data["unscheduled"] + [s["clip"] for s in data["slots"] if s["clip"]]
+               if c["clip_id"] != "01")
+
+
+_PUB_JS_STUBS = """
+const pubUi = { data: null }; const pubPosts = { data: null };
+const pubChip = (c) => `<span class="chip">${esc(c.publish_status)}</span>`;
+const pubSlotLabel = (iso) => String(iso);
+const pubAccountField = (c) => "";
+const pubServiceName = (c) => "TikTok";
+"""
+
+
+def _pub_js(expr):
+    return _run_js([("screens/publish.js", ["pubAccountLabel", "pubKey", "pubTitle", "pubPost", "pubDetailHtml"])],
+                   expr, preamble=_PUB_JS_STUBS)
+
+
+@_NODE_SHEET
+def test_publish_screen_makes_a_to_verify_post_not_draggable_and_without_the_unschedule_button():
+    out = _pub_js("""(() => {
+      const base = { video_id: 'v1', clip_id: '01', publish_status: 'failed', tiktok_status: 'failed', account: 'ab12cd',
+        slot_at: '2026-10-08T12:00:00+02:00', publish_error: 'programmation à vérifier', description: '', hashtags: [],
+        video_url: '/media/clip/v1/01', thumbnail_url: '/media/clip/v1/01/thumb', screen_title: 'Titre 01' };
+      const plain = Object.assign({}, base, { to_verify: false, publish_error: 'captcha détecté' });
+      const verify = Object.assign({}, base, { to_verify: true });
+      return { plainPost: pubPost(plain), verifyPost: pubPost(verify),
+               plainDetail: pubDetailHtml(plain), verifyDetail: pubDetailHtml(verify) };
+    })()""")
+    assert 'draggable="true"' in out["plainPost"]
+    assert 'draggable="false"' in out["verifyPost"]
+    assert "data-unschedule" in out["plainDetail"] and "data-retry" in out["plainDetail"]
+    assert "data-unschedule" not in out["verifyDetail"]
+    assert "data-retry" in out["verifyDetail"]                 # « Réessayer » reste la seule sortie
+    assert "TikTok Studio" in out["verifyDetail"]              # l'aide dit de contrôler TikTok Studio d'abord
+    assert "repasse le clip en attente" not in out["verifyDetail"]

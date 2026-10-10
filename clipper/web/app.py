@@ -941,6 +941,8 @@ def _tiktok_fields(entry: dict[str, Any] | None, video_id: str, clip_id: str) ->
         "service": entry.get("service"),
         "publish_mode": entry.get("publish_mode"), "post_options": entry.get("post_options") or {},
         "editable": status in ("approved", "scheduled", "failed") and not entry.get("in_progress_since"),
+        # programmation partie sans id de post (publication-I1) : ni glissable, ni « Repasser en attente »
+        "to_verify": bool(status == "failed" and entry.get("to_verify")),
         "capture_url": f"/api/publish/{video_id}/{clip_id}/capture" if entry.get("capture") else None,
     }
 

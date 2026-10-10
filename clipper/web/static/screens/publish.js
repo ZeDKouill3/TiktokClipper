@@ -168,7 +168,8 @@ document.addEventListener("clipper:event", () => {
 /* ---------- Rendu ---------- */
 
 function pubPost(c, extra) {
-  const draggable = (c.publish_status === "approved" || c.publish_status === "scheduled" || c.publish_status === "failed") && !c.missing;
+  // Une programmation « à vérifier » (post peut-être déjà sur TikTok, publication-I1) ne se replanifie pas en la glissant.
+  const draggable = (c.publish_status === "approved" || c.publish_status === "scheduled" || c.publish_status === "failed") && !c.missing && !c.to_verify;
   const icoName = c.publish_status === "published" ? "circle-check" : c.publish_status === "failed" ? "circle-alert" : "";
   return `<div class="post ${esc(c.publish_status)}${c.missing ? " missing" : ""}" data-post="${esc(pubKey(c))}" draggable="${draggable}" tabindex="0" role="button" aria-label="Ouvrir le clip ${esc(pubTitle(c))}" title="${esc(pubTitle(c))}">
     <div class="mini-clip">${c.video_url ? `<img loading="lazy" decoding="async" width="36" height="64" src="${esc(c.thumbnail_url)}" alt="" tabindex="-1">` : ""}</div>
@@ -1446,6 +1447,7 @@ function pubDetailHtml(c) {
   const status = c.publish_status;
   const inProgress = c.tiktok_status === "in_progress";  // le worker pilote : pas de « Déclarer publié » (fable-publication I2)
   const hint = status === "approved" ? "Clique « Publier maintenant » (formulaire Nouvelle publication), ou glisse ce clip sur un créneau libre du calendrier pour le planifier."
+    : status === "failed" && c.to_verify ? "Programmation à vérifier : le post est peut-être déjà programmé sur TikTok (risque de doublon). Contrôle TikTok Studio : s'il y est, attends le prochain relevé (rapprochement automatique) ; s'il n'y est pas, « Réessayer »."
     : status === "failed" ? "La publication s'est arrêtée : regarde la capture, règle le problème dans le navigateur du compte, puis « Réessayer » (ou repasse le clip en attente pour le replanifier)." : "";
   return `
     <div class="modal-head"><div class="row wrap" style="gap:8px">${pubChip(c)}<h2>${esc(pubTitle(c))}</h2></div>
@@ -1468,7 +1470,7 @@ function pubDetailHtml(c) {
       <button type="button" class="btn btn-ghost" data-copy>${icon("copy")}Copier la description</button>
       <span class="grow"></span>
       ${status === "failed" ? `<button type="button" class="btn btn-primary" data-retry>${icon("rotate-ccw")}Réessayer</button>` : ""}
-      ${status === "scheduled" || status === "failed" ? `<button type="button" class="btn" data-unschedule>${icon("undo-2")}Repasser en attente</button>` : ""}
+      ${status === "scheduled" || (status === "failed" && !c.to_verify) ? `<button type="button" class="btn" data-unschedule>${icon("undo-2")}Repasser en attente</button>` : ""}
       ${status === "published" ? `<button type="button" class="btn btn-ghost" data-removed title="Tu as supprimé ce post de la plateforme à la main">${icon("trash-2")}Supprimé de la plateforme</button>` : ""}
       ${status === "approved" ? `<button type="button" class="btn btn-primary" data-publish-now>${icon("send")}Publier maintenant</button>` : ""}
       ${status === "scheduled" && !inProgress ? `<button type="button" class="btn" data-published title="Pour un clip déjà publié hors de Clipper">${icon("check")}Déclarer publié (hors Clipper)</button>` : ""}
