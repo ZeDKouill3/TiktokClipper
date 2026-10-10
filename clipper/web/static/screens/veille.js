@@ -122,8 +122,11 @@ function veilleSources(data) {
     .map((n) => `<p class="reason warn" role="status"><b>${esc(SOURCE_LABELS[n])} :</b> ${esc(sources[n].error)}</p>`).join("");
   const llm = day.llm || {};
   const llmChip = llm.status === "ok" ? `<span class="chip accent plain">Claude : ${esc(day.proposals.length)} proposition${day.proposals.length > 1 ? "s" : ""}</span>`
-    : llm.status === "error" ? `<span class="chip bad plain">Claude : erreur</span>` : `<span class="chip plain">Claude : pas appelé</span>`;
-  const llmError = llm.status === "error" ? `<p class="reason bad" role="alert"><b>Choix de Claude :</b> ${esc(llm.error)}</p>` : "";
+    : llm.status === "error" ? `<span class="chip bad plain">Claude : erreur</span>`
+    : llm.status === "retry" ? `<span class="chip warn plain">Claude : choix reporté${llm.retry_at ? ` à ${esc(veilleWhen(llm.retry_at, true))}` : ""} (tentative ${esc(llm.attempts ?? "?")})</span>`
+    : `<span class="chip plain">Claude : pas appelé</span>`;
+  const llmError = llm.status === "error" ? `<p class="reason bad" role="alert"><b>Choix de Claude :</b> ${esc(llm.error)}</p>`
+    : llm.status === "retry" ? `<p class="reason warn" role="status"><b>Choix de Claude reporté :</b> ${esc(llm.error)}</p>` : "";
   const when = data.running ? `<span class="chip running plain">Relevé en cours…</span>`
     : `<span>Relevé du <b class="mono">${esc(veilleWhen(day.finished_at || day.started_at, true))}</b></span>`;
   return `<div data-veille-sources><div class="sources">${when}${pills}${llmChip}</div>${veilleIncomplete(data)}${errors}${warnings}${llmError}</div>`;
@@ -223,6 +226,7 @@ function veilleProposals(data, channels) {
   const { pending, decided, ignored } = veilleProposalGroups(day.proposals);
   const card = (p) => veilleProposal(p, games[p.candidate.game_key], channels);
   const empty = day.llm && day.llm.status === "error" ? "Claude n'a rien proposé : voir l'erreur ci-dessus."
+    : day.llm && day.llm.status === "retry" ? "Choix de Claude en attente (limite de session) : il sera repris automatiquement."
     : decided.length ? "Plus rien à décider : les propositions du jour sont dans « Déjà décidées » ci-dessous."
     : "Aucune VOD proposée aujourd'hui.";
   const note = day.skipped_note ? `<div class="arch-row"><span class="t muted">${esc(day.skipped_note)}</span></div>` : "";
@@ -546,7 +550,7 @@ function veilleView(body) {
     body.innerHTML = emptyState("trending-up", "Veille désactivée", "La veille propose chaque jour des VOD à clipper d'après ce qui monte sur Twitch, YouTube et Steam. Active-la et saisis tes clés dans Réglages › Veille.", `<a class="btn btn-primary" href="#set-veille">Ouvrir Réglages › Veille</a>`);
     return;
   }
-  const refresh = `<button type="button" class="btn" data-veille-refresh${data.running || veilleUi.busy ? " disabled" : ""}>${icon("rotate-ccw", "i-xs")}${data.running ? "Relevé en cours…" : "Rafraîchir"}</button>`;
+  const refresh = `<button type="button" class="btn" data-veille-refresh${data.running || veilleUi.busy ? " disabled" : ""}${data.day && data.day.llm && data.day.llm.status === "retry" ? ` title="Rejoue tout le relevé (collecte réseau comprise), pas seulement le choix de Claude"` : ""}>${icon("rotate-ccw", "i-xs")}${data.running ? "Relevé en cours…" : "Rafraîchir"}</button>`;
   if (!data.day) {
     body.innerHTML = `<div class="toolbar"><span class="grow"></span>${refresh}</div>${emptyState("trending-up", "Aucun relevé pour l'instant", `Le premier relevé aura lieu ${data.next_run_at ? `le ${veilleWhen(data.next_run_at, true)}` : "bientôt"} ; « Rafraîchir » le lance maintenant.`)}`;
     return;

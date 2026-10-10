@@ -309,8 +309,8 @@ class _Twitch:
         params = {"client_id": self.client_id, "client_secret": self.secret, "grant_type": "client_credentials"}
         _, body = self.client.request("POST", TWITCH_TOKEN_URL, params)
         token = str(_field(self.client, TWITCH_TOKEN_URL, params, body, "access_token"))
+        self.client.secrets += (token,)  # avant de lire expires_in : son absence cite le corps, jeton compris
         expires_in = int(_field(self.client, TWITCH_TOKEN_URL, params, body, "expires_in"))
-        self.client.secrets += (token,)
         path = self.token_path
         with channel_mod.file_lock(path):
             channel_mod.atomic_write_json(path, {
