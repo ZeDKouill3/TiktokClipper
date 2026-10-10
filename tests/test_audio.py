@@ -277,3 +277,99 @@ def test_run_truncated_audio_json_raises_explicit_error_naming_file_and_force(is
     message = str(excinfo.value)
     assert "audio.json" in message
     assert "--force" in message
+
+
+# --- media-I4 : audio en flux, mémoire bornée à une fenêtre ---------------
+
+
+def _old_energy_db(samples, sample_rate, window_seconds):
+    """Ancienne implémentation (tableau complet), référence d'identité."""
+    window_size = max(1, int(round(window_seconds * sample_rate)))
+    n_windows = -(-len(samples) // window_size) if len(samples) else 0
+    out = []
+    for i in range(n_windows):
+        chunk = samples[i * window_size : (i + 1) * window_size]
+        rms = float(np.sqrt(np.mean(np.square(chunk, dtype=np.float64))))
+        out.append(float(20 * np.log10(rms)) if rms > 0 else -120.0)
+    return out
+
+
+def test_run_streaming_extractor_writes_same_audio_json_as_full_array(isolated_cwd):
+    from clipper.audio import analyze, run
+
+    sample_rate = 8000
+    samples = _synthetic_signal_with_bursts(sample_rate, duration_s=33, burst_times=[5, 15, 25])
+    samples = samples[: len(samples) - 1234]  # dernière fenêtre incomplète
+    window = sample_rate
+    biggest = []
+
+    def streaming_extractor(video_path, sr):
+        # blocs de tailles irrégulières : le rechargement en fenêtres est de run
+        pos = 0
+        sizes = [window // 3, window * 2 + 7, window, 5]
+        k = 0
+        while pos < len(samples):
+            size = sizes[k % len(sizes)]
+            block = samples[pos : pos + size]
+            biggest.append(len(block))
+            yield block
+            pos += size
+            k += 1
+
+    result = run(
+        "s1",
+        workspace_dir=isolated_cwd / "ws_stream",
+        sample_rate=sample_rate,
+        extractor=streaming_extractor,
+    )
+
+    expected = analyze(samples, sample_rate)
+    assert result == expected
+    assert result["energy_db"] == _old_energy_db(samples, sample_rate, 1.0)
+    out = (isolated_cwd / "ws_stream" / "s1" / "audio.json").read_bytes()
+    ref = (isolated_cwd / "ws_ref")
+    run("s1", workspace_dir=ref, sample_rate=sample_rate, extractor=lambda p, sr: samples)
+    assert out == (ref / "s1" / "audio.json").read_bytes()
+
+
+def test_run_never_builds_an_array_larger_than_one_window(isolated_cwd, monkeypatch):
+    from clipper import audio
+
+    sample_rate = 8000
+    window = sample_rate
+    samples = _synthetic_signal_with_bursts(sample_rate, duration_s=20, burst_times=[7])
+    seen = []
+    real = audio.compute_energy_db
+
+    def spy(chunk, sr, ws):
+        seen.append(len(chunk))
+        return real(chunk, sr, ws)
+
+    monkeypatch.setattr(audio, "compute_energy_db", spy)
+
+    def extractor(video_path, sr):
+        for i in range(0, len(samples), window):
+            yield samples[i : i + window]
+
+    audio.run("s2", workspace_dir=isolated_cwd / "ws", sample_rate=sample_rate, extractor=extractor)
+
+    assert seen and max(seen) <= window
+
+
+@_needs_ffmpeg
+def test_iter_samples_ffmpeg_yields_blocks_no_larger_than_requested(tmp_path):
+    from clipper.audio import _extract_samples_ffmpeg, _iter_samples_ffmpeg
+
+    src = _gap_file(tmp_path, False)
+    blocks = list(_iter_samples_ffmpeg(src, 16000, block_samples=16000))
+
+    assert blocks and max(len(b) for b in blocks) <= 16000
+    assert all(b.dtype == np.float32 for b in blocks)
+    assert np.array_equal(np.concatenate(blocks), _extract_samples_ffmpeg(src, 16000))
+
+
+def test_iter_samples_ffmpeg_missing_binary_raises_audio_error(tmp_path):
+    from clipper.audio import AudioError, _iter_samples_ffmpeg
+
+    with pytest.raises(AudioError):
+        list(_iter_samples_ffmpeg(tmp_path / "x.mp4", 16000, ffmpeg_bin="ffmpeg-introuvable-zz"))
