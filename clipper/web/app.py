@@ -3401,10 +3401,23 @@ def create_app(config: Config | None = None) -> FastAPI:
         settings = _rep_call(repartition_mod.read_settings, config)
         world = repartition_mod.World(config)
         accounts_out = []
+        made = {(m["account"], m["video_id"], m["clip_id"]) for m in base.get("created") or []}
+        entries = [] if base["status"] == "validated" else _rep_call(
+            publish_mod.all_entries, state_dir=_publish_dir(config), presets_dir=_PRESETS_DIR)
         for account in base.get("accounts") or []:
-            refusals = {} if base["status"] == "validated" else _rep_refusals(account["account"], account["lines"])
+            account_id = account["account"]
+            # une ligne déjà créée est en file : la prévisualiser la refuserait, c'est précisément ce qui est fait
+            todo = [] if base["status"] == "validated" else [
+                line for line in account["lines"] if (account_id, line["video_id"], line["clip_id"]) not in made]
+            refusals = _rep_refusals(account_id, todo)
+            for line in todo:  # les exclusions rejouées (source, file de traitement...) priment sur la prévisualisation
+                problem = _rep_call(repartition_mod.line_error, world, account_id, day, video_id=line["video_id"],
+                                    clip_id=line["clip_id"], slot_at=_publish_parse_slot(line["slot_at"]), entries=entries)
+                if problem:
+                    refusals[(line["video_id"], line["clip_id"])] = problem
             lines = [{**line, **_rep_clip_fields(line["video_id"], line["clip_id"]),
                       "publish_at_paris": _paris(line["slot_at"]),
+                      "created": (account_id, line["video_id"], line["clip_id"]) in made,
                       "refusal": refusals.get((line["video_id"], line["clip_id"])),
                       "warning": line.get("warning")} for line in account["lines"]]
             pool = _series_units_view(repartition_mod.account_pool(account["account"], world=world, settings=settings))
@@ -3500,6 +3513,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             created = list(plan.get("created") or [])
             done = {(made["account"], made["video_id"], made["clip_id"]) for made in created}
             failure: dict[str, Any] | None = None
+            world = repartition_mod.World(config)
+            entries = _rep_call(publish_mod.all_entries, state_dir=_publish_dir(config), presets_dir=_PRESETS_DIR)
             for account in plan["accounts"]:
                 lines = [line for line in account["lines"]
                          if (account["account"], line["video_id"], line["clip_id"]) not in done]
@@ -3507,6 +3522,14 @@ def create_app(config: Config | None = None) -> FastAPI:
                     continue
                 try:
                     account_id = _require_ready_account(config, account["account"])
+                    for line in lines:  # exclusions rejouées à la validation : config ou file changées depuis le calcul
+                        problem = _rep_call(repartition_mod.line_error, world, account_id, day,
+                                            video_id=line["video_id"], clip_id=line["clip_id"],
+                                            slot_at=_publish_parse_slot(line["slot_at"]), entries=entries)
+                        if problem:
+                            where = f"{line['video_id']}/{line['clip_id']}"
+                            raise HTTPException(status_code=409,
+                                                detail=problem if where in problem else f"{where} : {problem}")
                     _publication_call(
                         publish_mod.create_series, mode="manual", style=None, account=account_id, service="tiktok",
                         selection=[(line["video_id"], line["clip_id"]) for line in lines],

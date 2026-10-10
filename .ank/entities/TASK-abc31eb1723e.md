@@ -5,7 +5,7 @@ slug: audit-lot-c-validation-du-plan-exclusions-rejou
 title: "Audit lot C : validation du plan = exclusions rejouées"
 created: 2026-10-10T18:25:21Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/repartition.py
   - clipper/web/app.py
@@ -17,6 +17,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: diagnose
+proof:
+  - type: test
+    ref: local/e96ef4a93005@47e15e2
+    tree: scope/17bc8c53b8b7
+    criteria: 72c9114c439d
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---

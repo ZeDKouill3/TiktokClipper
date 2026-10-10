@@ -1088,3 +1088,32 @@ def test_web_routes_call_only_public_repartition_functions():
     text = (REPO_ROOT / "clipper" / "web" / "app.py").read_text(encoding="utf-8")
 
     assert not re.search(r"repartition_mod\._", text)
+
+
+def test_r7_run_if_due_without_injected_config_reads_config_toml_again_each_time(tmp_path, monkeypatch):
+    """Audit 10/10 lot C : sans config injectée, une source ajoutée à ``excluded_sources`` entre deux appels est vue."""
+    config = _config(tmp_path)
+    _accounts(config, _acc("a"), _acc("b"))
+    _clip(config, "V1", "01", streamer="Banni")
+    _clip(config, "V2", "01")
+    monkeypatch.chdir(tmp_path)
+    toml = tmp_path / "config.toml"
+
+    def write(excluded):
+        sections = {name: config.section(name) for name in ("tiktok", "publish", "accounts", "veille", "worker", "watch")}
+        lines = [f'workspace_dir = "{config.workspace_dir.as_posix()}"', f'output_dir = "{config.output_dir.as_posix()}"']
+        for name, table in {**{n: {k: v for k, v in t.items() if k in config._sections[n]} for n, t in sections.items()},
+                            "repartition": {"state_dir": str(tmp_path / "rep"), "excluded_sources": excluded}}.items():
+            lines.append(f"[{name}]")
+            lines.extend(f"{key} = {json.dumps(value)}" for key, value in table.items())
+        toml.write_text("\n".join(lines), encoding="utf-8")
+
+    write([])
+    first = repartition.run_if_due(NOW)
+    assert first is not None and first["excluded"] == []
+    (tmp_path / "rep" / "2026-10-10.json").unlink()
+
+    write(["banni"])
+    second = repartition.run_if_due(NOW)
+
+    assert second is not None and [(e["video_id"], e["reason"]) for e in second["excluded"]] == [("V1", "excluded_source")]
