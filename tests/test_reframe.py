@@ -2945,19 +2945,23 @@ def _null_period(monkeypatch, video_dir, *, face_support=None, extra_face=False)
     monkeypatch.setattr(reframe, "_period_candidates", crafted)
 
 
-def test_null_answer_with_one_stable_face_candidate_is_overridden_and_logged(
+def test_null_answer_with_one_stable_face_on_a_single_period_is_trusted_and_logged(
     tmp_path, video_dir, monkeypatch, caplog
 ):
+    """Audit 10/10 image-I1 (TASK-cee612eefa16) : une seule periode ne prouve
+    aucune persistance, meme pour un unique candidat visage (mascotte d'un
+    ecran d'attente, cas Hellraiser) : Claude fait foi, le candidat ecarte est
+    journalise, rien n'est renverse."""
     _null_period(monkeypatch, video_dir)
     with caplog.at_level("WARNING"):
         path, _ = run_detect(tmp_path, [webcam_answer(None, "decor")])
 
     [period] = load(path)["periods"]
-    assert contains(period["facecam"], STREAM_FACE)
+    assert period["facecam"] is None and period.get("override") is None
     assert period["answer"]["webcam"] is None  # reponse de Claude gardee telle quelle
-    assert period["override"]["from"] is None and period["override"]["to"] == 2
-    assert "aucune webcam" in period["override"]["reason"]
-    assert "visage" in caplog.text and period["reason"] is None
+    assert "aucune webcam" in period["reason"] and "une seule periode" in period["reason"]
+    assert "[2]" in period["reason"]  # le candidat ecarte est nomme
+    assert "ecarte" in caplog.text and "une seule periode" in caplog.text
 
 
 def test_null_answer_with_two_stable_faces_on_a_single_period_is_trusted_and_logged(
@@ -3258,3 +3262,114 @@ def test_null_answer_keeps_the_one_persistent_face_among_non_persistent_ones(tmp
     periods = load(path)["periods"]
     assert [p["override"]["to"] for p in periods] == [1, 1]
     assert contains(periods[1]["facecam"], STREAM_FACE)
+
+
+# --------------------------------------------------------------------------
+# Audit 10/10, lot G (TASK-cee612eefa16) : reframe, periode unique.
+# --------------------------------------------------------------------------
+
+_CLOUD = {"id": 4, "kind": "visage", "rect": {"x": 100, "y": 100, "w": 200, "h": 142}, "support": 24,
+          "face_support": 24, "edge_reason": "bords introuvables", "face": [150, 130, 250, 220]}
+_HUD = {"id": 1, "kind": "cadre", "rect": {"x": 1500, "y": 800, "w": 300, "h": 213}, "support": 24,
+        "face_support": 0, "edge_reason": None, "face": None}
+
+
+def test_stable_face_over_null_never_overrides_on_a_single_period():
+    """image-I1 : un unique visage stable sur une periode unique ne contredit
+    pas Claude (il est rendu comme ecarte) ; sur plusieurs periodes, la
+    persistance reste prouvable et l'override possible."""
+    from clipper import reframe
+
+    s = dict(reframe.CONFIG_DEFAULTS)
+    better, dropped = reframe._stable_face_over_null([_HUD, _CLOUD], s, periods=[[_HUD, _CLOUD]])
+    assert better is None and [c["id"] for c in dropped] == [4]
+    better, dropped = reframe._stable_face_over_null([_HUD, _CLOUD], s, periods=())
+    assert better is None and [c["id"] for c in dropped] == [4]
+    better, dropped = reframe._stable_face_over_null([_HUD, _CLOUD], s, periods=[[_HUD, _CLOUD], [_CLOUD]])
+    assert better is _CLOUD and dropped == []
+
+
+def _stream_settings():
+    from clipper import reframe
+
+    return dict(reframe.CONFIG_DEFAULTS)
+
+
+def test_a_small_rounded_rectangle_from_facecam_json_is_not_refused_by_reframe_stream(tmp_path):
+    """image-M2 : 112x78 (arrondi pair de chaque cote par _size_camera_rect,
+    petite webcam recalee) a un ratio a 2,1 % du panneau 1080x768 : le controle
+    de _reframe_stream tolere l'erreur d'arrondi au lieu d'un 2 % fixe."""
+    from clipper import reframe
+
+    s = _stream_settings()
+    facecam = {"source": {"width": 1920, "height": 1080}}
+    rect = {"x": 100, "y": 100, "w": 112, "h": 78}
+    path = reframe._reframe_stream("v", "01", 0.0, 10.0, tmp_path / "plan.json", facecam, rect, s)
+    plan = load(path)
+    assert plan["facecam"] == rect
+    [camera] = [p for p in plan["plans"][0]["panels"] if p["name"] == "camera"]
+    assert camera["rects"][0]["w"] == 112 and camera["rects"][0]["h"] == 78
+
+
+def test_a_rectangle_sized_for_another_camera_panel_is_still_refused_by_reframe_stream(tmp_path):
+    """La tolerance d'arrondi ne couvre pas un vrai changement de panneau :
+    540x480 (ratio 1,125, stream_camera_ratio = 0,5) contre 1080x768."""
+    from clipper import reframe
+    from clipper.reframe import ReframeError
+
+    s = _stream_settings()
+    facecam = {"source": {"width": 1920, "height": 1080}}
+    with pytest.raises(ReframeError, match="autre panneau camera"):
+        reframe._reframe_stream("v", "01", 0.0, 10.0, tmp_path / "plan.json", facecam,
+                                {"x": 100, "y": 100, "w": 540, "h": 480}, s)
+
+
+def test_every_rectangle_sized_for_the_camera_panel_passes_the_stream_ratio_check():
+    """image-M2 : aucun rectangle produit par _size_camera_rect (quelle que soit
+    la taille de la zone a contenir) n'est refuse par le controle de ratio de
+    _reframe_stream (audit : 18 tailles refusees, 112x78 la plus grande)."""
+    from clipper import reframe
+
+    s = _stream_settings()
+    cam_w, cam_h, _ = reframe._camera_size(s)
+    aspect = cam_w / cam_h
+    refused = set()
+    for bh in range(16, 400):
+        for bw in (bh * aspect, bh * aspect * 1.3, bh * aspect * 0.8):
+            rect, _ = reframe._size_camera_rect(960, 540, bw, bh, 1920, 1080, s)
+            if rect is None:
+                continue
+            x, y, w, h = rect
+            try:
+                reframe._check_camera_rect_ratio({"x": x, "y": y, "w": w, "h": h}, s)
+            except reframe.ReframeError:
+                refused.add((w, h))
+    assert refused == set()
+
+
+def test_size_camera_rect_derives_the_height_from_the_rounded_width():
+    """image-M2 : l'arrondi pair de w et de h est fait ensemble (h derive de w),
+    pas separement : le rectangle garde le format du panneau camera a l'arrondi pres."""
+    from clipper import reframe
+
+    s = _stream_settings()
+    cam_w, cam_h, _ = reframe._camera_size(s)
+    aspect = cam_w / cam_h
+    rect, _ = reframe._size_camera_rect(960, 540, 111.5, 79.3, 1920, 1080, s)
+    x, y, w, h = rect
+    assert w == 112 and h == reframe._even(w / aspect) == 80
+
+
+def test_force_recompute_empties_the_facecam_boards_folder_first(tmp_path, video_dir):
+    """image-M5 : les planches period_N.jpg d'un ancien calcul (plus de
+    periodes) ne survivent pas a un recalcul : facecam/ ne contient que les
+    planches referencees par facecam.json."""
+    write_timeline(video_dir, every(10.0, 120, "live"))
+    boards = video_dir / "facecam"
+    boards.mkdir(parents=True)
+    (boards / "period_7.jpg").write_bytes(b"ancien")
+    (boards / "period_7_zoom.jpg").write_bytes(b"ancien")
+
+    run_detect(tmp_path, [webcam_answer(1)])
+
+    assert sorted(p.name for p in boards.iterdir()) == ["period_0.jpg", "period_0_zoom.jpg"]

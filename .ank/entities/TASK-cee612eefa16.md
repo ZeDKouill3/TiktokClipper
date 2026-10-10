@@ -5,7 +5,7 @@ slug: audit-lot-g-reframe-p-riode-unique
 title: "Audit lot G : reframe : période unique"
 created: 2026-10-10T18:25:22Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/reframe.py
   - tests/test_reframe.py
@@ -15,6 +15,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: diagnose
+proof:
+  - type: test
+    ref: local/1f130a18aaf0@dd49e7d
+    tree: scope/6fe461bb31cb
+    criteria: c83f7530f3ed
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
