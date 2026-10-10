@@ -12,7 +12,9 @@ import logging
 import os
 import shutil
 import sys
+import signal
 import threading
+import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -34,6 +36,13 @@ def _cwd_hors_depot(tmp_path, monkeypatch):
     # TASK-0f21 : filet pour les tests qui construisent leur Config à la main (sans _config) : les défauts
     # d'état sont relatifs au cwd, donc chaque test démarre dans un dossier vide et ne touche jamais le state/ du dépôt.
     monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_tree_kill(request, monkeypatch):
+    """Les tests aux faux pids ne doivent jamais lancer un vrai taskkill/killpg sur un pid qui existerait."""
+    if "process_tree" not in request.node.name:
+        monkeypatch.setattr(worker, "_kill_descendants", lambda pid: None)
 
 
 def _config(tmp_path, **worker_overrides) -> Config:
@@ -661,12 +670,14 @@ def test_main_serve_launches_worker_subprocess_and_stops_it_at_exit(tmp_path, mo
     process = FakeProcess()
     spawner = FakeSpawner(process)
     monkeypatch.setattr("clipper.__main__._popen", spawner)
+    terminated = []
+    monkeypatch.setattr(worker, "terminate_tree", lambda pid, grace, **kw: terminated.append(pid))
 
     exit_code = main(["serve"])
 
     assert exit_code == 0
     assert spawner.calls == [[sys.executable, "-m", "clipper", "worker"]]
-    assert process.terminate_calls == 1
+    assert terminated == [process.pid]  # tout l'arbre du worker (A2), pas seulement le worker
 
 
 # --------------------------------------------------------------------------
@@ -4651,3 +4662,48 @@ def test_build_command_separates_a_video_id_starting_with_a_dash(tmp_path):
     prefetch = worker._build_prefetch_command({**entry, "url": "https://youtu.be/-wtIMTCHWuI"})
     assert prefetch[3:] == ["download", "--", "https://youtu.be/-wtIMTCHWuI"]
     assert build_parser().parse_args(prefetch[3:]).url == "https://youtu.be/-wtIMTCHWuI"
+
+
+_GRANDCHILD_PARENT = (
+    "import subprocess, sys, time\n"
+    "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+    "open(sys.argv[1], 'w').write(str(g.pid))\n"
+    "time.sleep(120)\n"
+)
+
+
+def _wait_for_file(path, timeout=15.0) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists() and path.read_text().strip():
+            return path.read_text().strip()
+        time.sleep(0.05)
+    raise AssertionError(f"{path} jamais ecrit")
+
+
+def test_cancel_kills_the_whole_process_tree_within_the_grace(tmp_path):
+    """coeur-I6 / image-I2 : un petit-enfant (ffmpeg, yt-dlp, claude -p) ne survit pas a « Annuler »."""
+    config = _config(tmp_path, cancel_grace_s=5)
+    w = worker.Worker(config=config, spawner=None)
+    marker = tmp_path / "grandchild.pid"
+    entry = _entry(VIDEO_A, URL_A, status="running")
+    child = w._popen_logged(entry, [sys.executable, "-c", _GRANDCHILD_PARENT, str(marker)])
+    grandchild_pid = int(_wait_for_file(marker))
+    try:
+        _write_queue(config, [_running_entry(VIDEO_A, URL_A, child)])
+        _pipeline_state(VIDEO_A, config, status="running")
+        started = time.monotonic()
+
+        worker.cancel(VIDEO_A, config=config)
+
+        assert time.monotonic() - started < 5
+        assert child.wait(timeout=5) is not None
+        deadline = time.monotonic() + 5
+        while worker._pid_alive(grandchild_pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not worker._pid_alive(grandchild_pid)
+    finally:
+        w._close_log()
+        _end(child)
+        if worker._pid_alive(grandchild_pid):
+            os.kill(grandchild_pid, signal.SIGTERM)

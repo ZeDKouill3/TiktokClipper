@@ -24,8 +24,14 @@ def _run_serve(monkeypatch, argv):
     launched = []
 
     class FakeProc:
+        pid = 4242
+
         def terminate(self):
             pass
+
+    from clipper import worker
+
+    monkeypatch.setattr(worker, "terminate_tree", lambda pid, grace, **kw: None)  # jamais de vrai taskkill
 
     monkeypatch.setattr(cli, "_popen", lambda cmd: launched.append(cmd) or FakeProc())
     monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
