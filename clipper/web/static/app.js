@@ -70,6 +70,7 @@ async function api(path, options, replayed) {
     }
     const failure = new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
     failure.body = payload; // champs en plus du detail (ex. next_at : prochaine heure possible d'une publication)
+    failure.status = resp.status; // reloadVideo distingue un 404 (video disparue) d'une panne serveur
     throw failure;
   }
   if (resp.status === 204) return null;
@@ -99,7 +100,12 @@ async function reloadVideo(id) {
   try {
     video = await api(`/api/videos/${encodeURIComponent(id)}`);
   } catch (err) {
-    // video disparue (workspace nettoye) : on la retire de la liste.
+    // 404 : video disparue (workspace nettoye), on la retire de la liste.
+    // Autre erreur (500...) : la video reste, la panne est signalee.
+    if (err.status !== 404) {
+      toastError("Actualisation impossible", err);
+      return;
+    }
   }
   const list = store.videos || [];
   const index = list.findIndex((v) => v.video_id === id);

@@ -1183,6 +1183,44 @@ def test_app_js_notifies_on_video_status_changes(tmp_path, isolated_cwd):
     assert "Notification" in js
 
 
+_RELOAD_SCRIPT_HEAD = """
+const scenario = JSON.parse(process.argv[1]);
+const toasts = [];
+function toast(t) { toasts.push({kind: "toast", title: t.title}); }
+function toastError(title) { toasts.push({kind: "error", title: title}); }
+function notificationsOn() { return false; }
+function askToken() { throw new Error("jeton non demande dans ce test"); }
+function connectEvents() {}
+function readCookie() { return null; }
+const TOKEN_COOKIE = "token";
+const NOTIFY_STATUS = {};
+let store = {videos: [{video_id: "v1", status: "done"}, {video_id: "v2", status: "done"}]};
+globalThis.fetch = async () => ({
+  ok: scenario.status < 400, status: scenario.status, statusText: "erreur",
+  json: async () => ({detail: "boom"}),
+});
+"""
+
+_RELOAD_SCRIPT_TAIL = """
+(async () => {
+  await reloadVideo("v1");
+  console.log(JSON.stringify({videos: store.videos.map((v) => v.video_id), toasts: toasts}));
+})();
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent du PATH")
+@pytest.mark.parametrize("status, kept, error_toast", [(500, True, True), (404, False, False)])
+def test_reload_video_removes_only_on_404_and_toasts_other_errors(status, kept, error_toast):
+    """Audit lot P (web-I5) : une erreur serveur (500) garde la video dans le magasin et emet un toast ;
+    un 404 (video disparue) la retire sans toast."""
+    js = (STATIC / "app.js").read_text(encoding="utf-8")
+    region = js[js.index("async function api("):js.index("/* Notifications de publication TikTok")]
+    out = json.loads(_node_run(_RELOAD_SCRIPT_HEAD + region + _RELOAD_SCRIPT_TAIL, json.dumps({"status": status})))
+    assert ("v1" in out["videos"]) is kept, out
+    assert ("error" in [t["kind"] for t in out["toasts"]]) is error_toast, out
+
+
 def _api_calls(js: str) -> list[tuple[str, str]]:
     calls = []
     for m in re.finditer(r"""api\(\s*["`](/api[^"`?]*)[^"`]*["`]\s*(?:,\s*(?:\{\s*method:\s*"(\w+)"|jsonBody\(\s*"(\w+)"))?""", js):
