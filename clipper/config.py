@@ -3,7 +3,9 @@ from __future__ import annotations
 import ast
 import importlib
 import inspect
+import os
 import re
+import threading
 import time
 import tomllib
 from dataclasses import dataclass, field
@@ -217,7 +219,9 @@ def write_config(
     the original file untouched and propagates (ADR-ad2e: no silent
     fallback)."""
     path = Path(path)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    # Nom unique par processus et par fil : deux ecrivains concurrents ne partagent jamais le meme .tmp
+    # (web-I4, un os.replace de l'un emportait le fichier que l'autre venait de relire).
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(tomli_w.dumps(data), encoding="utf-8")
     try:
         if base is not None:

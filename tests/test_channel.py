@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -144,6 +145,53 @@ def test_save_channel_leaves_existing_file_intact_on_config_error(isolated_cwd):
         save_channel("ma_chaine", {"channel": {"not_a_real_key": 1}})
 
     assert (presets_dir / "ma_chaine.toml").read_text() == original
+
+
+def test_save_channel_serialises_concurrent_writers_under_the_preset_lock(isolated_cwd, monkeypatch):
+    # web-I4 : writer A tient le verrou du preset pendant sa validation (figee). Writer B doit attendre
+    # la liberation du verrou au lieu d'entrer dans la section critique ; le dernier a ecrire gagne,
+    # sans erreur et sans .tmp restant.
+    from clipper import config as config_mod
+    from clipper.channel import save_channel
+
+    (isolated_cwd / "config.toml").write_text('mode = "review"\n')
+    presets_dir = isolated_cwd / "presets"
+    presets_dir.mkdir()
+    (presets_dir / "ma_chaine.toml").write_text('[channel]\ndisplay_name = "Avant"\n')
+    real_load = config_mod.load_config
+    paused = threading.Event()
+    release = threading.Event()
+
+    def gated_load(target, *args, **kwargs):
+        if threading.current_thread().name == "writer-a" and str(target).endswith(".tmp"):
+            paused.set()
+            release.wait(5)
+        return real_load(target, *args, **kwargs)
+
+    monkeypatch.setattr(config_mod, "load_config", gated_load)
+    errors = []
+
+    def write(display_name):
+        try:
+            save_channel("ma_chaine", {"channel": {"display_name": display_name}})
+        except Exception as exc:
+            errors.append(exc)
+
+    writer_a = threading.Thread(target=write, args=("Premier",), name="writer-a")
+    writer_b = threading.Thread(target=write, args=("Second",), name="writer-b")
+    writer_a.start()
+    assert paused.wait(5)
+    writer_b.start()
+    writer_b.join(0.3)
+    blocked_while_a_holds_the_lock = writer_b.is_alive()
+    release.set()
+    writer_a.join(5)
+    writer_b.join(5)
+
+    assert blocked_while_a_holds_the_lock
+    assert errors == []
+    assert 'display_name = "Second"' in (presets_dir / "ma_chaine.toml").read_text()
+    assert list(presets_dir.glob("*.tmp")) == []
 
 
 def test_delete_channel_removes_the_preset_file(isolated_cwd):

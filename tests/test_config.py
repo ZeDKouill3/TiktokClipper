@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 import tomllib
 import types
 from pathlib import Path
@@ -399,6 +400,46 @@ def test_write_config_leaves_original_file_intact_on_config_error(isolated_cwd):
 
     assert path.read_text() == original
     assert not path.with_suffix(".toml.tmp").exists()
+
+
+def test_write_config_two_writers_do_not_share_a_tmp_file(tmp_path, monkeypatch):
+    # web-I4 : le .tmp au nom fixe etait partage ; le premier os.replace emportait le fichier du second,
+    # sa relecture echouait en « fichier de config introuvable ». Writer A est fige pendant sa relecture,
+    # writer B (le fil principal) ecrit et remplace entierement, puis A reprend : A doit ecrire sans erreur.
+    from clipper import config as config_mod
+    from clipper.config import write_config
+
+    path = tmp_path / "config.toml"
+    path.write_text('mode = "review"\n')
+    real_load = config_mod.load_config
+    paused = threading.Event()
+    release = threading.Event()
+
+    def gated_load(target, *args, **kwargs):
+        if threading.current_thread().name == "writer-a" and str(target).endswith(".tmp"):
+            paused.set()
+            release.wait(5)
+        return real_load(target, *args, **kwargs)
+
+    monkeypatch.setattr(config_mod, "load_config", gated_load)
+    errors = []
+
+    def writer_a():
+        try:
+            write_config(path, {"mode": "auto"})
+        except Exception as exc:
+            errors.append(exc)
+
+    writer = threading.Thread(target=writer_a, name="writer-a")
+    writer.start()
+    assert paused.wait(5)
+    write_config(path, {"mode": "review"})
+    release.set()
+    writer.join(5)
+
+    assert errors == []
+    assert path.read_text().strip() == 'mode = "auto"'
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_action_table_is_valid_and_refuses_unknown_keys(tmp_path):
