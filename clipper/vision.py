@@ -280,16 +280,19 @@ def run(
     def process(n: int) -> None:
         batch = batches[n]
         montage = _montage(batch, video_dir, resize_dir, max_width, n)
+        def check(answer: dict[str, Any]) -> None:
+            indices = [item["index"] for item in answer["frames"]]
+            if sorted(indices) != list(range(len(batch))):
+                raise llm.SchemaError(f"vision : index attendus 0..{len(batch) - 1}, recus {indices}")
+
         answer = llm.ask(
             "vision",
             _prompt(batch),
             [montage],
             response_schema(len(batch)),
             config=config,
+            check=check,
         )
-        indices = [item["index"] for item in answer["frames"]]
-        if sorted(indices) != list(range(len(batch))):
-            raise llm.SchemaError(f"vision : index attendus 0..{len(batch) - 1}, recus {indices}")
         described = [
             {
                 "timecode": batch[item["index"]]["timecode"],
