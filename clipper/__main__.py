@@ -53,6 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Relance cette etape et les suivantes (repetable)")
     p.add_argument("--short-clips", action=argparse.BooleanOptionalAction, default=None, dest="short_clips",
                    help="Clips courts pour cette video (sinon : [moments] short_clips du style)")
+    p.add_argument("--resume", action="store_true",
+                   help="Reprise automatique (worker) : garde le compteur d'echecs transitoires (attempts)")
 
     p = sub.add_parser("download", help="Telecharge seulement la video (etape download, prechargement du worker)")
     p.add_argument("url", help="URL YouTube ou VOD Twitch (twitch.tv/videos/<id>) de la video")
@@ -64,6 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Relance cette etape et les suivantes (repetable)")
     p.add_argument("--short-clips", action=argparse.BooleanOptionalAction, default=None, dest="short_clips",
                    help="Clips courts si l'etape moments est relancee (sinon : valeur du style)")
+    p.add_argument("--resume", action="store_true",
+                   help="Reprise automatique (worker) : garde le compteur d'echecs transitoires (attempts)")
 
     p = sub.add_parser("decide", help="Enregistre la decision humaine sur un moment (mode review)")
     p.add_argument("video_id")
@@ -339,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
             video_id = download.extract_video_id(args.url)
             state = _run_with_progress(
                 lambda: pipeline.run(args.url, config=config, force=args.force, force_steps=args.force_step,
-                                     short_clips=args.short_clips),
+                                     short_clips=args.short_clips, manual=not args.resume),
                 video_id, config, args.force,
             )
         elif args.command == "download":
@@ -349,7 +353,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "render":
             state = _run_with_progress(
                 lambda: pipeline.render(args.video_id, config=config, force=args.force,
-                                        force_steps=args.force_step, short_clips=args.short_clips),
+                                        force_steps=args.force_step, short_clips=args.short_clips,
+                                        manual=not args.resume),
                 args.video_id, config, args.force,
             )
         elif args.command == "decide":

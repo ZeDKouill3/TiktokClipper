@@ -552,14 +552,255 @@ def test_default_spawner_writes_child_output_to_the_log_file(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def test_tick_calls_pipeline_process_queue_when_nothing_to_launch(tmp_path, monkeypatch):
+def _queued_state(video_id: str, config: Config, *, done_through: str | None = None, channel: str | None = None,
+                  retry_at: str | None = None, attempts: int = 2) -> dict:
+    """Vidéo ``queued`` du pipeline (échec transitoire : quota Claude, réseau) dont ``retry_at`` est passé par
+    défaut ; les étapes jusqu'à ``done_through`` incluse sont ``done``."""
+    state = pipeline.new_state(video_id, f"https://youtu.be/{video_id}", config.mode, channel=channel)
+    state.update(status="queued", reason="quota", attempts=attempts,
+                 retry_at=retry_at or "2000-01-01T00:00:00+00:00")
+    if done_through is not None:
+        for name in pipeline.STEPS:
+            state["steps"][name]["status"] = "done"
+            if name == done_through:
+                break
+    pipeline.save_state(state, config=config)
+    return state
+
+
+def _no_inline_resume(monkeypatch) -> None:
+    """Le worker ne reprend plus lui-même (audit 10/10, coeur-I5) : ``pipeline.process_queue`` reste à la CLI
+    ``clipper queue`` et ne doit jamais être appelé par un tick."""
+    monkeypatch.setattr(pipeline, "process_queue",
+                        lambda **kw: pytest.fail("tick a repris la file dans le processus du worker"))
+
+
+def test_tick_turns_a_due_queued_video_into_a_queue_entry_launched_as_a_child(tmp_path, monkeypatch):
+    """coeur-I5 : la reprise d'une vidéo ``queued`` passe par la file et ``_launch_head`` (enfant
+    ``python -m clipper run --resume -- <url>``), plus jamais par ``process_queue`` dans le worker."""
     config = _config(tmp_path)
-    calls = []
-    monkeypatch.setattr(pipeline, "process_queue", lambda *, config: calls.append(config))
+    _no_inline_resume(monkeypatch)
+    _queued_state(VIDEO_A, config, done_through="download")
+    spawner = FakeSpawner()
 
-    worker.Worker(config=config, spawner=FakeSpawner()).tick()
+    worker.Worker(config=config, spawner=spawner).tick()
 
-    assert calls == [config]
+    assert len(spawner.calls) == 1
+    cmd = spawner.calls[0]
+    assert cmd[-1] == URL_A and "run" in cmd and "--resume" in cmd
+    assert cmd.index("--resume") < cmd.index("--")  # option de la sous-commande, avant le séparateur
+    entries = _queue(config)
+    assert [(e["video_id"], e["action"], e["status"], e["pid"]) for e in entries] == [(VIDEO_A, "run", "running", 4242)]
+    assert entries[0]["resume"] is True and entries[0]["channel"] is None
+
+
+def test_the_resume_flag_of_the_child_command_keeps_the_attempts_of_the_video(tmp_path, monkeypatch):
+    """L'enfant lancé pour une reprise automatique ne remet pas ``attempts`` à zéro (``manual=False``) : sinon
+    ``max_attempts`` ne borne plus rien. La commande construite par le worker est rejouée par la vraie CLI."""
+    from clipper.__main__ import main
+
+    config = _config(tmp_path)
+    _no_inline_resume(monkeypatch)
+    _queued_state(VIDEO_A, config)
+    spawner = FakeSpawner()
+    worker.Worker(config=config, spawner=spawner).tick()
+    seen = []
+    monkeypatch.setattr(pipeline, "run", lambda url, **kw: seen.append((url, kw.get("manual"))) or {"status": "done"})
+    monkeypatch.setattr(pipeline, "render", lambda vid, **kw: seen.append((vid, kw.get("manual"))) or {"status": "done"})
+
+    assert spawner.calls[0][:3] == [sys.executable, "-m", "clipper"]
+    assert main(spawner.calls[0][3:]) == 0
+    assert main(["run", "--", URL_A]) == 0  # relance à la main : ardoise propre
+    assert main(["render", "--resume", "--", VIDEO_A]) == 0
+
+    assert seen == [(URL_A, False), (URL_A, True), (VIDEO_A, False)]
+
+
+def test_during_the_resumed_child_tick_still_publishes_and_cancel_terminates_it(tmp_path, monkeypatch):
+    """coeur-I5 : pendant la reprise (minutes à heures), le worker continue à battre, publier et répondre à
+    l'annulation : la reprise est un enfant comme les autres (ADR-35b7 §1), pas un appel bloquant."""
+    config = _config(tmp_path, cancel_grace_s=0)
+    _no_inline_resume(monkeypatch)
+    _queued_state(VIDEO_A, config, done_through="download")
+    w = worker.Worker(config=config, spawner=FakeSpawner())
+    published = []
+    w._publish_due = lambda: published.append(True) or False
+    w.tick()  # lance l'enfant
+    assert [e["status"] for e in _queue(config)] == ["running"]
+    published.clear()
+
+    w.tick()
+    w.tick()
+
+    assert len(published) == 2  # chaque tick pendant la reprise publie encore
+    assert worker.read_heartbeat(config)["state"] == "active"
+    assert "busy" not in json.loads(worker.heartbeat_path(config).read_text(encoding="utf-8"))
+
+    signals = []
+    monkeypatch.setattr(worker, "process_alive", lambda pid, created_at: not signals)
+    monkeypatch.setattr(worker, "_pid_alive", lambda pid: not signals)
+    monkeypatch.setattr(worker.os, "kill", lambda pid, sig: signals.append(pid))
+
+    worker.cancel(VIDEO_A, config=config)
+
+    assert signals == [4242]  # l'enfant de la reprise est arrêté
+    assert _queue(config) == []
+    state = pipeline.load_state(VIDEO_A, config=config)
+    assert state["status"] == "failed" and "annulée par l'utilisateur" in state["reason"]
+
+
+def test_a_queued_video_whose_retry_time_has_not_come_is_left_alone(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    _no_inline_resume(monkeypatch)
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    _queued_state(VIDEO_A, config, retry_at=future)
+    spawner = FakeSpawner()
+
+    worker.Worker(config=config, spawner=spawner).tick()
+
+    assert spawner.calls == [] and _queue(config) == []
+    assert pipeline.load_state(VIDEO_A, config=config)["status"] == "queued"
+
+
+def test_a_queued_video_is_enqueued_once_while_its_entry_lives(tmp_path, monkeypatch):
+    """L'état reste ``queued`` jusqu'à ce que l'enfant écrive ``running`` : les ticks suivants ne doublent pas
+    l'entrée (ni en attente ni en cours)."""
+    config = _config(tmp_path)
+    _no_inline_resume(monkeypatch)
+    _queued_state(VIDEO_A, config)
+    spawner = FakeSpawner()
+    w = worker.Worker(config=config, spawner=spawner)
+
+    w.tick()
+    w.tick()
+    w.tick()
+
+    assert len(spawner.calls) == 1
+    assert [(e["video_id"], e["status"]) for e in _queue(config)] == [(VIDEO_A, "running")]
+    # l'entrée en cours est retirée à la fin de l'enfant ; l'état n'est plus queued : rien n'est relancé
+    spawner.process.finish(0)
+    pipeline.save_state({**pipeline.load_state(VIDEO_A, config=config), "status": "done", "retry_at": None}, config=config)
+    w.tick()
+    w.tick()
+    assert len(spawner.calls) == 1 and _queue(config) == []
+
+
+def test_a_queued_video_waits_behind_the_entries_already_waiting(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    _no_inline_resume(monkeypatch)
+    _write_queue(config, [_entry(VIDEO_B, URL_B)])
+    _queued_state(VIDEO_A, config)
+    spawner = FakeSpawner()
+
+    worker.Worker(config=config, spawner=spawner).tick()
+
+    assert spawner.calls[0][-1] == URL_B
+    assert [(e["video_id"], e["status"], e.get("resume")) for e in _queue(config)] == [
+        (VIDEO_B, "running", None), (VIDEO_A, "waiting", True)]
+
+
+def test_a_queued_video_past_the_review_gate_is_resumed_with_render(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    _no_inline_resume(monkeypatch)
+    before_review = pipeline.STEPS[pipeline.STEPS.index(pipeline._AFTER_REVIEW) - 1]
+    _queued_state(VIDEO_A, config, done_through=before_review)  # première étape non faite : captions
+    spawner = FakeSpawner()
+
+    worker.Worker(config=config, spawner=spawner).tick()
+
+    cmd = spawner.calls[0]
+    assert "render" in cmd and "--resume" in cmd and cmd[-1] == VIDEO_A
+    assert [(e["action"], e["url"]) for e in _queue(config)] == [("render", VIDEO_A)]
+
+
+def test_a_queued_video_of_a_channel_is_resumed_with_its_preset(tmp_path, monkeypatch):
+    """La chaîne de l'état devient celle de l'entrée : l'enfant tourne avec ``--config <presets_dir>/<chaîne>.toml``
+    (mode de la chaîne compris, SPEC-74e9 §1.3), jamais la config globale."""
+    config = _config(tmp_path)
+    _no_inline_resume(monkeypatch)
+    presets = Path(config.section("watch")["presets_dir"])
+    presets.mkdir(parents=True, exist_ok=True)
+    (presets / "ma_chaine.toml").write_text('[channel]\ndisplay_name = "Ma chaine"\n', encoding="utf-8")
+    (tmp_path / "config.toml").write_text('mode = "auto"\n', encoding="utf-8")  # [watch] base_config par défaut
+    _queued_state(VIDEO_A, config, channel="ma_chaine")
+    spawner = FakeSpawner()
+
+    worker.Worker(config=config, spawner=spawner).tick()
+
+    cmd = spawner.calls[0]
+    assert cmd[cmd.index("--config") + 1] == (presets / "ma_chaine.toml").as_posix()
+    assert _queue(config)[0]["channel"] == "ma_chaine"
+
+
+def test_a_queued_video_of_a_vanished_channel_stays_queued_with_a_visible_reason(tmp_path, monkeypatch, caplog):
+    """ADR-ad2e : aucun repli sur la config globale ; la raison est écrite dans l'état et journalisée une fois."""
+    config = _config(tmp_path)
+    _no_inline_resume(monkeypatch)
+    _queued_state(VIDEO_A, config, channel="disparue")
+    spawner = FakeSpawner()
+    w = worker.Worker(config=config, spawner=spawner)
+
+    with caplog.at_level(logging.ERROR, logger="clipper.worker"):
+        w.tick()
+        w.tick()
+
+    assert spawner.calls == [] and _queue(config) == []
+    state = pipeline.load_state(VIDEO_A, config=config)
+    assert state["status"] == "queued" and "disparue" in state["reason"]
+    assert sum("disparue" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_removing_a_waiting_resume_entry_dismisses_the_video_instead_of_requeueing_it(tmp_path, monkeypatch):
+    """« Retirer » l'entrée en attente d'une reprise automatique : sans cela le worker la remettrait en file au
+    tick suivant (l'état est toujours ``queued``). La vidéo est retirée des reprises (``dismissed_at``,
+    réversible par « Restaurer »), et plus rien n'est lancé pour elle."""
+    config = _config(tmp_path)
+    _no_inline_resume(monkeypatch)
+    _write_queue(config, [_entry(VIDEO_B, URL_B)])
+    _queued_state(VIDEO_A, config)
+    spawner = FakeSpawner()
+    w = worker.Worker(config=config, spawner=spawner)
+    w.tick()  # B lancée, A en attente derrière
+    assert [(e["video_id"], e["status"]) for e in _queue(config)] == [(VIDEO_B, "running"), (VIDEO_A, "waiting")]
+
+    worker.remove(VIDEO_A, config=config)
+    spawner.process.finish(0)  # B terminee : son entree quitte la file
+    w.tick()
+    w.tick()
+
+    assert [e["video_id"] for e in _queue(config)] == []
+    assert [c[-1] for c in spawner.calls] == [URL_B]  # A n'est jamais relancée
+    state = pipeline.load_state(VIDEO_A, config=config)
+    assert state["status"] == "queued" and state["dismissed_at"]
+    pipeline.restore_video(VIDEO_A, config=config)  # « Restaurer » : la reprise revient
+    w.tick()
+    assert [c[-1] for c in spawner.calls] == [URL_B, URL_A]
+
+
+def test_removing_an_ordinary_waiting_entry_does_not_dismiss_its_video(tmp_path):
+    config = _config(tmp_path)
+    _write_queue(config, [_entry(VIDEO_A, URL_A)])
+    _queued_state(VIDEO_A, config)  # même vidéo en attente de reprise, mais l'entrée retirée est une demande à la main
+
+    worker.remove(VIDEO_A, config=config)
+
+    assert "dismissed_at" not in pipeline.load_state(VIDEO_A, config=config)
+
+
+def test_a_queued_video_without_source_url_before_the_review_gate_is_not_launched(tmp_path, monkeypatch, caplog):
+    config = _config(tmp_path)
+    _no_inline_resume(monkeypatch)
+    state = _queued_state(VIDEO_A, config)
+    state["source_url"] = None
+    pipeline.save_state(state, config=config)
+    spawner = FakeSpawner()
+
+    with caplog.at_level(logging.ERROR, logger="clipper.worker"):
+        worker.Worker(config=config, spawner=spawner).tick()
+
+    assert spawner.calls == [] and _queue(config) == []
+    assert any(VIDEO_A in r.getMessage() and "source_url" in r.getMessage() for r in caplog.records)
+    assert "source_url" in pipeline.load_state(VIDEO_A, config=config)["reason"]
 
 
 # --------------------------------------------------------------------------
@@ -2633,12 +2874,15 @@ def test_a_running_entry_whose_process_is_dead_is_interrupted(tmp_path):
     assert worker.is_interrupted(state, config) is True
 
 
-def test_a_video_the_live_worker_resumes_itself_is_not_interrupted(tmp_path):
+def test_a_busy_heartbeat_no_longer_hides_an_interrupted_video(tmp_path):
+    """coeur-I5 : le worker ne reprend plus rien lui-même ; un ancien battement ``busy`` (worker d'avant la
+    correction) ne masque plus une vidéo ``running`` sans processus."""
     config = _config(tmp_path)
     state = _orphan_state(config)
     _write_busy_heartbeat(config)
 
-    assert worker.is_interrupted(state, config) is False
+    assert worker.is_interrupted(state, config) is True
+    assert not hasattr(worker, "_worker_busy_inline")
 
 
 def test_only_running_videos_can_be_interrupted(tmp_path):
@@ -2665,16 +2909,19 @@ def test_cancelling_an_interrupted_video_succeeds_and_keeps_the_finished_steps(t
     assert any(ORPHAN_ID in r.getMessage() and "interrompu" in r.getMessage() for r in caplog.records)
 
 
-def test_cancelling_a_video_that_really_runs_still_needs_a_process(tmp_path):
+def test_cancelling_a_running_video_with_only_a_waiting_entry_treats_it_as_interrupted(tmp_path):
+    """Une entrée ``waiting`` ne prouve aucun processus : la vidéo ``running`` est interrompue (plus de battement
+    « busy » qui la ferait passer pour reprise en ligne, coeur-I5), annulable ; l'entrée en attente est laissée."""
     config = _config(tmp_path)
     state = _orphan_state(config)
     _write_queue(config, [_entry(ORPHAN_ID, state["source_url"], status="waiting")])  # pas running : rien à tuer
     _write_busy_heartbeat(config)
 
-    with pytest.raises(worker.WorkerError, match="aucune video en cours"):
-        worker.cancel(ORPHAN_ID, config=config)
+    worker.cancel(ORPHAN_ID, config=config)
 
-    assert pipeline.load_state(ORPHAN_ID, config=config)["status"] == "running"
+    state = pipeline.load_state(ORPHAN_ID, config=config)
+    assert state["status"] == "failed" and "annulée par l'utilisateur" in state["reason"]
+    assert [e["status"] for e in _queue(config)] == ["waiting"]
 
 
 def test_resume_requeues_the_interrupted_video_from_its_interrupted_step(tmp_path):
