@@ -1923,3 +1923,69 @@ def test_absent_metric_leaves_the_existing_weights_file_untouched(tmp_path):
         learning.sync(NOW, config=config)
 
     assert weights.read_bytes() == before
+
+
+# ---------------------------------------------------------------- rattachement symetrique (TASK-c86f268b82c7, audit stats I1/M1/M3)
+CAP_LONG_A = "Sur ce jeu, le streamer donne son avis sur le boss final"
+CAP_LONG_B = "Sur ce jeu, le streamer donne son avis sur la fin du jeu"
+SHOWN_CUT = "Sur ce jeu, le streamer donne son avis sur…"
+
+
+def test_one_post_for_two_prefix_captions_links_nobody_and_both_are_ambiguous(tmp_path):
+    config = _config(tmp_path)
+    side_01 = _sidecar(config, "01", caption=CAP_LONG_B, hashtags=(), publish_at="2026-10-07T14:00:00+02:00")
+    side_02 = _sidecar(config, "02", caption=CAP_LONG_A, hashtags=(), publish_at="2026-10-07T10:00:00+02:00")
+    _snapshot(config, "2026-10-07T10:30:00+02:00", ("7000000000000000002", SHOWN_CUT, "2026-10-07T10:00:00"))
+
+    result = learning.link_posts(ACCOUNT, config=config)
+
+    assert result["linked"] == [] and result["unlinked"] == {"none": 0, "ambiguous": 2}
+    assert _read(side_01)["tiktok_post"]["id"] is None and _read(side_02)["tiktok_post"]["id"] is None
+    records = _links(config)["unlinked"]
+    assert {r["clip_id"] for r in records} == {"01", "02"}
+    assert all(r["reason"] == "ambiguous" and "post partagé" in r["detail"] for r in records)
+
+
+def test_two_posts_of_the_day_are_each_linked_to_the_sidecar_planned_at_their_minute(tmp_path):
+    config = _config(tmp_path)  # fenetre par defaut (12 h) : l'heure prevue a la minute departage
+    side_01 = _sidecar(config, "01", caption=CAP_LONG_B, hashtags=(), publish_at="2026-10-07T14:00:00+02:00")
+    side_02 = _sidecar(config, "02", caption=CAP_LONG_A, hashtags=(), publish_at="2026-10-07T10:00:00+02:00")
+    _snapshot(config, "2026-10-07T15:00:00+02:00", ("7000000000000000002", SHOWN_CUT, "2026-10-07T10:00:00"),
+              ("7000000000000000001", SHOWN_CUT, "2026-10-07T14:00:00"))
+
+    result = learning.link_posts(ACCOUNT, config=config)
+
+    assert result["unlinked"] == {"none": 0, "ambiguous": 0} and len(result["linked"]) == 2
+    assert _read(side_01)["tiktok_post"]["id"] == "7000000000000000001"
+    assert _read(side_02)["tiktok_post"]["id"] == "7000000000000000002"
+
+
+def test_exact_caption_wins_over_a_prefix_caption(tmp_path):
+    config = _config(tmp_path)
+    side_short = _sidecar(config, "02", caption="Un clip", hashtags=())
+    side_long = _sidecar(config, "01", caption="Un clip de folie", hashtags=())
+    _snapshot(config, "2026-10-07T10:00:00+02:00", ("7000000000000000003", "Un clip", "2026-10-07T09:00:00"))
+
+    result = learning.link_posts(ACCOUNT, config=config)
+
+    assert [r["clip_id"] for r in result["linked"]] == ["02"]
+    assert _read(side_short)["tiktok_post"]["id"] == "7000000000000000003"
+    assert _read(side_long)["tiktok_post"]["id"] is None and result["unlinked"] == {"none": 1, "ambiguous": 0}
+
+
+def test_a_post_deleted_from_tiktok_is_never_linked(tmp_path):
+    config = _config(tmp_path)
+    side = _sidecar(config, "01")
+    _snapshot(config, "2026-10-07T10:05:00+02:00", ("7000000000000000009", "Un super clip #jeu #fun", "2026-10-07T09:00:00"))
+    _snapshot(config, "2026-10-07T12:00:00+02:00")  # releve complet sans le post : supprime
+    assert tiktok.deleted_post_ids(tiktok.read_history(ACCOUNT, config=config)) == {"7000000000000000009"}
+
+    result = learning.link_posts(ACCOUNT, config=config)
+
+    assert result["linked"] == [] and result["unlinked"] == {"none": 1, "ambiguous": 0}
+    assert _read(side)["tiktok_post"]["id"] is None
+
+
+def test_pct_watched_is_capped_at_one_when_loops_are_counted():
+    assert learning._pct_watched(30, 20) == 1.0
+    assert learning._pct_watched(10, 20) == 0.5
