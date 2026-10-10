@@ -782,3 +782,165 @@ def test_a_failing_moment_propagates_and_writes_nothing_in_parallel(workspace, t
     with pytest.raises(llm.TransientLLMError):
         run_with_backend(workspace, make_config(tmp_path, parallel=4), backend)
     assert not (workspace / VIDEO_ID / "parts.json").exists()
+
+
+# --------------------------------------------------------------------------
+# Audit 10/10, lot E (jury-I1, jury-I2) : un moment retenu par moments n'est
+# jamais rejete par parts faute de phrase « entierement » incluse, et la
+# partie 1 porte l'accroche de moments.json.
+# --------------------------------------------------------------------------
+
+
+def action_moment(id_, start, end, hook_text):
+    """Un candidat d'action retenu, tel que l'ecrit moments.py (SPEC-b0f3
+    R11) : format single, source action, accroche = parole ou image."""
+    return {**moment(id_, start, end), "source": "action", "hook_text": hook_text,
+            "action": {"id": 1, "score": 9, "signals": {}, "frames": []}}
+
+
+def test_action_moment_without_any_sentence_is_a_single_with_the_moments_hook(workspace, tmp_path):
+    # jury-I1 (A) : passage sans parole (phrases 20..39 retirees), accroche = image.
+    t = make_transcript()
+    t["segments"] = [s for s in t["segments"] if not 20 <= s["id"] <= 39]
+    write_transcript(workspace, t)
+    write_moments(workspace, action_moment(7, 120.0, 150.0, "une explosion"))
+
+    fake, _ = run(workspace, make_config(tmp_path), [])
+    data = read_parts(workspace)
+
+    assert data["rejected"] == []
+    m = by_id(data, 7)
+    assert m["format"] == "single"
+    assert spans(m) == [(120.0, 150.0)]
+    assert m["parts"][0]["hook_text"] == "une explosion"
+    assert fake.calls == []
+
+
+def test_action_moment_inside_one_overflowing_sentence_is_a_single_with_the_moments_hook(workspace, tmp_path):
+    # jury-I1 (B) : une seule phrase de 40 s (100-139.6), passage 110-135 : aucune
+    # phrase entierement incluse, moments a pris les mots de la fenetre.
+    words = [{"word": f" w{i}", "start": round(100 + 0.9 * i, 2), "end": round(100 + 0.9 * i + 0.8, 2),
+              "probability": 0.9} for i in range(44)]
+    words[-1]["word"] += "."
+    seg = {"id": 0, "start": words[0]["start"], "end": words[-1]["end"],
+           "text": "".join(w["word"] for w in words), "words": words}
+    write_transcript(workspace, {"video_id": VIDEO_ID, "language": "fr", "duration": 500.0, "segments": [seg]})
+    write_moments(workspace, action_moment(8, 110.0, 135.0, "w12 w13 w14"))
+
+    fake, _ = run(workspace, make_config(tmp_path), [])
+    data = read_parts(workspace)
+
+    assert data["rejected"] == []
+    assert by_id(data, 8)["parts"][0]["hook_text"] == "w12 w13 w14"
+    assert fake.calls == []
+
+
+def test_action_moment_with_sentences_keeps_the_moments_hook_not_the_first_sentence(workspace, tmp_path):
+    # L'accroche d'un candidat d'action est celle choisie par moments (parole
+    # ou image), jamais recalculee par parts.
+    write_moments(workspace, action_moment(9, 10.2, 39.7, "accroche d'action"))
+
+    fake, _ = run(workspace, make_config(tmp_path), [])
+    data = read_parts(workspace)
+
+    assert data["rejected"] == []
+    m = by_id(data, 9)
+    assert m["format"] == "single"
+    assert m["parts"][0]["hook_text"] == "accroche d'action"
+    assert fake.calls == []
+
+
+def connector_transcript(*sentence_ids):
+    """La transcription des fixtures ou les phrases donnees commencent par
+    « Donc » (connecteur de tete retire par moments : le clip commence au mot
+    suivant, 0,9 s apres le debut de la phrase)."""
+    t = make_transcript()
+    for k in sentence_ids:
+        seg = t["segments"][k]
+        seg["words"][0]["word"] = " Donc"
+        seg["text"] = "".join(w["word"] for w in seg["words"])
+    return t
+
+
+def test_single_moment_starting_after_a_leading_connector_keeps_its_first_sentence_as_hook(workspace, tmp_path):
+    # jury-I2 : moments fait commencer le clip en 11.15 (mot2_1), dans la phrase 2
+    # qui commence en 10.25 sur « Donc » ; hook_text = la phrase sans le connecteur.
+    write_transcript(workspace, connector_transcript(2))
+    m0 = {**moment(10, 11.15, 39.7), "hook_text": "mot2_1 mot2_2 mot2_3 mot2_4."}
+    write_moments(workspace, m0)
+
+    fake, _ = run(workspace, make_config(tmp_path), [])
+    data = read_parts(workspace)
+
+    assert data["rejected"] == []
+    m = by_id(data, 10)
+    assert m["format"] == "single"
+    assert spans(m) == [(11.15, 39.7)]
+    assert m["parts"][0]["hook_text"] == "mot2_1 mot2_2 mot2_3 mot2_4."
+    assert fake.calls == []
+
+
+def test_one_sentence_moment_starting_after_a_leading_connector_is_not_rejected(workspace, tmp_path):
+    # jury-I2 : clip court d'une seule phrase (grille 3-10 s) ; la phrase 2 de
+    # 11.15 (apres « Donc ») a 14.65 est bien « dans » le moment.
+    write_transcript(workspace, connector_transcript(2))
+    write_moments(workspace, {**moment(11, 11.15, 14.65), "hook_text": "mot2_1 mot2_2 mot2_3 mot2_4."})
+
+    fake, _ = run(workspace, make_config(tmp_path, single_min=3, single_max=10, part_min=30, part_max=90), [])
+    data = read_parts(workspace)
+
+    assert data["rejected"] == []
+    m = by_id(data, 11)
+    assert spans(m) == [(11.15, 14.65)]
+    assert m["parts"][0]["hook_text"] == "mot2_1 mot2_2 mot2_3 mot2_4."
+
+
+def test_multipart_moment_starting_after_a_leading_connector_prompts_and_cuts_from_its_first_sentence(
+    workspace, tmp_path
+):
+    # jury-I2 : [251.15-469.65] (phrases 50..93, « Donc » retire en tete de la
+    # phrase 50) : la transcription envoyee au LLM commence a la phrase 50 sans le
+    # connecteur, la fin de cette phrase (254.65) est une coupe candidate et la
+    # partie 1 porte l'accroche de moments.json.
+    write_transcript(workspace, connector_transcript(50))
+    m0 = {**moment(12, 251.15, 469.65, "multipart"), "hook_text": "mot50_1 mot50_2 mot50_3 mot50_4."}
+    write_moments(workspace, m0)
+
+    fake, _ = run(workspace, make_config(tmp_path), [cuts(324.65, 399.65)])
+    data = read_parts(workspace)
+
+    assert data["rejected"] == []
+    prompt = fake.calls[0].prompt
+    lines = prompt.split("## Transcription du moment ([debut-fin] en secondes)\n", 1)[1].splitlines()
+    assert lines[0] == "[251.15-254.65] mot50_1 mot50_2 mot50_3 mot50_4."
+    assert "mot50_0" not in prompt and "Donc" not in prompt
+    m = by_id(data, 12)
+    assert m["parts"][0]["start"] == 251.15
+    assert m["parts"][0]["hook_text"] == "mot50_1 mot50_2 mot50_3 mot50_4."
+    assert_valid(m, m0, 60, 90)
+
+
+def test_inside_includes_the_sentence_containing_start_trimmed_to_the_words_from_start():
+    from clipper.parts import _inside, split_sentences
+
+    sents = split_sentences(connector_transcript(2))
+    inside = _inside(sents, 11.15, 14.65)
+
+    assert [(s.start, s.end, s.text) for s in inside] == [(11.15, 14.65, "mot2_1 mot2_2 mot2_3 mot2_4.")]
+    assert [w.text for w in inside[0].words] == [" mot2_1", " mot2_2", " mot2_3", " mot2_4."]
+    # une phrase qui ne fait que chevaucher la fin du moment n'y est pas
+    assert [s.start for s in _inside(sents, 11.15, 17.0)] == [11.15]
+
+
+def test_action_moment_out_of_single_bounds_is_rejected_with_a_reason_not_split(workspace, tmp_path):
+    # ADR-ad2e : un candidat d'action hors clip unique (grille incoherente) est
+    # refuse avec sa raison, jamais decoupe ni accepte en silence.
+    write_moments(workspace, action_moment(13, 100.2, 319.7, "accroche d'action"))
+
+    fake, _ = run(workspace, make_config(tmp_path), [])
+    data = read_parts(workspace)
+
+    assert data["moments"] == []
+    [r] = data["rejected"]
+    assert r["id"] == 13 and "clip unique" in r["reason"]
+    assert fake.calls == []
