@@ -363,7 +363,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "worker":
             from clipper import worker as worker_mod
 
-            worker_mod.Worker(config=config).loop()
+            try:
+                worker_mod.Worker(config=config).loop()
+            except worker_mod.WorkerError as exc:  # ex. « un worker tourne déjà (pid N) » (audit 10/10, A1)
+                print(f"erreur : {exc}", file=sys.stderr)
+                return 1
             return 0
         elif args.command == "models":
             if args.models_command == "prefetch":
