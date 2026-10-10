@@ -1328,17 +1328,20 @@ def _compare(
 ) -> None:
     """Tour de comparaison : un appel ``moments`` qui note ensemble les
     candidats (notes et justification remplacees)."""
+    def check(answer: dict[str, Any]) -> None:
+        ids = [m["id"] for m in answer["moments"]]
+        missing = sorted(set(range(len(candidates))) - set(ids))
+        if missing or len(ids) != len(set(ids)):
+            raise llm.SchemaError(f"tour de comparaison : ids manquants {missing} ou en double dans {ids}")
+
     answer = llm.ask(
         "moments",
         _comparison_prompt(context, rubric, candidates, sents),
         [],
         comparison_schema(rubric, len(candidates)),
         config=config,
+        check=check,
     )
-    ids = [m["id"] for m in answer["moments"]]
-    missing = sorted(set(range(len(candidates))) - set(ids))
-    if missing or len(ids) != len(set(ids)):
-        raise llm.SchemaError(f"tour de comparaison : ids manquants {missing} ou en double dans {ids}")
     for m in answer["moments"]:
         candidates[m["id"]]["scores"] = m["scores"]
         candidates[m["id"]]["justification"] = m["justification"]
@@ -1500,13 +1503,13 @@ def run(
 
     candidates: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    seen: set[tuple[int, int]] = set()
+    seen: set[tuple[int, int, str]] = set()
     for raw in raws:
         candidate, rejection = _normalize(raw, sents, rubric, excluded, connectors)
         if rejection is not None:
             rejected.append(rejection)
-        elif (candidate["_first"], candidate["_last"]) not in seen:
-            seen.add((candidate["_first"], candidate["_last"]))
+        elif (candidate["_first"], candidate["_last"], candidate["format"]) not in seen:
+            seen.add((candidate["_first"], candidate["_last"], candidate["format"]))
             candidates.append(candidate)
     candidates.sort(key=lambda c: c["_start"])
     action_candidates: list[dict[str, Any]] = []

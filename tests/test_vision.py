@@ -781,3 +781,21 @@ def test_force_deletes_the_partial_file_even_if_the_rerun_fails(tmp_path, video_
     partial = json.loads((video_dir / "vision_partial.json").read_text(encoding="utf-8"))
     assert all(len(b["paths"]) == 1 for b in partial["batches"].values())
     assert len(fake.calls) >= 1
+
+
+def test_answer_with_wrong_indexes_is_sent_back_to_the_model_and_corrected(tmp_path, video_dir):
+    # jury-I3 : le controle des index est un check= de llm.ask, donc reparable.
+    good = describe_all()
+    calls = []
+
+    def flaky(request):
+        calls.append(request.prompt)
+        answer = good(request)
+        if len(calls) == 1:
+            # bon nombre d'images (schema OK) mais l'index 0 deux fois
+            answer["frames"] = [dict(answer["frames"][0]) for _ in answer["frames"]]
+        return answer
+
+    fake, path = run_vision(tmp_path, [flaky] * 6, batch_size=2, parallel=1)
+    assert path.exists()
+    assert len(calls) >= 2 and calls[1].startswith(calls[0])

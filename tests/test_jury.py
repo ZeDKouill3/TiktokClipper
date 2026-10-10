@@ -253,19 +253,6 @@ def test_candidates_are_anonymized():
         assert "[60-90] s" in call.prompt  # le contexte du candidat est transmis
 
 
-def test_same_model_judges_share_an_identical_prompt_prefix_for_the_cache():
-    script = ScriptedJury({1: uniform({"secret-id-0": 7, "secret-id-1": 5, "secret-id-2": 3})})
-    _, fake = run(script)
-    prompts = {c.usage.removeprefix("jury_"): c.prompt for c in fake.calls}
-
-    def prefix(name):
-        return prompts[name].split("## Ta perspective")[0]
-
-    assert prefix("retention") == prefix("monteur") == prefix("avocat")
-    assert prefix("spectateur") == prefix("conformite")
-    assert prefix("retention") != prefix("spectateur")
-
-
 def test_prompt_prefix_before_the_role_includes_the_schema():
     # TASK-b0fa : le schema (--json-schema) doit faire partie de ce qui
     # precede la consigne de role, pas etre ajoute apres (llm.ask l'ajoute
@@ -316,13 +303,10 @@ def orders_for(seed):
     return {j: order(script.prompts[j][0]) for j in JUDGES}
 
 
-def test_same_model_judges_share_the_llm_cache_prefix_field():
-    # TASK-2cbb : le prefixe textuel commun (deja teste ci-dessus) ne suffit
-    # pas a faire relire le cache par le modele : encore faut-il que
-    # clipper.llm sache ou il se termine pour le marquer (LLMRequest.cache_prefix),
-    # sans quoi claude_cli.stdin_input() ne peut jamais poser de cache_control
-    # (voir claude_cli.py). Round 1 : chaque juge d'un meme modele doit porter
-    # exactement le meme cache_prefix, egal a son prompt prive de son role.
+def test_each_judge_carries_its_own_cache_prefix_field():
+    # TASK-2cbb : clipper.llm doit savoir ou finit le prefixe (LLMRequest.cache_prefix).
+    # Round 1 : cache_prefix = prompt prive de son role. L'ordre des candidats
+    # etant propre a chaque juge (jury-M5), ce prefixe n'est plus commun.
     script = ScriptedJury({1: uniform({"secret-id-0": 7, "secret-id-1": 5, "secret-id-2": 3})})
     _, fake = run(script)
     by_judge = {c.usage.removeprefix("jury_"): c for c in fake.calls}
@@ -333,9 +317,6 @@ def test_same_model_judges_share_the_llm_cache_prefix_field():
         role_start = call.prompt.index("## Ta perspective")
         assert call.cache_prefix == call.prompt[:role_start], name
 
-    assert by_judge["retention"].cache_prefix == by_judge["monteur"].cache_prefix == by_judge["avocat"].cache_prefix
-    assert by_judge["spectateur"].cache_prefix == by_judge["conformite"].cache_prefix
-    assert by_judge["retention"].cache_prefix != by_judge["spectateur"].cache_prefix
 
 
 def test_round_two_debate_prompt_also_carries_a_cache_prefix():
@@ -368,14 +349,11 @@ def test_spectateur_message_never_carries_a_cache_control_block():
     assert "cache_control" not in stdin
 
 
-def test_shuffle_is_deterministic_and_specific_to_each_model():
+def test_shuffle_is_deterministic_and_specific_to_each_judge():
     first, again = orders_for(0), orders_for(0)
     assert first == again
-    # meme modele (defaut : strong = retention/monteur/avocat, fast =
-    # spectateur/conformite) => meme ordre, pour un prefixe de prompt commun.
-    assert first["retention"] == first["monteur"] == first["avocat"]
-    assert first["spectateur"] == first["conformite"]
-    assert first["retention"] != first["spectateur"]
+    # jury-M5 : meme modele, ordre propre a chaque juge (ADR-ff87 section 2).
+    assert len({tuple(o) for o in first.values()}) == len(JUDGES)
     assert any(o != [f"secret-id-{k}" for k in range(8)] for o in first.values())
     assert orders_for(1) != first
 
@@ -675,20 +653,20 @@ def test_weighted_median_is_deterministic():
 def test_confidence_multiplies_calibration_weight(tmp_path):
     weights = tmp_path / "w.json"
     weights.write_text(
-        json.dumps({"judges": {"retention": {"weight": 3.0}, "spectateur": {"weight": 1.0}, "monteur": {"weight": 1.0},
+        json.dumps({"judges": {"retention": {"weight": 1.5}, "spectateur": {"weight": 1.0}, "monteur": {"weight": 1.0},
                                "avocat": {"weight": 1.0}, "conformite": {"weight": 1.0}}}),
         encoding="utf-8",
     )
-    # retention 9 (poids 3 x conf 1.0 = 3) contre 4 juges a 1 (conf .5 -> .5 chacun = 2) : 9 l'emporte.
+    # retention 9 (poids 1.5 x conf 1.0 = 1.5) contre 4 juges a 1 (conf .3 -> .3 chacun = 1.2) : 9 l'emporte.
     table = {j: {"secret-id-0": {"hook": 9 if j == "retention" else 1, "standalone": 5}} for j in JUDGES}
-    conf = {(1, j, "secret-id-0"): 100 if j == "retention" else 50 for j in JUDGES}
+    conf = {(1, j, "secret-id-0"): 100 if j == "retention" else 30 for j in JUDGES}
     config = Config(
         mode="auto", workspace_dir=Path("workspace"), output_dir=Path("output"),
         _sections={"jury": {"threshold": 100, "debate_confidence_below": 0}, "jury_calibration": {"weights_path": str(weights)}},
     )
     result, _ = run(ScriptedJury({1: table}, confidence=conf), cands=candidates(1), config=config)
     assert result["candidates"][0]["scores"]["hook"] == 9
-    # confiance de retention a 20 (poids 3 x .2 = .6 < 2) : 1 l'emporte.
+    # confiance de retention a 20 (poids 1.5 x .2 = .3 < 1.2) : 1 l'emporte.
     conf[(1, "retention", "secret-id-0")] = 20
     result, _ = run(ScriptedJury({1: table}, confidence=conf), cands=candidates(1), config=config)
     assert result["candidates"][0]["scores"]["hook"] == 1
@@ -712,7 +690,7 @@ def test_equal_confidences_give_the_same_scores_as_the_plain_median(confidence):
 
 
 def test_equal_confidences_with_an_even_number_of_judges_average_the_middle_values():
-    judges = {"conformite": {"enabled": False}}
+    judges = {"conformite": {"enabled": False}, "avocat": {"veto": True}}
     notes = {j: {"hook": n, "standalone": n} for n, j in enumerate(["retention", "spectateur", "monteur", "avocat"], 1)}
     table = {j: {"secret-id-0": notes[j]} for j in notes}
     table["conformite"] = {"secret-id-0": 5}
@@ -1064,3 +1042,66 @@ def test_each_judge_in_the_result_carries_the_sha_of_its_perspective():
         assert len(judge["perspective_sha"]) == 12
         assert all(ch in "0123456789abcdef" for ch in judge["perspective_sha"])
     assert len({j["perspective_sha"] for j in judges.values()}) == len(JUDGES)
+
+
+# --------------------------------------------------------------------------
+# Audit lot F : controles en check=, bornes des poids, juge a veto, ordre propre
+# --------------------------------------------------------------------------
+
+
+def test_duplicate_ref_is_sent_back_to_the_judge_and_corrected():
+    # jury-I3 : C1 deux fois (C3 jamais) -> 2 appels pour ce juge, aucune
+    # SchemaError, les 4 autres juges conserves.
+    script = ScriptedJury({1: uniform({"secret-id-0": 7, "secret-id-1": 5, "secret-id-2": 3})})
+    monteur_calls = []
+
+    def flaky(request):
+        answer = script(request)
+        if request.usage == "jury_monteur":
+            monteur_calls.append(1)
+            if len(monteur_calls) == 1:
+                answer["candidates"][-1]["ref"] = answer["candidates"][0]["ref"]
+        return answer
+
+    result, fake = run(flaky, calls=12)
+    assert len(monteur_calls) == 2
+    assert len(by_id(result)) == 3
+    assert result["candidates"][0]["trace"]["rounds"][0]["judges"].keys() >= set(JUDGES)
+
+
+def test_veto_without_reason_is_sent_back_to_the_judge_and_corrected():
+    script = ScriptedJury({1: uniform({"secret-id-0": 7, "secret-id-1": 5, "secret-id-2": 3})})
+    calls = []
+
+    def flaky(request):
+        answer = script(request)
+        if request.usage == "jury_conformite":
+            calls.append(1)
+            if len(calls) == 1:
+                answer["candidates"][0]["veto"] = True
+                answer["candidates"][0]["veto_reason"] = "   "
+        return answer
+
+    run(flaky, calls=12)
+    assert len(calls) == 2
+
+
+def test_calibration_weight_outside_bounds_is_refused(tmp_path):
+    # jury-M1 : bornes [min_weight, max_weight] de [jury_calibration] (ADR-1cf0).
+    weights = tmp_path / "w.json"
+    weights.write_text(json.dumps({"judges": {"retention": {"weight": 5.0}}}), encoding="utf-8")
+    config = Config(
+        mode="auto", workspace_dir=Path("workspace"), output_dir=Path("output"),
+        _sections={"jury_calibration": {"weights_path": str(weights)}},
+    )
+    script = ScriptedJury({1: uniform({"secret-id-0": 7, "secret-id-1": 5, "secret-id-2": 3})})
+    with pytest.raises(jury.JuryError, match="bornes"):
+        run(script, config=config)
+
+
+def test_jury_without_any_veto_judge_is_refused():
+    # jury-M2 : desactiver conformite (seul veto) ne doit pas passer en silence.
+    script = ScriptedJury({1: uniform({"secret-id-0": 7, "secret-id-1": 5, "secret-id-2": 3})})
+    config = make_config(jury_table={"judges": {"conformite": {"enabled": False}}})
+    with pytest.raises(jury.JuryError, match="veto"):
+        run(script, config=config)

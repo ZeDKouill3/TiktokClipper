@@ -247,6 +247,8 @@ def _judges(settings: dict[str, Any]) -> list[dict[str, Any]]:
         )
     if len(judges) < _MIN_JUDGES:
         raise JuryError(f"il faut au moins {_MIN_JUDGES} juges actifs, {len(judges)} configure(s)")
+    if not any(j["veto"] for j in judges):
+        raise JuryError("aucun juge actif n'a le veto : le juge conformite (veto = true) est obligatoire (ADR-ff87)")
     quorum = settings["quorum"]
     if quorum is not None and not (isinstance(quorum, int) and 1 <= quorum <= len(judges)):
         raise JuryError(f"[jury] quorum invalide : {quorum!r} (entier de 1 a {len(judges)})")
@@ -487,6 +489,23 @@ def _ask(
     juges d'un meme modele) va a clipper.llm pour qu'un backend qui le
     supporte le marque comme bloc cacheable (TASK-2cbb) : ignore par
     claude-cli depuis TASK-b384 (voir clipper/llm/claude_cli.py)."""
+    def check(answer: dict[str, Any]) -> None:
+        # Controles que le schema ne sait pas exprimer : renvoyes au meme juge
+        # pour correction (repair_attempts) au lieu d'echouer l'etape.
+        seen: set[str] = set()
+        for item in answer["candidates"]:
+            ref = item["ref"]
+            if ref in seen:
+                raise llm.SchemaError(f"juge {judge['name']} : {ref} note deux fois")
+            seen.add(ref)
+            confidence = item.get("confidence")
+            if isinstance(confidence, bool) or not isinstance(confidence, int) or not 0 <= confidence <= 100:
+                raise llm.SchemaError(
+                    f"juge {judge['name']} : confiance invalide sur {ref} : {confidence!r} (entier de 0 a 100)"
+                )
+            if judge["veto"] and item["veto"] and not item["veto_reason"].strip():
+                raise llm.SchemaError(f"juge {judge['name']} : veto sans raison sur {ref}")
+
     answer = llm.ask(
         judge["usage"],
         prompt,
@@ -494,21 +513,13 @@ def _ask(
         schema,
         config=_JudgeConfig(config, judge["usage"], judge["model"]),
         cache_prefix=cache_prefix,
+        check=check,
     )
     out: dict[str, dict[str, Any]] = {}
     for item in answer["candidates"]:
         ref = item["ref"]
-        if ref in out:
-            raise llm.SchemaError(f"juge {judge['name']} : {ref} note deux fois")
-        confidence = item.get("confidence")
-        if isinstance(confidence, bool) or not isinstance(confidence, int) or not 0 <= confidence <= 100:
-            raise llm.SchemaError(
-                f"juge {judge['name']} : confiance invalide sur {ref} : {confidence!r} (entier de 0 a 100)"
-            )
-        entry = {"scores": dict(item["scores"]), "argument": item["argument"], "confidence": confidence}
+        entry = {"scores": dict(item["scores"]), "argument": item["argument"], "confidence": item["confidence"]}
         if judge["veto"]:
-            if item["veto"] and not item["veto_reason"].strip():
-                raise llm.SchemaError(f"juge {judge['name']} : veto sans raison sur {ref}")
             entry["veto"] = item["veto"]
             entry["veto_reason"] = item["veto_reason"] if item["veto"] else ""
         out[ref] = entry
@@ -604,10 +615,16 @@ def _weights(config: Any, judges: list[dict[str, Any]]) -> dict[str, float] | No
     except (ValueError, KeyError, TypeError, AttributeError) as exc:
         raise JuryError(f"poids du jury : {path} illisible : {exc}") from exc
     weights = {j["name"]: loaded.get(j["name"], 1.0) for j in judges}
+    cal = config.section("jury_calibration")
+    lo, hi = float(cal["min_weight"]), float(cal["max_weight"])
     for j in judges:
         w = weights[j["name"]]
         if not (math.isfinite(w) and w > 0):
             raise JuryError(f"poids du jury : {path} : poids invalide pour {j['name']} : {w!r}")
+        if not lo <= w <= hi:
+            raise JuryError(
+                f"poids du jury : {path} : poids {w} de {j['name']} hors des bornes [{lo}, {hi}] (ADR-1cf0)"
+            )
         if (j["veto"] or j["name"] == "conformite") and w != 1.0:
             raise JuryError(
                 f"poids du jury : {j['name']} vaut {w} dans {path}, "
@@ -686,13 +703,13 @@ def deliberate(
     by_id = {c["id"]: c for c in candidates}
     common = _common(len(judges), rubric, context)
 
-    # Tour 1 : ordre et refs partages par les juges d'un meme modele, pour
-    # un bloc commun identique octet pour octet entre eux (voir _common).
+    # Tour 1 : ordre et refs propres a chaque juge (ADR-ff87 : pas de biais
+    # de position partage entre juges d'un meme modele).
     views: dict[str, dict[str, str]] = {}  # juge -> ref -> id
     tasks = {}
     for judge in judges:
         ids = [c["id"] for c in candidates]
-        random.Random(f"{seed}:{judge['model']}").shuffle(ids)
+        random.Random(f"{seed}:{judge['name']}").shuffle(ids)
         refs = {f"C{n}": cid for n, cid in enumerate(ids, 1)}
         views[judge["name"]] = refs
         shown = [(ref, by_id[cid]) for ref, cid in refs.items()]

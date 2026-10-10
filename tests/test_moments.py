@@ -2554,3 +2554,50 @@ def test_moments_json_judges_carry_the_sha_of_their_perspective(tmp_path, video_
         assert judge["perspective_sha"] == jury.perspective_sha(configured[name]["perspective"])
         assert "perspective" not in judge
     assert len({j["perspective_sha"] for j in judges.values()}) == len(judges)
+
+
+def test_comparison_round_wrong_ids_are_sent_back_to_the_model_and_corrected(tmp_path, video_dir, rubric_path):
+    # jury-I3 : ids manquants / en double = check= de llm.ask, donc reparable.
+    from clipper.moments import run as run_moments
+
+    config = make_config(tmp_path, rubric_path, max_transcript_chars=2000, chunk_chars=2000, chunk_overlap_seconds=30)
+    compares = []
+
+    def dispatch(request):
+        if "Candidats" in request.prompt:
+            compares.append(request.prompt)
+            if len(compares) == 1:
+                return {"moments": [
+                    {"id": 0, "justification": "x", "scores": GOOD},
+                    {"id": 0, "justification": "y", "scores": GOOD},
+                ]}
+            return {"moments": [
+                {"id": 0, "justification": "x", "scores": GOOD},
+                {"id": 1, "justification": "y", "scores": WEAK},
+            ]}
+        if "[10.2-14.7]" in request.prompt:
+            return {"moments": [moment(10.25, 44.65)]}
+        if "[450.2-454.7]" in request.prompt:
+            return {"moments": [moment(450.25, 484.65)]}
+        return {"moments": []}
+
+    fake = FakeBackend([dispatch] * 30)
+    with llm.use_backend(fake):
+        run_moments(VIDEO_ID, tmp_path / "workspace", config=config)
+    assert len(compares) == 2
+    assert (video_dir / "moments.json").exists()
+
+
+def test_same_passage_proposed_as_single_and_multipart_keeps_both_candidates(tmp_path, video_dir):
+    # jury-M3 : la cle de dedoublonnage inclut le format ; le multipart
+    # (prioritaire) ne disparait plus derriere un single moins bien note.
+    rubric = tmp_path / "rubric140.toml"
+    rubric.write_text(TEST_RUBRIC.replace("single_max = 45", "single_max = 140"), encoding="utf-8")
+    proposal = {"moments": [
+        moment(250.25, 389.65, scores=WEAK, fmt="single"),
+        moment(250.25, 389.65, scores=GOOD, fmt="multipart", breaks=[319.65]),
+    ]}
+    run(tmp_path, rubric, [proposal])
+    data = read_moments(video_dir)
+    assert [(m["start"], m["end"], m["format"]) for m in data["moments"]] == [(250.25, 389.65, "multipart")]
+    assert any(r["start"] == 250.25 and "serie" in r["reason"] for r in data["rejected"])
