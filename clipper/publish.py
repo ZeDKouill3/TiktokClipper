@@ -140,6 +140,19 @@ def _refuse_in_progress(entry: dict[str, Any], what: str) -> None:
         )
 
 
+def _refuse_to_verify(entry: dict[str, Any], what: str) -> None:
+    """Une entree ``failed`` + ``to_verify`` (programmation partie sans id de post : le post est peut-etre deja
+    programme sur TikTok) ne redevient jamais republiable par une action ordinaire (audit 10/10, publication-I1) :
+    seul ``retry``, apres controle dans TikTok Studio, la relance ; ``resolve_to_verify`` la leve si le releve
+    retrouve le post."""
+    if entry.get("status") == "failed" and entry.get("to_verify"):
+        raise PublishError(
+            f"{what} refusé pour {entry['video_id']}/{entry['clip_id']} : programmation à vérifier (le post est "
+            "peut-être déjà programmé sur TikTok, risque de doublon) : contrôle TikTok Studio, puis « Réessayer » "
+            "s'il n'y est pas, ou attends le prochain relevé s'il y est"
+        )
+
+
 def _find_entry(entries: list[dict[str, Any]], video_id: str, clip_id: str) -> dict[str, Any] | None:
     for entry in entries:
         if entry["video_id"] == video_id and entry["clip_id"] == clip_id:
@@ -445,6 +458,7 @@ def _move_locked(
             f"deplacement refuse pour {video_id}/{clip_id} : statut {entry['status']!r}"
         )
     _refuse_in_progress(entry, "déplacement")
+    _refuse_to_verify(entry, "déplacement")
 
     tz = ZoneInfo(str(schedule["timezone"]))
     local_slot = slot_at.astimezone(tz)
@@ -810,6 +824,7 @@ def set_mode(
         if entry is None:
             raise PublishError(f"clip absent de la file de publication : {video_id}/{clip_id}")
         _refuse_in_progress(entry, "changement de mode")  # fable-publication M4
+        _refuse_to_verify(entry, "changement de mode")
         if entry["status"] in ("published", "rejected", REFUSED_BY_PLATFORM, REMOVED_FROM_PLATFORM):
             raise PublishError(f"changement de mode refusé pour {video_id}/{clip_id} : statut {entry['status']!r}")
         entry = dict(entry)
@@ -1092,6 +1107,7 @@ def unschedule(
         if entry is None:
             raise PublishError(f"clip absent de la file de publication : {video_id}/{clip_id}")
         _refuse_in_progress(entry, "retour en attente")
+        _refuse_to_verify(entry, "retour en attente")
         if entry["status"] in ("rejected", REFUSED_BY_PLATFORM, REMOVED_FROM_PLATFORM):
             raise PublishError(f"retour en attente refusé pour {video_id}/{clip_id} : statut {entry['status']!r}")
         if entry["status"] == "published" and entry.get("tiktok_state"):
@@ -1411,6 +1427,7 @@ def update_post(
         if entry["status"] in ("published", "rejected", REFUSED_BY_PLATFORM, REMOVED_FROM_PLATFORM):
             raise PublishError(f"modification refusée pour {video_id}/{clip_id} : la publication est {entry['status']!r}")
         _refuse_in_progress(entry, "modification")
+        _refuse_to_verify(entry, "modification")
         new_mode = entry.get("publish_mode") if mode is _UNSET else mode
         new_account = entry.get("account") if account is _UNSET else account
         new_options = dict(entry.get("post_options") or {}) if options is _UNSET else options
@@ -1453,6 +1470,7 @@ def cancel_post(
         if entry is None:
             raise PublishError(f"clip absent de la file de publication : {video_id}/{clip_id}")
         _refuse_in_progress(entry, "annulation")
+        _refuse_to_verify(entry, "annulation")
         if entry["status"] == "published":
             if entry.get("tiktok_state") == "scheduled_on_tiktok":
                 where = " : elle est déjà programmée sur TikTok, annule-la dans TikTok Studio"

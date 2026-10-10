@@ -2961,3 +2961,92 @@ def test_release_and_publish_clear_the_holder_pid(isolated_cwd):
     publish.mark_failed("vid1", "03", "ma_chaine", "captcha", halted=False)
     entry = _read_state(isolated_cwd, "ma_chaine")[0]
     assert entry["in_progress_pid"] is None and entry["in_progress_pid_created_at"] is None
+
+
+# --------------------------------------------------------------------------
+# TASK-14699025fdd6 (audit 10/10, publication-I1) : une programmation « à vérifier » (post peut-être déjà
+# programmé sur TikTok, aucun id retrouvé) n'est jamais remise en file par Déplacer, Repasser en attente,
+# Modifier, Annuler ou un changement de mode : seul « Réessayer » (après contrôle dans TikTok Studio) la relance
+# --------------------------------------------------------------------------
+
+_TV_SLOT = datetime(2026, 10, 5, 9, 0, tzinfo=timezone.utc)   # lundi (creneau de _TWO_SCHED)
+_TV_SCHEDULE = {"slots": [{"day": d, "time": "09:00"} for d in ("mon", "tue", "wed", "thu", "fri", "sat", "sun")],
+                "timezone": "UTC"}
+
+
+def _to_verify_env(cwd):
+    """Une entree exactement comme l'ecrit ``Worker._unconfirmed`` : programmation partie, aucun post retrouve."""
+    publish = _tiktok_env(cwd, ("01",))
+    publish.mark_failed("vid1", "01", "ma_chaine", "programmation à vérifier : aucun post retrouvé (risque de doublon)",
+                        halted=False, to_verify=True, publish_at=_TV_SLOT.isoformat())
+    before = _read_state(cwd, "ma_chaine")
+    assert before[0]["status"] == "failed" and before[0]["to_verify"] is True
+    return publish, before
+
+
+def _tv_actions(publish, cwd):
+    return {
+        "move": lambda: publish.move("vid1", "01", "ma_chaine", _TV_SLOT + timedelta(days=1), schedule=_TV_SCHEDULE),
+        "unschedule": lambda: publish.unschedule("vid1", "01", "ma_chaine"),
+        "update_post": lambda: publish.update_post("vid1", "01", "ma_chaine", mode="scheduled",
+                                                   publish_at=_TV_SLOT + timedelta(days=1), now=_MON,
+                                                   schedule=_TV_SCHEDULE),
+        "cancel_post": lambda: publish.cancel_post("vid1", "01", "ma_chaine"),
+        "set_mode": lambda: publish.set_mode("vid1", "01", "ma_chaine", "immediate"),
+    }
+
+
+@pytest.mark.parametrize("action", ["move", "unschedule", "update_post", "cancel_post", "set_mode"])
+def test_a_to_verify_failure_is_refused_by_every_action_but_retry_and_nothing_is_written(isolated_cwd, action):
+    publish, before = _to_verify_env(isolated_cwd)
+
+    with pytest.raises(publish.PublishError, match="TikTok Studio"):
+        _tv_actions(publish, isolated_cwd)[action]()
+
+    assert _read_state(isolated_cwd, "ma_chaine") == before   # toujours failed + to_verify, rien de reecrit
+
+
+def test_a_plain_failure_without_to_verify_is_still_movable_and_unschedulable(isolated_cwd):
+    publish = _tiktok_env(isolated_cwd, ("01",))
+    publish.mark_failed("vid1", "01", "ma_chaine", "captcha détecté", halted=False)
+
+    moved = publish.move("vid1", "01", "ma_chaine", _TV_SLOT + timedelta(days=1), schedule=_TV_SCHEDULE)
+    assert moved["status"] == "scheduled"
+    assert publish.unschedule("vid1", "01", "ma_chaine")["status"] == "approved"
+
+
+class _TvPublisher:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, clip, account, *, mode, schedule_at=None, config=None, on_tick=None, **kwargs):
+        self.calls.append({"clip": clip, "account": account, "mode": mode})
+        return {"post_url": None, "post_id": "7300000000000000002", "state": "scheduled_on_tiktok",
+                "publish_at": (schedule_at or NOW).isoformat(), "note": None}
+
+
+def test_the_worker_publishes_nothing_after_a_refused_move_of_a_to_verify_entry(isolated_cwd):
+    from clipper import worker
+    from clipper.config import Config
+
+    publish, before = _to_verify_env(isolated_cwd)
+    connected = {"state": "connected", "checked_at": "2026-10-01T10:00:00+00:00", "expires_at": None}
+    (isolated_cwd / "state" / "accounts.json").write_text(json.dumps({"accounts": [
+        {"id": _ACCOUNT, "label": "Compte", "ready_to_publish": True, "login": connected,
+         "slots": _TV_SCHEDULE["slots"], "timezone": "UTC"}]}), encoding="utf-8")
+    config = Config(mode="review", workspace_dir=isolated_cwd / "workspace", output_dir=isolated_cwd / "output",
+                    _sections={"worker": {"queue_path": str(isolated_cwd / "state" / "queue.json")},
+                               "watch": {"presets_dir": str(isolated_cwd / "presets"),
+                                         "base_config": str(isolated_cwd / "config.toml")},
+                               "tiktok": {"stats_interval_h": 0}, "network": {"block_browser": False},
+                               "learning": {"enabled": False}, "repartition": {"enabled": False}})
+
+    with pytest.raises(publish.PublishError, match="TikTok Studio"):
+        publish.move("vid1", "01", "ma_chaine", _TV_SLOT + timedelta(days=1), schedule=_TV_SCHEDULE)
+    publisher = _TvPublisher()
+    w = worker.Worker(config=config, spawner=lambda cmd: None, publisher=publisher,
+                      login_checker=lambda account, *, config=None, now=None: dict(connected))
+    w.tick()
+
+    assert publisher.calls == []                              # rien ne part : le post est peut-etre deja sur TikTok
+    assert _read_state(isolated_cwd, "ma_chaine") == before
