@@ -701,6 +701,7 @@ class Worker:
         self,
         *,
         config: Config | None = None,
+        config_path: str | Path = "config.toml",
         spawner: Callable[[list[str]], Any] | None = None,
         watch_lister: Callable[[str], list[dict[str, Any]]] | None = None,
         publisher: Callable[..., dict[str, Any]] | None = None,
@@ -717,6 +718,9 @@ class Worker:
 
             self._popen = subprocess.Popen
         self.config = config or load_config()
+        self._config_path = Path(config_path)
+        self._config_mtime_ns = self._stat_config_mtime()  # reference : la config deja chargee
+        self._repartition_config = self.config  # relue si config.toml change (plan du soir sans redemarrage)
         self.spawner = spawner
         self._log_handle: Any | None = None
         self._launched_at: datetime | None = None
@@ -1114,14 +1118,30 @@ class Worker:
                 self._logged_learning_errors.add(message)
                 log.error("apprentissage impossible : %s", message)
 
+    def _stat_config_mtime(self) -> int | None:
+        try:
+            return self._config_path.stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def _reloaded_repartition_config(self) -> Config:
+        """Config du plan du soir : ``config.toml`` relu quand son mtime change (une erreur de lecture remonte,
+        la reference n'avance pas : le prochain tour retente, ADR-ad2e)."""
+        mtime = self._stat_config_mtime()
+        if mtime is not None and mtime != self._config_mtime_ns:
+            self._repartition_config = load_config(self._config_path)
+            self._config_mtime_ns = mtime
+        return self._repartition_config
+
     def _repartition_due(self) -> None:
         """Plan du lendemain (SPEC-78dc R7) : ``repartition.run_if_due`` à chaque tour, après l'apprentissage ; coupé
         par ``[repartition] enabled = false``. L'erreur est écrite dans le fichier du jour par la bibliothèque et
         journalisée une seule fois ici, jamais propagée hors du tour (ADR-ad2e)."""
         try:
-            if not self.config.section("repartition")["enabled"]:
+            config = self._reloaded_repartition_config()
+            if not config.section("repartition")["enabled"]:
                 return
-            self.repartition_runner(datetime.now(timezone.utc), config=self.config)
+            self.repartition_runner(datetime.now(timezone.utc), config=config)
         except Exception as exc:  # noqa: BLE001 - jamais un worker mort : l'echec est journalise une fois
             message = str(exc) if isinstance(
                 exc, (repartition.RepartitionError, publish_mod.PublishError, accounts_mod.AccountsError,
