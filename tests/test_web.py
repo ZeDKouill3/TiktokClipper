@@ -11788,3 +11788,113 @@ def test_repartition_get_does_not_refuse_the_lines_already_created_by_a_partial_
     ready, spare = data["accounts"]
     assert [(line["created"], line["refusal"]) for line in ready["lines"]] == [(True, None), (True, None)]
     assert [line["created"] for line in spare["lines"]] == [False, False]
+
+
+# --------------------------------------------------------------------------
+# Audit 10/10 lot D : garde locale de l'API (web-I1, web-I2, web-M1, web-M2, web-M3)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("headers", [
+    {"Origin": "https://evil.test"},
+    {"Sec-Fetch-Site": "cross-site"},
+    {"Origin": "null"},
+])
+def test_lot_d_state_changing_request_from_foreign_origin_is_refused(tmp_path, isolated_cwd, headers):
+    """web-I1 : un POST « simple » d'une page tierce ne passe pas (403), meme sans corps."""
+    resp = client(tmp_path).post(f"/api/clips/{VIDEO_ID}/01/reject", headers=headers)
+    assert resp.status_code == 403
+    assert "origine" in resp.json()["detail"].lower()
+
+
+def test_lot_d_same_origin_and_originless_requests_still_pass(tmp_path, isolated_cwd):
+    c = client(tmp_path)
+    ok = c.post(f"/api/clips/{VIDEO_ID}/01/reject",
+                headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"})
+    assert ok.status_code != 403
+    assert c.post(f"/api/clips/{VIDEO_ID}/01/reject").status_code != 403
+    # une lecture avec une origine etrangere n'est pas une requete modifiante (pas de CORS : illisible)
+    assert c.get("/api/videos", headers={"Origin": "https://evil.test"}).status_code == 200
+
+
+def _loopback_client(tmp_path) -> TestClient:
+    """Navigateur local : adresse cliente de bouclage (la garde Host ne vise que lui, le rebinding DNS)."""
+    return TestClient(create_app(config=make_config(tmp_path)), client=("127.0.0.1", 50000))
+
+
+@pytest.mark.parametrize("host", ["evil.test", "evil.test:8000", "192.168.1.5:8000", "[::2]:8000"])
+def test_lot_d_foreign_host_header_is_refused_on_api_and_media(tmp_path, isolated_cwd, host):
+    """web-I1 : rebinding DNS, le Host n'est pas celui du PC."""
+    c = _loopback_client(tmp_path)
+    assert c.get("/api/videos", headers={"Host": host}).status_code == 403
+    assert c.get("/media/clip/abcdefghijk/01", headers={"Host": host}).status_code == 403
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:8000", "localhost:8000", "[::1]:8000", "[::1]"])
+def test_lot_d_local_host_headers_pass(tmp_path, isolated_cwd, host):
+    """web-M3 : [::1] est local."""
+    assert _loopback_client(tmp_path).get("/api/videos", headers={"Host": host}).status_code == 200
+
+
+def test_lot_d_accounts_guard_accepts_ipv6_loopback_host():
+    assert web_app._is_local_host_header("[::1]:8000")
+    assert web_app._is_local_host_header("[::1]")
+    assert not web_app._is_local_host_header("[::2]:8000")
+
+
+@pytest.mark.parametrize("path", [
+    "/api/videos/..%5Cx",
+    "/api/videos/..%5Cx/moments",
+    "/api/videos/..%5Cx/clips",
+])
+def test_lot_d_backslash_video_id_is_a_400(tmp_path, isolated_cwd, path):
+    """web-I2 : `%5C` ne sort plus du workspace."""
+    resp = client(tmp_path).get(path)
+    assert resp.status_code == 400
+
+
+def test_lot_d_decide_with_backslash_video_id_writes_nothing(tmp_path, isolated_cwd):
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    resp = client(tmp_path).post("/api/videos/..%5Celsewhere/moments/1/decide", json={"decision": "accepted"})
+    assert resp.status_code == 400
+    assert not (outside / "review.json").exists()
+
+
+def test_lot_d_empty_pipeline_json_does_not_break_the_video_list(tmp_path, isolated_cwd, caplog):
+    """web-M1 : un fichier d'etat vide est journalise et ecarte, les autres videos restent listees."""
+    _write_state(tmp_path, VIDEO_ID)
+    broken = tmp_path / "workspace" / "zzzzzzzzzzz"
+    broken.mkdir(parents=True)
+    (broken / "pipeline.json").write_text("", encoding="utf-8")
+    c = client(tmp_path)
+    with caplog.at_level(logging.WARNING):
+        resp = c.get("/api/videos")
+    assert resp.status_code == 200
+    assert [v["video_id"] for v in resp.json()] == [VIDEO_ID]
+    assert "zzzzzzzzzzz" in caplog.text
+    assert c.get("/api/measures").status_code == 200
+
+
+def test_lot_d_stats_bounds_are_paris_days():
+    """web-M2 : « 2026-10-10 » couvre le 10 octobre heure de Paris, pas UTC."""
+    paris = ZoneInfo("Europe/Paris")
+    lower = web_app._stats_bound("since", "2026-10-10", end_of_day=False)
+    upper = web_app._stats_bound("until", "2026-10-10", end_of_day=True)
+    call = datetime.fromisoformat("2026-10-10T00:30:00+02:00")
+    assert lower <= call <= upper
+    assert lower.utcoffset() == paris.utcoffset(datetime(2026, 10, 10))
+    late = datetime.fromisoformat("2026-10-10T23:30:00+02:00")
+    assert late <= upper
+    assert not (datetime.fromisoformat("2026-10-11T00:30:00+02:00") <= upper)
+    # horodatage ISO sans fuseau : Paris aussi
+    assert web_app._stats_bound("since", "2026-10-10T08:00:00", end_of_day=False).utcoffset() == paris.utcoffset(datetime(2026, 10, 10))
+
+
+def test_lot_d_llm_cost_by_day_uses_paris_days(tmp_path, isolated_cwd):
+    video = tmp_path / "workspace" / VIDEO_ID
+    video.mkdir(parents=True)
+    (video / "llm_usage.jsonl").write_text(json.dumps(
+        {"recorded_at": "2026-10-09T22:30:00+00:00", "usage": "moments", "cost_usd": 0.5}) + chr(10), encoding="utf-8")
+    cost = web_app._stats_llm_cost(make_config(tmp_path), None, None)
+    assert cost["by_day"] == {"2026-10-10": 0.5}

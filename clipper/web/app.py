@@ -121,7 +121,10 @@ def _list_states(config: Config) -> list[dict[str, Any]]:
         return []
     states = []
     for path in sorted(root.glob(f"*/{pipeline.STATE_FILE}")):
-        states.append(json.loads(path.read_text(encoding="utf-8")))
+        try:
+            states.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError) as exc:
+            logger.warning("etat illisible, video ecartee de la liste : %s (%s)", path, exc)
     return states
 
 
@@ -1814,7 +1817,7 @@ def _stats_channel_ok(channel: str | None, wanted: str | None) -> bool:
 
 
 def _stats_bound(name: str, value: str | None, *, end_of_day: bool) -> datetime | None:
-    """Borne de periode « AAAA-MM-JJ » ou horodatage ISO 8601 (UTC si sans fuseau)."""
+    """Borne de periode « AAAA-MM-JJ » ou horodatage ISO 8601 (heure de Paris si sans fuseau)."""
     if not value:
         return None
     try:
@@ -1826,7 +1829,7 @@ def _stats_bound(name: str, value: str | None, *, end_of_day: bool) -> datetime 
         ) from exc
     if end_of_day and len(value) == 10:
         bound = bound.replace(hour=23, minute=59, second=59, microsecond=999999)
-    return bound if bound.tzinfo else bound.replace(tzinfo=timezone.utc)
+    return bound if bound.tzinfo else bound.replace(tzinfo=_PARIS)
 
 
 def _stats_period(since: str | None, until: str | None) -> tuple[datetime | None, datetime | None]:
@@ -1868,7 +1871,7 @@ def _stats_read_jsonl(path: Path) -> list[dict[str, Any]]:
 def _stats_llm_cost(config: Config, lower: datetime | None, upper: datetime | None,
                     wanted: str | None = None) -> dict[str, Any]:
     """Couts de workspace/*/llm_usage.jsonl dans la periode : par video, par usage
-    et par jour (UTC) ; les appels sans cout rapporte sont comptes a part."""
+    et par jour (Paris) ; les appels sans cout rapporte sont comptes a part."""
     cost: dict[str, Any] = {"total": 0.0, "unreported_calls": 0, "by_video": {}, "by_usage": {}, "by_day": {}}
     root = Path(config.workspace_dir)
     for path in sorted(root.glob("*/llm_usage.jsonl")) if root.is_dir() else []:
@@ -1882,7 +1885,7 @@ def _stats_llm_cost(config: Config, lower: datetime | None, upper: datetime | No
                 continue
             try:
                 usage = entry["usage"]
-                day = datetime.fromisoformat(stamp).astimezone(timezone.utc).date().isoformat()
+                day = datetime.fromisoformat(stamp).astimezone(_PARIS).date().isoformat()
             except (KeyError, TypeError, ValueError) as exc:
                 raise HTTPException(status_code=500, detail=f"{where} : {exc}") from exc
             video = cost["by_video"].setdefault(video_id, {"cost": 0.0, "calls": 0, "unreported_calls": 0})
@@ -2123,11 +2126,48 @@ def _is_loopback_client(host: str | None) -> bool:
     return (mapped or addr).is_loopback
 
 
-_LOCAL_HOST_HEADER = re.compile(r"(?:127\.0\.0\.1|localhost)(?::\d{1,5})?", re.IGNORECASE)
+_LOCAL_HOST_HEADER = re.compile(r"(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?", re.IGNORECASE)
 
 
 def _is_local_host_header(value: str | None) -> bool:
     return bool(value) and _LOCAL_HOST_HEADER.fullmatch(value) is not None
+
+
+def _split_host(value: str) -> tuple[str, bool]:
+    """(nom d'hote sans port, en minuscules ; True si une adresse IPv6 entre crochets)."""
+    value = value.strip().lower()
+    if value.startswith("["):
+        return value.split("]", 1)[0] + "]", True
+    return value.split(":", 1)[0], False
+
+
+def _is_api_host_allowed(value: str | None) -> bool:
+    """Host d'une requete sur le bouclage : un nom local ou un nom court sans point (jamais un domaine
+    public : le rebinding DNS en exige un). Une adresse IP autre que le bouclage est refusee."""
+    if not value:
+        return False
+    if _is_local_host_header(value):
+        return True
+    name, bracketed = _split_host(value)
+    if bracketed or not name or "." in name:
+        return False
+    return True
+
+
+def _foreign_origin_reason(request: Request) -> str | None:
+    """Raison du refus d'une requete modifiante venue d'une autre origine (CSRF), sinon None.
+    Sans ``Origin`` ni ``Sec-Fetch-Site`` (curl, outils locaux) la requete passe."""
+    if request.method not in _WRITE_METHODS:
+        return None
+    site = request.headers.get("sec-fetch-site")
+    if site is not None and site.lower() not in ("same-origin", "none"):
+        return f"Sec-Fetch-Site {site!r}"
+    origin = request.headers.get("origin")
+    if origin is not None:
+        host = request.headers.get("host") or ""
+        if origin.lower() not in (f"http://{host.lower()}", f"https://{host.lower()}"):
+            return f"Origin {origin!r}"
+    return None
 
 
 def _accounts_guard(request: Request) -> JSONResponse | None:
@@ -2424,6 +2464,17 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def _check_token(request: Request, call_next):
+        if request.url.path.startswith(_PROTECTED_PREFIXES):
+            local_client = _is_loopback_client(request.client.host if request.client else None)
+            if not enforce_auth and local_client and not _is_api_host_allowed(request.headers.get("host")):
+                return JSONResponse(
+                    {"detail": "en-tête Host refusé : la console n'est joignable que par 127.0.0.1 ou localhost"},
+                    status_code=403,
+                )
+            foreign = _foreign_origin_reason(request)
+            if foreign:
+                return JSONResponse(
+                    {"detail": f"requête modifiante d'une autre origine refusée ({foreign})"}, status_code=403)
         if enforce_auth and request.url.path.startswith(_PROTECTED_PREFIXES):
             supplied = request.headers.get(_TOKEN_HEADER) or request.cookies.get(_TOKEN_COOKIE)
             if supplied != token:
@@ -2556,6 +2607,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/videos/{video_id}")
     def get_video(video_id: str) -> dict[str, Any]:
+        _validate_video_id(video_id)
         try:
             state = pipeline.load_state(video_id, config=config)
         except pipeline.PipelineError as exc:
@@ -2569,6 +2621,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/videos/{video_id}/moments")
     def list_moments(video_id: str) -> list[dict[str, Any]]:
+        _validate_video_id(video_id)
         return _list_moments(config, video_id)
 
     @app.get("/api/videos/{video_id}/jury")
@@ -2579,6 +2632,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.post("/api/videos/{video_id}/moments/{moment_id}/decide")
     def decide_moment(video_id: str, moment_id: int, body: DecideBody) -> dict[str, Any]:
+        _validate_video_id(video_id)
         try:
             return pipeline.decide(video_id, moment_id, body.decision, start=body.start, end=body.end,
                                    comment=body.comment, config=config)
@@ -2743,6 +2797,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/api/videos/{video_id}/clips")
     def list_clips(video_id: str) -> list[dict[str, Any]]:
+        _validate_video_id(video_id)
         out_dir = Path(config.output_dir) / video_id
         if not out_dir.is_dir():
             return []
