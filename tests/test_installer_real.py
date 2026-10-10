@@ -229,15 +229,23 @@ def test_installer_real_full_cycle() -> None:
         assert config_path.stat().st_mtime_ns == mtime_before
 
         # ------------------------------------------------------------------
-        # Desinstaller.bat --donnees : app et data disparaissent.
+        # Desinstaller.bat --donnees : app et data disparaissent. Audit 10/10
+        # I1/I2 : c'est la copie app\Desinstaller.bat (etape 9) qui est
+        # lancee, avec app pour dossier courant et sans --app, exactement le
+        # double-clic documente (INSTALLATION.md) ; avant, le test lancait
+        # celui du zip depuis le zip et ne voyait jamais le refus "en cours
+        # d'utilisation" ni la mauvaise resolution de app.
         # ------------------------------------------------------------------
+        app_desinstaller_bat = app_dir / "Desinstaller.bat"
+        assert app_desinstaller_bat.is_file()
         uninstall_result = _run_bat(
-            desinstaller_bat,
-            ["--app", str(app_dir), "--donnees"],
-            cwd=portable_root,
+            app_desinstaller_bat,
+            ["--donnees"],
+            cwd=app_dir,
             timeout=UNINSTALL_TIMEOUT,
         )
         assert uninstall_result.returncode == 0, uninstall_result.stdout + uninstall_result.stderr
+        assert "en cours d'utilisation" not in uninstall_result.stdout + uninstall_result.stderr
         assert not app_dir.exists()
         assert not data_dir.exists()
         succeeded = True

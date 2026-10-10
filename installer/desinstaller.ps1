@@ -4,7 +4,9 @@
 
 .DESCRIPTION
     Compatible Windows PowerShell 5.1. Options (style GNU) : --app <dossier>
-    (par defaut %LOCALAPPDATA%\Clipper\app), --donnees (supprime aussi le
+    (sinon : l'installation a cote de ce script si app\install.json existe,
+    puis celle du pointeur %LOCALAPPDATA%\Clipper\install.json, puis
+    %LOCALAPPDATA%\Clipper\app), --donnees (supprime aussi le
     dossier de donnees sans demander), --dry-run (affiche le plan sans agir,
     jamais interactif). Refuse si la console Clipper (port 8000) ecoute.
     Ne touche jamais claude, Chrome ni les caches de modeles (~/.cache/clipper,
@@ -47,7 +49,19 @@ function Test-ConsolePortListening {
     return ($null -ne $conn)
 }
 
-$App = Join-Path $env:LOCALAPPDATA "Clipper\app"
+function Read-InstallInfo {
+    # Audit 10/10 M1 : un install.json tronque ou edite a la main plantait
+    # ConvertFrom-Json en exception brute avant toute suppression ; ici un
+    # Fail qui nomme le fichier et le remede (ADR-ad2e).
+    param([string]$Path, [string]$Quoi)
+    try {
+        return (Get-Content -Path $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        Fail "$Quoi illisible ($Path) : $($_.Exception.Message)" "verifie ou supprime ce fichier, puis relance Desinstaller.bat (avec --app <dossier app> si besoin)"
+    }
+}
+
+$App = $null
 $Donnees = $false
 $DryRun = $false
 
@@ -55,6 +69,11 @@ $i = 0
 while ($i -lt $RawArgs.Count) {
     $token = $RawArgs[$i]
     if ($token -eq "--app") {
+        # Audit 10/10 M3 : meme garde que install.ps1, sinon "Impossible de
+        # lier l'argument au parametre Path" (index hors bornes) brut.
+        if ($i + 1 -ge $RawArgs.Count) {
+            Fail "option $token sans valeur" "passe un dossier apres $token, par exemple $token C:\Clipper\app"
+        }
         $i++
         $App = $RawArgs[$i]
     } elseif ($token -eq "--donnees") {
@@ -70,6 +89,41 @@ while ($i -lt $RawArgs.Count) {
 if (Test-ConsolePortListening -Port $Port) {
     Fail "la console Clipper tourne (le port $Port ecoute)" "ferme la console (fenetre 'Clipper serve') puis relance Desinstaller.bat"
 }
+
+# Audit 10/10 I2 : sans --app, l'installation a desinstaller est d'abord
+# celle a cote de ce script (app\installer\desinstaller.ps1, copie par
+# install.ps1 Step9 : app\install.json existe), puis celle du pointeur
+# %LOCALAPPDATA%\Clipper\install.json (ecrit par Step11 exactement pour
+# retrouver un --app personnalise), et seulement sinon le dossier par defaut.
+# Avant : toujours %LOCALAPPDATA%\Clipper\app, donc un Desinstaller.bat copie
+# dans un --app personnalise refusait de desinstaller sa propre installation.
+$pointerDir = Join-Path $env:LOCALAPPDATA "Clipper"
+$pointerPath = Join-Path $pointerDir "install.json"
+if ($App) {
+    $appSource = "option --app"
+} else {
+    $aCote = Split-Path -Parent $PSScriptRoot
+    if ($aCote -and (Test-Path (Join-Path $aCote "install.json"))) {
+        $App = $aCote
+        $appSource = "install.json a cote de ce script"
+    } elseif (Test-Path $pointerPath) {
+        $pointerInfo = Read-InstallInfo -Path $pointerPath -Quoi "pointeur d'installation"
+        if (-not $pointerInfo.app) {
+            Fail "pointeur d'installation sans champ app ($pointerPath)" "passe --app <dossier app> ou supprime ce fichier"
+        }
+        $App = [string]$pointerInfo.app
+        $appSource = "pointeur $pointerPath"
+    } else {
+        $App = Join-Path $env:LOCALAPPDATA "Clipper\app"
+        $appSource = "dossier par defaut"
+    }
+}
+try {
+    $App = Get-CheminNormalise $App
+} catch {
+    Fail "dossier app invalide ($App, $appSource) : $($_.Exception.Message)" "passe --app <dossier app> valide"
+}
+Write-Host "Desinstallation : installation $App ($appSource)"
 
 # I6 : refuse si $App ne ressemble pas a une installation Clipper (aucun
 # install.json ni version.txt), sinon un --app absent ou une faute de frappe
@@ -94,7 +148,7 @@ Write-Host "Desinstallation : $shortcut sera supprime"
 $data = $null
 $installJsonPath = Join-Path $App "install.json"
 if (Test-Path $installJsonPath) {
-    $info = Get-Content -Path $installJsonPath -Raw | ConvertFrom-Json
+    $info = Read-InstallInfo -Path $installJsonPath -Quoi "install.json de l'installation"
     if ($info.data) {
         $data = [string]$info.data
     }
@@ -104,8 +158,6 @@ if (Test-Path $installJsonPath) {
 # toujours a cet emplacement fixe, meme avec --app personnalise). Il n'est
 # retire que s'il designe CE $App ; un pointeur d'une autre installation ou
 # illisible est laisse, et le dit (ADR-ad2e : aucun repli silencieux).
-$pointerDir = Join-Path $env:LOCALAPPDATA "Clipper"
-$pointerPath = Join-Path $pointerDir "install.json"
 $pointerSupprime = $false
 $pointerRaison = ""
 if (Test-Path $pointerPath) {
@@ -161,6 +213,21 @@ if (-not $removeData -and $data) {
 if ($removeData -and $data) {
     Write-Host "Desinstallation : $data sera aussi supprime"
 }
+
+# Audit 10/10 I1 : lance par double-clic sur app\Desinstaller.bat (le chemin
+# documente), ce processus a app pour dossier courant et Windows refuse de
+# supprimer le dossier courant d'un processus ("en cours d'utilisation") :
+# on en sort d'abord, pour PowerShell (Set-Location) et pour le processus
+# lui-meme ([Environment]::CurrentDirectory, que Set-Location ne change pas).
+# Desinstaller.bat fait de meme pour cmd.exe (cd /d %TEMP%) ; TEMP plutot que
+# le parent de app, qui peut etre %LOCALAPPDATA%\Clipper, lui aussi supprime
+# plus bas quand il est vide.
+$horsApp = $env:TEMP
+if (-not $horsApp -or -not (Test-Path $horsApp)) {
+    $horsApp = $env:SystemRoot
+}
+Set-Location $horsApp
+[Environment]::CurrentDirectory = $horsApp
 
 if (Test-Path $App) {
     Remove-Item -Recurse -Force -Path $App

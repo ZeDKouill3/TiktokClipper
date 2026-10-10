@@ -3,10 +3,12 @@ setlocal
 rem Lanceur genere par install.ps1 (Invoke-Step9-Launcher) : les deux lignes
 rem ci-dessous sont remplies avec les chemins absolus choisis a l'installation.
 rem Reprend la logique netstat / start / timeout de Clipper.bat du depot.
-set APP=__APP__
-set DATA=__DATA__
-set PATH=%APP%\ffmpeg\bin;%APP%\.venv\Scripts;%PATH%
-set URL=http://127.0.0.1:8000
+rem Paires entieres quotees (audit 10/10 M4) : un chemin contenant & ferait
+rem executer la suite comme une commande et tronquerait APP/DATA.
+set "APP=__APP__"
+set "DATA=__DATA__"
+set "PATH=%APP%\ffmpeg\bin;%APP%\.venv\Scripts;%PATH%"
+set "URL=http://127.0.0.1:8000"
 
 cd /d "%DATA%"
 

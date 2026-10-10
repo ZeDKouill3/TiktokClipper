@@ -108,16 +108,88 @@ function Get-GpuDecision {
     if (-not $cmd) {
         return "cpu"
     }
+    # Audit 10/10 I5 : un nvidia-smi present mais en echec (pilote casse, GPU
+    # retire, machine virtuelle) ecrit un message d'erreur non vide et sort
+    # en code non nul ; "sortie non vide" seule le prenait pour un GPU et
+    # installait l'extra [cuda] (~2 Go) pour rien (R4). Detection = code 0
+    # ET au moins un nom de GPU renvoye par la requete.
+    $code = 1
+    $output = $null
     try {
-        $output = & nvidia-smi 2>$null
+        $output = & nvidia-smi --query-gpu=name --format=csv,noheader 2>$null
+        $code = $LASTEXITCODE
     } catch {
+        $script:GpuDetail = "nvidia-smi present mais injoignable : $($_.Exception.Message)"
         return "cpu"
     }
     $text = ($output | Out-String).Trim()
-    if ($text.Length -gt 0) {
-        return "cuda"
+    if ($code -ne 0) {
+        $script:GpuDetail = "nvidia-smi present mais en echec (code $code) : aucun GPU detecte"
+        return "cpu"
     }
-    return "cpu"
+    if ($text.Length -eq 0) {
+        $script:GpuDetail = "nvidia-smi ne renvoie aucun nom de GPU : aucun GPU detecte"
+        return "cpu"
+    }
+    $script:GpuDetail = "nvidia-smi : $(($text -split "`n")[0].Trim())"
+    return "cuda"
+}
+
+# Detail de la decision GPU (renseigne par Get-GpuDecision quand nvidia-smi
+# a ete interroge), affiche a l'etape 3 pour que l'utilisateur sache
+# pourquoi il est en CPU malgre un nvidia-smi present (ADR-ad2e).
+$script:GpuDetail = ""
+
+function Resolve-CheminOption {
+    <#
+    .SYNOPSIS
+        Nettoie, verifie et rend absolu un chemin recu d'une option (--app,
+        --data) ou relu d'un install.json. Audit 10/10 M2 : `--data "C:\Mes
+        Docs\"` (antislash final) arrive ici termine par un guillemet, que
+        powershell -File a pris pour un guillemet echappe ; un caractere
+        interdit (| < > " ...) est refuse tout de suite par Fail, jamais par
+        une exception .NET brute a l'etape 7 (M1 pour un pointeur corrompu).
+    #>
+    param([string]$Chemin, [string]$Source)
+    $propre = $Chemin.TrimEnd('"')
+    # Antislash final retire, sauf la racine d'un lecteur (D:\).
+    while ($propre.Length -gt 3 -and $propre.EndsWith('\')) {
+        $propre = $propre.Substring(0, $propre.Length - 1)
+    }
+    if ($propre.Trim().Length -eq 0) {
+        Fail "$Source : chemin vide" "passe un dossier, par exemple C:\Clipper"
+    }
+    $interdits = [IO.Path]::GetInvalidPathChars() + [char[]]@('"', '<', '>', '|', '*', '?')
+    foreach ($c in $interdits) {
+        if ($propre.IndexOf($c) -ge 0) {
+            Fail "$Source : chemin invalide ($Chemin), caractere interdit" "corrige le chemin (sans guillemet ni < > | * ?) puis relance Installer.bat"
+        }
+    }
+    # M2 (ancien) : chemins toujours resolus en absolu, jamais ecrits relatifs
+    # tels quels dans le lanceur ou install.json (un "--app monapp" depuis un
+    # terminal casserait le lanceur et le raccourci des qu'ils sont lances
+    # d'ailleurs).
+    try {
+        return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($propre)
+    } catch {
+        Fail "$Source : chemin invalide ($Chemin) : $($_.Exception.Message)" "corrige le chemin puis relance Installer.bat"
+    }
+}
+
+function Read-InstallInfo {
+    <#
+    .SYNOPSIS
+        Lit un install.json (pointeur %LOCALAPPDATA%\Clipper\install.json ou
+        <app>\install.json). Audit 10/10 M1 : un fichier tronque ou edite a la
+        main plantait ConvertFrom-Json en exception brute ; ici un Fail qui
+        nomme le fichier et le remede (ADR-ad2e).
+    #>
+    param([string]$Path, [string]$Quoi)
+    try {
+        return (Get-Content -Path $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        Fail "$Quoi illisible ($Path) : $($_.Exception.Message)" "supprime ce fichier ou passe --app et --data explicitement"
+    }
 }
 
 function Resolve-Wheel {
@@ -149,8 +221,31 @@ function Format-ClipperBat {
 # seule la ligne de decision est affichee.
 # --------------------------------------------------------------------------
 
+function Get-PrevolManques {
+    <#
+    .SYNOPSIS
+        Audit 10/10 M6 : ce que l'etape 3 verifiera sans aucun reseau (uv.exe,
+        wheel, overrides.txt du zip), controle AVANT la suppression de .venv :
+        un zip incomplet (telechargement interrompu, antivirus) ne doit jamais
+        detruire une installation existante puis echouer.
+    #>
+    param([string]$Root, [string]$Uv)
+    $manques = @()
+    if (-not (Test-Path $Uv)) {
+        $manques += "uv.exe introuvable ($Uv)"
+    }
+    if (-not (Resolve-Wheel -Root $Root)) {
+        $manques += "wheel clipper introuvable a cote d'Installer.bat ($Root)"
+    }
+    $overridesPath = Join-Path $Root "installer\overrides.txt"
+    if (-not (Test-Path $overridesPath)) {
+        $manques += "fichier d'overrides introuvable ($overridesPath)"
+    }
+    return $manques
+}
+
 function Invoke-Step1-Prepare {
-    param([string]$App, [string]$Data, [string]$NewVersion, [int]$Port, [switch]$DryRun)
+    param([string]$App, [string]$Data, [string]$NewVersion, [int]$Port, [string]$Root, [string]$Uv, [switch]$DryRun)
     $versionFile = Join-Path $App "version.txt"
     $venvDir = Join-Path $App ".venv"
     $isUpdate = $false
@@ -165,18 +260,32 @@ function Invoke-Step1-Prepare {
         $isUpdate = $true
         Write-Step 1 "Preparation : app=$App (mise a jour $oldVersion -> $NewVersion) ; data=$Data"
         Write-Detail ".venv sera supprime puis recree (python/ et ffmpeg/ conserves)"
-        if ($DryRun -and (Test-ConsolePortListening -Port $Port)) {
-            Write-Detail "le port $Port est deja occupe : une vraie installation s'arreterait ici avant de toucher .venv"
-        }
     } else {
         Write-Step 1 "Preparation : app=$App (premiere installation, version $NewVersion) ; data=$Data"
         if (Test-Path $venvDir) {
             Write-Detail ".venv existant (installation precedente interrompue) sera supprime puis recree"
         }
     }
-    if (-not $DryRun) {
-        if ($isUpdate -and (Test-ConsolePortListening -Port $Port)) {
+    # R6, et audit 10/10 M5 : le port de la console est controle des qu'un
+    # .venv existe (premiere installation interrompue apres l'etape 9 avec la
+    # console lancee comprise), pas seulement en mise a jour : sinon
+    # Remove-Item .venv tombe sur un python.exe verrouille.
+    $venvEnJeu = $isUpdate -or (Test-Path $venvDir)
+    $portOccupe = $venvEnJeu -and (Test-ConsolePortListening -Port $Port)
+    $manques = Get-PrevolManques -Root $Root -Uv $Uv
+    if ($DryRun) {
+        if ($portOccupe) {
+            Write-Detail "le port $Port est deja occupe : une vraie installation s'arreterait ici avant de toucher .venv"
+        }
+        foreach ($m in $manques) {
+            Write-Detail "$m : une vraie installation s'arreterait ici avant de toucher .venv"
+        }
+    } else {
+        if ($portOccupe) {
             Fail "la console Clipper tourne (port $Port)" "ferme la fenetre 'Clipper serve' puis relance Installer.bat"
+        }
+        if ($manques.Count -gt 0) {
+            Fail ($manques -join " ; ") "retelecharge le zip complet depuis la page des releases (rien n'a ete modifie)"
         }
         New-Item -ItemType Directory -Force -Path $App | Out-Null
         New-Item -ItemType Directory -Force -Path $Data | Out-Null
@@ -222,6 +331,9 @@ function Invoke-Step3-Venv {
         Write-Step 3 "Environnement sous $venvDir ; GPU : [cuda] detecte, extra clipper[cuda] installe"
     } else {
         Write-Step 3 "Environnement sous $venvDir ; GPU : CPU (transcription plus lente)"
+    }
+    if ($script:GpuDetail) {
+        Write-Detail $script:GpuDetail
     }
     if ($DryRun) {
         return
@@ -622,28 +734,59 @@ if ($Cpu -and $Cuda) {
     Fail "options --cpu et --cuda incompatibles (choisis l'une des deux, ou aucune pour la detection automatique)" "relance avec --cpu ou --cuda, jamais les deux"
 }
 
+if ($AppGiven) {
+    $App = Resolve-CheminOption -Chemin $App -Source "option --app"
+}
+if ($DataGiven) {
+    $Data = Resolve-CheminOption -Chemin $Data -Source "option --data"
+}
+
 # I5 : sans --app ni --data, relit le pointeur laisse par une installation
 # precedente (toujours a cet emplacement fixe, meme avec --app personnalise,
 # voir Step11-Finish) plutot que de retomber sur les chemins par defaut, qui
 # pointeraient vers une installation vide.
+# Audit 10/10 I3 : chaque option est relue separement (R2 "relues comme
+# defauts") : --app seul reprend le data de <app>\install.json (sinon une
+# mise a jour pointait lanceur et raccourci vers Documents\Clipper vide,
+# bibliotheque "perdue") ; --data seul reprend le app du pointeur.
+$pointerPath = Join-Path $env:LOCALAPPDATA "Clipper\install.json"
 if (-not $AppGiven -and -not $DataGiven) {
-    $pointerPath = Join-Path $env:LOCALAPPDATA "Clipper\install.json"
     if (Test-Path $pointerPath) {
-        $pointerInfo = Get-Content -Path $pointerPath -Raw | ConvertFrom-Json
+        $pointerInfo = Read-InstallInfo -Path $pointerPath -Quoi "pointeur d'installation"
         if ($pointerInfo.app) {
-            $App = [string]$pointerInfo.app
+            $App = Resolve-CheminOption -Chemin ([string]$pointerInfo.app) -Source "pointeur $pointerPath, champ app"
         }
         if ($pointerInfo.data) {
-            $Data = [string]$pointerInfo.data
+            $Data = Resolve-CheminOption -Chemin ([string]$pointerInfo.data) -Source "pointeur $pointerPath, champ data"
+        }
+    }
+} elseif ($AppGiven -and -not $DataGiven) {
+    $appInfoPath = Join-Path $App "install.json"
+    if (Test-Path $appInfoPath) {
+        $appInfo = Read-InstallInfo -Path $appInfoPath -Quoi "install.json de l'installation"
+        if ($appInfo.data) {
+            $Data = Resolve-CheminOption -Chemin ([string]$appInfo.data) -Source "$appInfoPath, champ data"
+        }
+    }
+} elseif ($DataGiven -and -not $AppGiven) {
+    if (Test-Path $pointerPath) {
+        $pointerInfo = Read-InstallInfo -Path $pointerPath -Quoi "pointeur d'installation"
+        if ($pointerInfo.app) {
+            $App = Resolve-CheminOption -Chemin ([string]$pointerInfo.app) -Source "pointeur $pointerPath, champ app"
         }
     }
 }
 
-# M2 : chemins toujours resolus en absolu, jamais ecrits relatifs tels quels
-# dans le lanceur ou install.json (un "--app monapp" depuis un terminal
-# casserait le lanceur et le raccourci des qu'ils sont lances d'ailleurs).
-$App = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($App)
-$Data = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Data)
+# Audit 10/10 I4 : data egal a app ou sous app est refuse. desinstaller.ps1
+# supprime app sans condition, avant et independamment de la reponse a
+# "Supprimer aussi les donnees ?" : workspace/, output/ et state/ partiraient
+# avec app malgre un N (INSTALLATION.md : "les donnees sont conservees par
+# defaut"). Comparaison insensible a la casse, sur un separateur entier
+# (C:\x et C:\xy restent deux dossiers voisins).
+$appPrefixe = $App.TrimEnd('\') + '\'
+if (($Data -ieq $App) -or $Data.StartsWith($appPrefixe, [StringComparison]::OrdinalIgnoreCase)) {
+    Fail "le dossier de donnees ($Data) est le dossier programme ($App) ou se trouve dedans : la desinstallation les effacerait ensemble" "choisis un --data hors de --app, par exemple --app C:\Clipper\app --data C:\Clipper\donnees"
+}
 
 $versionFile = Join-Path (Split-Path -Parent $PSScriptRoot) "version.txt"
 if (-not (Test-Path $versionFile)) {
@@ -655,7 +798,7 @@ $uv = Join-Path $root "uv.exe"
 $templatePath = Join-Path $PSScriptRoot "Clipper.bat.template"
 $premierClipSource = Join-Path $PSScriptRoot "PREMIER-CLIP.txt"
 
-$isUpdate = Invoke-Step1-Prepare -App $App -Data $Data -NewVersion $newVersion -Port $Port -DryRun:$DryRun
+$isUpdate = Invoke-Step1-Prepare -App $App -Data $Data -NewVersion $newVersion -Port $Port -Root $root -Uv $uv -DryRun:$DryRun
 Invoke-Step2-Python -App $App -Uv $uv -DryRun:$DryRun
 $device = Get-GpuDecision -Cpu:$Cpu -Cuda:$Cuda
 Invoke-Step3-Venv -App $App -Root $root -Uv $uv -Device $device -DryRun:$DryRun
