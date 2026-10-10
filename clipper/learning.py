@@ -128,10 +128,19 @@ def _wanted_caption(sidecar: dict[str, Any]) -> str:
     return tiktok._squash(" ".join([str(sidecar.get("caption") or ""), *map(str, sidecar.get("hashtags") or [])]))
 
 
+def _shown_text(shown: Any) -> str:
+    return tiktok._squash(shown).rstrip("….").rstrip() if isinstance(shown, str) else ""
+
+
 def _caption_matches(wanted: str, shown: Any) -> bool:
     """Meme regle que ``tiktok.find_post_link`` : l'une commence par l'autre (texte relevé parfois tronqué)."""
-    text = tiktok._squash(shown).rstrip("….").rstrip() if isinstance(shown, str) else ""
+    text = _shown_text(shown)
     return bool(text and wanted and (wanted.startswith(text) or text.startswith(wanted)))
+
+
+def _caption_equal(wanted: str, shown: Any) -> bool:
+    """Legende identique (au tronquage ``…`` pres) : prime sur le simple prefixe."""
+    return bool(wanted) and _shown_text(shown) == wanted
 
 
 def _read_sidecars(config: Config | None) -> list[tuple[Path, dict[str, Any]]]:
@@ -174,29 +183,55 @@ def link_posts(account: str, *, config: Config | None = None, now: datetime | No
 
 def _link_posts(account: str, settings: dict[str, Any], config: Config | None, now: datetime | None) -> dict[str, Any]:
     window = timedelta(hours=float(settings["link_window_h"]))
-    posts = tiktok.merged_posts(tiktok.read_history(account, config=config))
+    history = tiktok.read_history(account, config=config)
+    posts = tiktok.merged_posts(history)
     sidecars = _read_sidecars(config)  # d'abord : un sidecar illisible est une LearningError, pas une TikTokError
     taken = {found["post_id"] for found in tiktok._published_posts(account, config)}
     stamp = _now_iso(now)
     linked: list[dict[str, str]] = []
     unlinked: list[dict[str, Any]] = []
 
+    deleted = tiktok.deleted_post_ids(history)  # SPEC-00db R1 : posts supprimés exclus
+    todo: list[dict[str, Any]] = []
     for path, sidecar in sidecars:
         post = sidecar.get("tiktok_post")
         if (not isinstance(post, dict) or post.get("account") != account or post.get("id") or post.get("url")
                 or sidecar.get("removed_from_platform")):  # post supprimé de la plateforme : jamais rattaché
             continue
-        video_id, clip_id = path.parent.name, path.stem
         planned = tiktok._naive_utc(post.get("publish_at"))
         wanted = _wanted_caption(sidecar)
-        matches = []
+        cands: dict[str, bool] = {}  # post_id -> légende identique ?
         for post_id, seen in posts.items():
-            if post_id in taken or planned is None or not _caption_matches(wanted, seen.get("caption")):
+            if post_id in taken or post_id in deleted or planned is None or not _caption_matches(wanted, seen.get("caption")):
                 continue
             posted = tiktok._naive_utc(seen.get("posted_at"))
             if posted is not None and abs(posted - planned) <= window:
-                matches.append(post_id)
-        if len(matches) == 1:
+                cands[post_id] = _caption_equal(wanted, seen.get("caption"))
+        todo.append({"path": path, "sidecar": sidecar, "post": post, "planned": planned, "cands": cands})
+
+    exact_owned = {pid for item in todo for pid, exact in item["cands"].items() if exact}
+    for item in todo:
+        cands = {pid: exact for pid, exact in item["cands"].items() if exact or pid not in exact_owned}
+        item["matches"] = [pid for pid, exact in cands.items() if exact] or list(cands)  # égalité exacte avant préfixe
+    rivals: dict[str, int] = {}
+    for item in todo:
+        for pid in item["matches"]:
+            rivals[pid] = rivals.get(pid, 0) + 1
+    for item in todo:
+        if any(rivals[pid] > 1 for pid in item["matches"]):  # des clips se disputent ces posts : l'heure prévue à la minute départage
+            at_minute = [pid for pid in item["matches"]
+                         if (posted := tiktok._naive_utc(posts[pid].get("posted_at"))) is not None
+                         and posted.replace(second=0, microsecond=0) == item["planned"].replace(second=0, microsecond=0)]
+            item["matches"] = at_minute or item["matches"]  # la fenêtre à défaut
+    claimed: dict[str, int] = {}
+    for item in todo:
+        for pid in item["matches"]:
+            claimed[pid] = claimed.get(pid, 0) + 1
+
+    for item in todo:
+        path, sidecar, post, matches = item["path"], item["sidecar"], item["post"], item["matches"]
+        video_id, clip_id = path.parent.name, path.stem
+        if len(matches) == 1 and claimed[matches[0]] == 1:
             post_id = matches[0]
             url = posts[post_id].get("post_url")
             channel = _entry_channel(video_id, clip_id, config)
@@ -205,12 +240,14 @@ def _link_posts(account: str, settings: dict[str, Any], config: Config | None, n
                                     state_dir=config.section("publish")["state_dir"] if config is not None else None)
             sidecar["tiktok_post"] = {**post, "id": post_id, "url": url, "linked_by": "stats", "linked_at": stamp}
             channel_mod.atomic_write_json(path, sidecar)
-            taken.add(post_id)
             linked.append({"video_id": video_id, "clip_id": clip_id, "post_id": post_id})
         else:
-            unlinked.append({"video_id": video_id, "clip_id": clip_id, "account": account,
-                             "reason": "ambiguous" if matches else "none", "matches": sorted(matches),
-                             "checked_at": stamp})
+            record = {"video_id": video_id, "clip_id": clip_id, "account": account,
+                      "reason": "ambiguous" if matches else "none", "matches": sorted(matches), "checked_at": stamp}
+            shared = max((claimed[pid] for pid in matches), default=0)
+            if len(matches) == 1 and shared > 1:
+                record["detail"] = f"post partagé par {shared} clips"
+            unlinked.append(record)
 
     links = _read_links(settings)
     mine = {(r["video_id"], r["clip_id"]) for r in [*unlinked, *linked]}
@@ -377,11 +414,11 @@ def _number(value: Any) -> float | None:
 
 
 def _pct_watched(avg_watch_s: Any, duration: Any) -> float | None:
-    """Part vue du clip (0 a 1, 3 decimales) ; null si l'un des deux manque ou si la duree n'est pas > 0 (ADR-ad2e)."""
+    """Part vue du clip (0 a 1, bornee, 3 decimales) ; null si l'un des deux manque ou si la duree n'est pas > 0 (ADR-ad2e)."""
     watch, length = _number(avg_watch_s), _number(duration)
     if watch is None or length is None or length <= 0:
         return None
-    return round(watch / length, 3)
+    return round(min(1.0, watch / length), 3)  # TikTok compte les boucles dans le temps moyen : jamais > 1
 
 
 def _perspectives(cache: dict[str, Any], video_id: str) -> dict[str, str] | None:
