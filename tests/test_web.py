@@ -1834,15 +1834,12 @@ def test_dashboard_screen_is_wired_with_every_section_and_empty_state():
     assert "/static/screens/dashboard.js" in page
     assert page.index("/static/screens.js") < page.index("/static/screens/dashboard.js")
     # une section par bloc de donnees (data-section=<cle>), chacune avec un etat vide explicite
-    assert 'data-section="${key}"' in js
-    for section in ("running", "queue", "failed", "queued", "watch_pending", "clips_to_review",
-                    "next_publications", "llm_cost", "hardware"):
+    assert 'data-section="${key}"' in js and 'data-section="todo"' in js and 'data-section="worker"' in js
+    for section in ("running", "queue", "recent", "next_publications", "llm_cost", "disk"):
         assert f'dashSection("{section}"' in js, section
-    for empty in ("Aucune vidéo en cours", "La file est vide", "Aucun échec", "Aucune vidéo en attente de reprise",
-                  "Aucune VOD à confirmer", "Aucun clip à valider", "Aucune publication programmée",
+    for empty in ("Rien ne tourne", "La file est vide", "Rien à faire", "Aucune vidéo terminée", "Aucune publication programmée",
                   "Aucun appel au modèle", "CPU"):
-        assert empty in js, empty
-    # mise a jour sur evenement SSE, donnees lues sur /api/dashboard, erreurs affichees
+        assert empty in js, empty    # mise a jour sur evenement SSE, donnees lues sur /api/dashboard, erreurs affichees
     assert "/api/dashboard" in js
     assert "clipper:event" in js
     assert "_error" in js
@@ -3092,8 +3089,9 @@ def test_dashboard_vod_section_is_wired_to_confirm_and_ignore():
     assert "Confirmer" in watch_js and "Ignorer" in watch_js and "Voir la VOD" in watch_js
     assert "confirmDialog" in watch_js                   # ignorer : confirmation
     assert "toastError" in watch_js                      # erreur affichée, jamais avalée
-    assert "watchVodRow" in dash_js and "VOD à confirmer" in dash_js
-    assert "TASK-7508" in css
+    assert "dashVodRow" in dash_js and "VOD à confirmer" in dash_js and "wireWatch(body)" in dash_js
+    assert "data-vod-confirm" in dash_js and "data-vod-ignore" in dash_js and "data-channel" in dash_js
+    assert ".watch-vod" not in css                       # ses règles sont passées dans le bloc dashboard de v3.css (d3-*)
 
 
 # --------------------------------------------------------------------------
@@ -7749,17 +7747,12 @@ def test_the_stats_screen_no_longer_has_the_csv_import_nor_the_internal_measures
     assert ".stats-import" not in css
 
 
-def test_the_dashboard_now_carries_the_internal_measures():
+def test_the_dashboard_no_longer_carries_the_internal_measures_they_belong_to_the_statistics_screen():
     js = _static("screens", "dashboard.js")
 
-    assert "/api/measures" in js and "dashMeasuresSection()" in js and "wireMeasures(body)" in js
-    for block in ("Coûts du modèle de langage", "Durée par étape", "Vidéos par statut", "data-block=\"llm\"",
-                  "data-block=\"steps\"", "data-block=\"counts\"", "Mesures internes"):
-        assert block in js, block
-    for field in ("llm_cost", "by_video", "by_usage", "by_day", "steps", "counts"):
-        assert field in js
-    assert "data-measures-channel" in js and "data-measures-preset" in js and "Tous les styles" in js
-
+    assert "/api/measures" not in js and "dashMeasuresSection" not in js and "wireMeasures" not in js
+    for block in ("Coûts du modèle de langage", "Durée par étape", "Vidéos par statut", "Mesures internes", "by_video"):
+        assert block not in js, block
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent du PATH")
 def test_stats_evolutions_are_signed_percentages_and_null_is_a_dash():
