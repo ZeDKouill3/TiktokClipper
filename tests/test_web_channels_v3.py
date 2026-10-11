@@ -74,6 +74,8 @@ def test_channels_block_is_the_last_block_of_v3_css_and_stays_in_budget():
     v3 = _static("v3.css")
     assert len(v3.encode("utf-8")) <= 124_162
     assert v3.rindex("/* >>> channels */") > v3.rindex("/* <<< dashboard */")
-    assert v3.rstrip().endswith("/* <<< channels */")
-    block = v3[v3.rindex("/* >>> channels */"):]
+    # U12 (TASK-2f3bcef584ca) ajoute son bloc « settings » en fin de v3.css : channels reste le dernier
+    # bloc avant lui, après dashboard (même invariant d'ordre, sans exiger d'être le dernier).
+    assert v3.rindex("/* <<< channels */") < v3.rindex("/* >>> settings */")
+    block = v3[v3.rindex("/* >>> channels */"):v3.rindex("/* >>> settings */")]
     assert "var(--surface" not in block and "var(--line" not in block and "var(--faint" not in block  # jetons v3 seulement

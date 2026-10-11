@@ -559,21 +559,6 @@ input[type="color"] { width: 36px; height: 36px; padding: 2px; border-radius: va
 .soon::after { content: "Bientôt : outcomes.py"; position: absolute; top: 12px; right: 12px; font-size: 11px; font-weight: 600; color: var(--info); background: var(--info-soft); padding: 2px 8px; border-radius: 10px; }
 /* <<< stats */
 
-/* >>> settings */
-/* ---------- Settings ---------- */
-.settings { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 32px; align-items: start; }
-.settings-nav { position: sticky; top: calc(var(--topbar) + 24px); display: flex; flex-direction: column; gap: 2px; }
-.settings-nav a { padding: 8px 12px; border-radius: var(--r); font-size: 14px; color: var(--muted); font-weight: 500; transition: color 160ms ease, background-color 160ms ease; }
-.settings-nav a.on { color: var(--text); background: var(--surface-2); }
-.settings section { scroll-margin-top: calc(var(--topbar) + 24px); }
-.save-bar {
-  position: sticky; bottom: 24px; z-index: 10; margin-top: 24px; display: flex; align-items: center; gap: 12px;
-  padding: 12px 16px 12px 24px; border-radius: var(--r-lg); background: var(--surface-3); border: 1px solid var(--line-2); box-shadow: var(--shadow-pop);
-  transform: translateY(24px); opacity: 0; pointer-events: none; transition: transform 300ms var(--ease-out), opacity 200ms ease;
-}
-.save-bar.show { transform: none; opacity: 1; pointer-events: auto; }
-.save-bar p { flex: 1; font-size: 14px; }
-/* <<< settings */
 /* >>> shared */
 .code { font-family: var(--font-mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 16px; color: var(--text-2); white-space: pre; overflow: auto; line-height: 1.6; }
 
@@ -682,39 +667,6 @@ input[type="color"] { width: 36px; height: 36px; padding: 2px; border-radius: va
 .legend i { width: 10px; height: 10px; border-radius: 3px; }
 /* <<< shared */
 
-/* >>> settings */
-/* ---------- Réglages (TASK-ee5d) ---------- */
-.screen[id="screen-settings"] [data-body] { background: none; border: 0; box-shadow: none; padding: 0; }
-.set-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 32px; align-items: start; }
-.set-nav { position: sticky; top: calc(var(--topbar) + 24px); display: flex; flex-direction: column; gap: 2px; }
-.set-nav a { padding: 8px 12px; border-radius: var(--r); font-size: 14px; font-weight: 500; color: var(--muted); transition: color 160ms ease, background-color 160ms ease; }
-.set-nav a:hover { color: var(--text); background: var(--surface-2); }
-.set-stack section { scroll-margin-top: calc(var(--topbar) + 24px); }
-.set-warning { display: flex; align-items: flex-start; gap: 8px; }
-.set-field.invalid .input { border-color: var(--bad); }
-.set-sub { font-size: 15px; margin: 24px 0 4px; }
-.set-note { margin: 0 0 12px; font-size: 13px; max-width: 70ch; }
-.set-usages { margin-top: 8px; }
-.set-usages .input { height: 32px; font-size: 13px; }
-.set-add { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
-.set-add .input { max-width: 280px; }
-.set-backends { display: flex; flex-direction: column; gap: 8px; }
-.set-backend { border: 1px solid var(--line); border-radius: var(--r); }
-.set-backend > summary { padding: 12px 16px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
-.set-backend > .form-grid { padding: 4px 16px 16px; }
-.set-access dd { margin: 0; overflow-wrap: anywhere; }
-.set-cmd { padding: 4px 8px; border-radius: var(--r); background: var(--surface-2); }
-.set-savebar { position: sticky; bottom: 16px; display: none; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); }
-.set-savebar.show { display: flex; }
-.set-savebar p { flex: 1; margin: 0; font-size: 14px; }
-@media (max-width: 900px) {
-  .set-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .set-nav { position: static; flex-direction: row; overflow-x: auto; }
-  .set-nav a, .set-savebar .btn, .set-add .btn, .set-usages .input, .set-usages .icon-btn { min-height: 44px; }
-  .set-add .input { max-width: none; flex: 1 1 100%; }
-  .set-savebar { flex-wrap: wrap; }
-}
-/* <<< settings */
 
 
 /* >>> stats */

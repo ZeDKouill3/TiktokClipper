@@ -313,7 +313,8 @@ def _rule(selector: str) -> str:
 
 
 def test_video_sheet_wide_parts_scroll_in_their_own_box_or_wrap_on_a_phone():
-    mobile = V3_CSS[V3_CSS.rindex("@media (max-width: 900px) {"):]
+    # le bloc mobile des vidéos est le dernier avant le bloc « settings » (U12 ajoute le sien en fin de fichier)
+    mobile = V3_CSS[V3_CSS.rindex("@media (max-width: 900px) {", 0, V3_CSS.rindex("/* >>> settings */")):]
     assert re.search(r"\.v3 \.stepper \{[^}]*overflow-x: auto", mobile)  # 13 étapes : leur propre conteneur défile
     assert "overflow-x: auto" in _rule(".v3 .strip")
     assert "overflow-y: auto" in _rule(".v3 .vlog")
