@@ -5,7 +5,7 @@ slug: audit-lot-r-d-p-t-public-sans-donn-es-personnell
 title: "Audit lot R : dépôt public sans données personnelles (captures, listes de garde) et petits restes docs/outils"
 created: 2026-10-10T18:30:47Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - docs/assets/readme/*.webp
   - tests/test_readme_assets.py
@@ -22,6 +22,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: diagnose
+proof:
+  - type: test
+    ref: local/db0d77de6bd4@669cdbb
+    tree: scope/65e0baafd9a8
+    criteria: e673c7c42cd1
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---

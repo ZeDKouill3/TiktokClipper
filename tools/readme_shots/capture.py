@@ -1,9 +1,9 @@
 """Captures et animations du README (TASK-dbb2) : crée un espace de démonstration TEMPORAIRE (demo_data.py), lance
-``clipper serve`` dessus, capture la console avec Playwright (Chromium headless) puis écrit images et GIF dans
+``clipper serve`` dessus, capture la console avec Playwright (Chromium headless) puis écrit les trois GIF dans
 ``docs/assets/readme/``. Tout le reste est supprimé à la fin ; le vrai ``workspace/``, ``output/``, ``state/`` et
 ``presets/`` ne sont jamais lus ni écrits (le serveur tourne avec pour dossier courant le dossier temporaire).
 
-    python tools/readme_shots/capture.py            # régénère docs/assets/readme/
+    python tools/readme_shots/capture.py            # régénère les 3 GIF de docs/assets/readme/ (les captures fixes *-light.webp sont faites à la main, jamais écrasées)
     CLIPPER_SHOTS_CHROMIUM=/chemin/chrome python tools/readme_shots/capture.py   # Chromium déjà installé
 
 Prérequis : ``uv pip install -e ".[test]"``, ``python -m playwright install chromium``, ffmpeg dans le PATH.
@@ -36,7 +36,6 @@ REPO_ROOT = HERE.parent.parent
 CONFIG_DEFAULTS: dict[str, object] = {
     "output_dir": "docs/assets/readme",   # relatif à la racine du dépôt
     "viewport": (1440, 900),
-    "themes": ("dark", "light"),
     "image_max_kb": 400,                   # poids maximal d'une image
     "image_qualities": (92, 86, 78, 70),   # qualités WebP essayées dans l'ordre ; au-delà, erreur explicite
     "gif_max_mb": 2.0,                     # poids maximal d'un GIF
@@ -190,60 +189,11 @@ class Shooter:
         page.wait_for_function("[...document.querySelectorAll('.skeleton')].every((el) => el.offsetParent === null)", timeout=20000)
         page.wait_for_timeout(int(self.settings["settle_ms"]) + extra_ms)
 
-    def shot(self, page: Any, name: str, theme: str) -> None:
-        target = self.out / f"{name}-{theme}.webp"
-        size = optimize_image(page.screenshot(type="png"), target, self.settings)
-        self.written.append(target)
-        print(f"  {target.name} ({size // 1024} Ko)")
-
 
 def _scroll_to(page: Any, selector: str) -> None:
     page.add_style_tag(content=f"{selector} {{ scroll-margin-top: 84px; }}")  # sous la barre du haut
     page.evaluate("(sel) => document.querySelector(sel).scrollIntoView({block: 'start'})", selector)
     page.wait_for_timeout(300)
-
-
-def static_shots(shooter: Shooter, theme: str) -> None:
-    """Un écran par image, dans le thème ``theme``."""
-    context, page = shooter.page(theme)
-    try:
-        account = str(demo_data.CONFIG_DEFAULTS["account"])
-        shooter.goto(page, "/dashboard")
-        shooter.shot(page, "tableau-de-bord", theme)
-
-        shooter.goto(page, "/videos")
-        shooter.shot(page, "videos", theme)
-
-        shooter.goto(page, f"/videos/{PROGRESS_VIDEO}")  # fiche d'une vidéo en cours : frise et trait animé
-        shooter.shot(page, "video-fiche", theme)
-
-        shooter.goto(page, f"/videos/{JURY_VIDEO}")
-        page.click('[data-step="moments"]')
-        page.wait_for_selector(".vjury svg", timeout=20000)
-        _scroll_to(page, ".vjury")
-        shooter.settle(page)
-        shooter.shot(page, "radar-jury", theme)
-
-        shooter.goto(page, "/clips")
-        page.click('[data-filter="all"]')
-        shooter.settle(page)
-        shooter.shot(page, "clips", theme)
-
-        shooter.goto(page, "/publish")
-        shooter.shot(page, "publication", theme)
-
-        shooter.goto(page, f"/stats/{account}")
-        shooter.settle(page, 600)
-        shooter.shot(page, "stats-ensemble", theme)
-
-        shooter.goto(page, f"/stats/{account}/videos/7300000000000000001")
-        shooter.settle(page, 600)
-        shooter.shot(page, "stats-video", theme)
-
-        shooter.goto(page, "/accounts")  # le mot de passe reste masqué : on ne clique ni sur Afficher ni sur Copier
-        shooter.shot(page, "comptes", theme)
-    finally:
-        context.close()
 
 
 # ---------------------------------------------------------------- GIF
@@ -386,7 +336,7 @@ def gif_new_publication(shooter: Shooter) -> None:
 # ---------------------------------------------------------------- orchestration
 
 def run(overrides: dict[str, object] | None = None) -> list[Path]:
-    """Régénère toutes les images et GIF ; rend les fichiers écrits. Tout ce qui est temporaire est supprimé."""
+    """Régénère les trois GIF (les captures fixes light sont faites à la main) ; rend les fichiers écrits. Tout ce qui est temporaire est supprimé."""
     from playwright.sync_api import sync_playwright
 
     settings = _settings(overrides)
@@ -407,9 +357,6 @@ def run(overrides: dict[str, object] | None = None) -> list[Path]:
             browser = playwright.chromium.launch(**({"executable_path": chromium} if chromium else {}))
             try:
                 shooter = Shooter(browser, f"http://127.0.0.1:{port}", settings, root, staging)
-                for theme in settings["themes"]:
-                    print(f"captures, thème {theme}")
-                    static_shots(shooter, theme)
                 print("animations")
                 gif_jury_radar(shooter)
                 gif_new_publication(shooter)

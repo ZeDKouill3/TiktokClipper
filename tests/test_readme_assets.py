@@ -13,6 +13,7 @@ workspace/state)."""
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import os
 import re
@@ -56,11 +57,36 @@ LEAKED_TOKENS = (
     "WVjOSRFWm4c",
     "ivl0nxa3C7o",
     "2887271276",
-    "madajel",
-    "ClaudeRandom",
-    "nicoc",
     "C:\\Users",
 )
+
+# Mots sensibles (pseudo d'une chaine amie, nom d'utilisateur Windows, dossier perso) : seules leurs empreintes
+# sha256 (du mot en minuscules) sont ecrites ici, couples (longueur, empreinte) ; les mots ne figurent en clair
+# nulle part dans les fichiers suivis. Le texte controle est cherche par fenetres glissantes de ces longueurs.
+SENSITIVE_SHA256 = (
+    (7, "4da6a20ea297d6aff097b64dae3fbbe64823bf35a8b760abcd535041ba3bfe09"),
+    (5, "bbb6fa51708957e6b8f72b02fbc5cfca676c5f01b45fe9d05c18aa5efe753d05"),
+    (12, "01fcdb58b2507fe5cb747317f4066135797057de7971612e6db0992e41d7bb82"),
+)
+
+
+def sensitive_hits(text: str, hashes=None) -> list[str]:
+    """Une entree « mot sensible N a la position P » par fenetre du texte dont l'empreinte est dans la liste."""
+    pairs = SENSITIVE_SHA256 if hashes is None else hashes
+    lowered = text.lower()
+    hits = []
+    for number, (length, digest) in enumerate(pairs, start=1):
+        for start in range(len(lowered) - length + 1):
+            if hashlib.sha256(lowered[start:start + length].encode("utf-8")).hexdigest() == digest:
+                hits.append(f"mot sensible {number} a la position {start}")
+    return hits
+
+
+def test_sensitive_guard_detects_a_word_by_its_hash_and_ignores_clean_text():
+    probe = ((5, hashlib.sha256(b"zorgl").hexdigest()),)
+    assert sensitive_hits("un texte avec le mot ZoRgL au milieu", probe) == ["mot sensible 1 a la position 21"]
+    assert sensitive_hits("un texte propre", probe) == []
+
 
 PIPELINE_STEPS = (
     "download", "transcribe", "scenes", "audio", "moments", "vision",
@@ -143,6 +169,7 @@ def test_svg_has_no_leaked_real_identifier_or_personal_path(svg_path):
     text = svg_path.read_text(encoding="utf-8")
     for leaked in LEAKED_TOKENS:
         assert leaked not in text, f"{leaked!r} fuite dans {svg_path.name}"
+    assert not sensitive_hits(text), f"{svg_path.name} : {sensitive_hits(text)}"
 
 
 def test_demo_terminal_svg_uses_css_keyframes():
@@ -216,7 +243,7 @@ IMAGE_SUFFIXES = (".png", ".webp", ".gif", ".svg")
 # Liste de controle : noms de personnes, de chaines ou de jeux reels qui ne doivent apparaitre ni dans le README,
 # ni dans les donnees de demonstration (depot public, donnees 100 % neutres).
 FORBIDDEN_NAMES = (
-    "madajel", "gta", "rockstar", "vice city", "zerator", "squeezie", "inoxtag", "michou", "ponce", "locklear",
+    "gta", "rockstar", "vice city", "zerator", "squeezie", "inoxtag", "michou", "ponce", "locklear",
     "kameto", "gotaga", "domingo", "amixem", "mister v", "ninja", "pewdiepie", "mrbeast", "tiktok.com/@",
 )
 
@@ -303,6 +330,7 @@ def test_readme_has_no_forbidden_real_name():
         assert name not in text, f"nom interdit dans README.md : {name!r}"
     for token in LEAKED_TOKENS:
         assert token.lower() not in text, f"identifiant reel dans README.md : {token!r}"
+    assert not sensitive_hits(text), f"README.md : {sensitive_hits(text)}"
 
 
 def test_readme_internal_anchors_point_to_existing_headings():
@@ -493,6 +521,7 @@ def test_demo_workspace_is_neutral_complete_and_written_only_under_its_folder(tm
             text = path.read_text(encoding="utf-8").lower()
             for token in (*FORBIDDEN_NAMES, *(t.lower() for t in LEAKED_TOKENS), demo.PASSWORD_PLACEHOLDER):
                 assert token not in text, f"{token!r} dans {path.relative_to(root)}"
+            assert not sensitive_hits(text), f"{path.relative_to(root)} : {sensitive_hits(text)}"
     accounts = json.loads((root / "state" / "accounts.json").read_text(encoding="utf-8"))["accounts"]
     assert all("password" not in a or a["password"] in (None, "") for a in accounts)
 

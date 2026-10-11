@@ -19,6 +19,6 @@ Clipper est installe. Voici comment faire ton premier clip.
    dossier de donnees Clipper, sous output\<id-de-la-video>\). Depuis
    la console, tu peux aussi les publier (ecran "Publication").
 
-En cas de probleme : lance "clipper doctor" dans un terminal ouvert dans ton
-dossier de donnees Clipper, pour un diagnostic qui dit precisement quoi
-corriger.
+En cas de probleme : relance Installer.bat (double-clic, rien n'est perdu) :
+sa derniere etape lance "clipper doctor" et affiche un diagnostic qui dit
+precisement quoi corriger.
