@@ -1079,6 +1079,11 @@ def _veille_table(config: Config) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _veille_default_channel(config: Config) -> str | None:
+    _veille_table(config)  # valide [veille] (dont default_channel) : erreur 422 visible, jamais de repli
+    return veille_mod.default_channel(config)
+
+
 def _veille_dir(config: Config) -> Path:
     return Path(str(_veille_table(config)["state_dir"]))
 
@@ -3728,7 +3733,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         body = body or VeilleClipBody()
         if body.channel:
             _validate_channel_name(body.channel)
-        entry = _veille_decide("clip", day, candidate_id, body.channel or None, body.short_clips)
+        # Sans channel (absent ou null) : le style par défaut de [veille] ; "" = « Sans style » choisi exprès.
+        channel = body.channel if body.channel is not None else _veille_default_channel(config)
+        entry = _veille_decide("clip", day, candidate_id, channel or None, body.short_clips)
         return JSONResponse(entry, status_code=202)
 
     @app.post("/api/veille/{day}/{candidate_id}/ignore")

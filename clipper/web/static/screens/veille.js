@@ -198,6 +198,13 @@ function veilleLiveChip(live) {
   return `<span class="chip${live.state === "queued" ? " queued" : ""}" data-live-state="${esc(live.state)}">${esc(live.label)}</span>`;
 }
 
+/* Style envoyé pour une proposition : celui choisi dans son sélecteur (« » = Sans style, exprès), sinon le style par
+   défaut de [veille] default_channel (réglé côté serveur, "" = aucun). */
+function veilleStyleToSend(id) {
+  if (id in veilleUi.style) return veilleUi.style[id];
+  return ((veilleUi.data && veilleUi.data.settings) || {}).default_channel || "";
+}
+
 function veilleProposal(p, game, channels) {
   const c = p.candidate;
   const queued = p.status === "queued";
@@ -209,7 +216,7 @@ function veilleProposal(p, game, channels) {
     c.source === "youtube" && c.views_per_hour != null ? sig("youtube", "YouTube", `<b>${esc(fr(Math.round(c.views_per_hour)))} vues/h</b>`) : "",
     (c.signals || {}).release_days_since != null ? veilleReleaseBadge(c.signals.release_days_since) : "",
   ].join("");
-  const chosen = veilleUi.style[p.candidate_id] || "";
+  const chosen = veilleStyleToSend(p.candidate_id);
   const styleSelect = `<select class="input" data-veille-style aria-label="Style"><option value="">Sans style (config.toml)</option>${channels.map((n) => `<option value="${esc(n)}"${n === chosen ? " selected" : ""}>Style : ${esc(n)}</option>`).join("")}</select>`;
   const actions = queued
     ? `${veilleLiveChip(p.live)}<span class="note">Mise en file à ${esc(veilleWhen(p.decided_at))}${p.channel ? ` avec le style <b class="mono">${esc(p.channel)}</b>` : ""} · ne sera plus proposée.</span><span class="spacer"></span><a class="btn btn-sm btn-ghost" href="#/videos">Voir dans Vidéos</a>`
@@ -645,7 +652,7 @@ function veilleWire(body) {
   $$("[data-veille-clip]", body).forEach((b) => (b.onclick = async () => {
     const id = cand(b);
     b.disabled = true;
-    const channel = veilleUi.style[id] || null;
+    const channel = veilleStyleToSend(id);
     const entry = await veilleCall(`/api/veille/${encodeURIComponent(dayDate())}/${encodeURIComponent(id)}/clip`, "POST", { channel, short_clips: null }, "VOD mise en file", "Impossible de clipper cette VOD");
     if (entry) { try { await loadQueue(); } catch (err) { toastError("File indisponible", err); } }
   }));

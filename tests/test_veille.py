@@ -114,7 +114,7 @@ def _write_history(tmp_path, date, *, viewers, players):
 def test_config_defaults_are_exactly_r1():
     assert veille.CONFIG_DEFAULTS == {
         "enabled": False, "run_at": "07:00", "timezone": "Europe/Paris", "language": "fr",
-        "region": "FR", "taste": "", "max_vods_per_day": 3, "best_clips_per_day": 3,
+        "region": "FR", "taste": "", "default_channel": "", "max_vods_per_day": 3, "best_clips_per_day": 3,
         "baseline_days": 7, "history_days": 90, "rise_min_pct": 50, "vod_min_duration_s": 1800,
         "vod_max_age_h": 36, "twitch_top_games": 20, "twitch_vods_per_game": 10,
         "youtube_max_results": 50, "youtube_min_duration_s": 600, "steam_top": 100,
