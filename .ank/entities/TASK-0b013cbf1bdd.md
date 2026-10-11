@@ -5,7 +5,7 @@ slug: ui-v3-u2-coquille-v3-v3-css-jetons-clair-sombre
 title: "UI v3 U2 : Coquille v3 : v3.css (jetons clair/sombre, layout, nav + rail, topbar, tabbar, pastilles), index.html (sections intactes, classe v3 sur la coquille), thème clair par défaut, toasts Basecoat"
 created: 2026-10-11T03:59:30Z
 author: nicoc@zedk_ordi
-status: in_progress
+status: done
 scope:
   - clipper/web/static/v3.css
   - clipper/web/static/index.html
@@ -20,6 +20,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/ade8bf9512d4@8edc4fc
+    tree: scope/e14b82bd100a
+    criteria: 5686bd551317
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 2
+version: 3
 ---
