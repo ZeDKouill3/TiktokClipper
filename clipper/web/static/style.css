@@ -1036,18 +1036,6 @@ input[type="color"] { width: 36px; height: 36px; padding: 2px; border-radius: va
   .vscreen .vrow { padding: 16px; }
 }
 /* <<< videos */
-/* >>> dashboard */
-/* ---------- Tableau de bord (TASK-aad3) ---------- */
-.dash { display: flex; flex-direction: column; gap: 32px; }
-.dash .panel > .list-item .kpi-value { font-size: 28px; margin-top: 0; }
-.dash .panel > .list-item .reason { margin-top: 0; flex: 1; }
-.dash .panel > .list-item.dash-problem { align-items: flex-start; padding-top: 16px; padding-bottom: 16px; }
-.dash .panel > .list-item.dash-problem .chip { margin-top: 2px; }
-.dash .dash-problem .reason { margin-top: 8px; }
-.dash .job { grid-template-columns: 96px minmax(0, 1fr) auto; }  /* vignette | texte | actions */
-@media (max-width: 900px) { .dash .job { grid-template-columns: 72px minmax(0, 1fr); } }
-/* <<< dashboard */
-
 /* >>> review */
 /* ---------- Revue des moments v2 (TASK-6e75) ---------- */
 .screen[id="screen-review"] [data-body] { background: none; border: 0; box-shadow: none; }
@@ -1114,17 +1102,6 @@ input[type="color"] { width: 36px; height: 36px; padding: 2px; border-radius: va
   .chan-field .btn, .chan-slot .input, .chan-slot .icon-btn { min-height: 44px; }
 }
 /* <<< channels */
-
-/* >>> dashboard */
-/* ---------- Surveillance : VOD à confirmer (TASK-7508) ---------- */
-.watch-vod .watch-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.watch-vod .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-@media (max-width: 900px) {
-  .watch-vod { flex-wrap: wrap; }
-  .watch-vod .watch-actions { width: 100%; justify-content: flex-end; }
-  .watch-vod .btn-xs { min-height: 44px; }
-}
-/* <<< dashboard */
 
 /* >>> shared */
 /* ---------- Publication : file + calendrier hebdomadaire (TASK-503d) ---------- */

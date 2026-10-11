@@ -22,7 +22,7 @@ NODE = pytest.mark.skipif(shutil.which("node") is None, reason="node absent du P
 SCREENS = ("dashboard", "veille", "videos", "review", "clips", "clip", "channels", "publish", "stats",
            "accounts", "settings", "journal")
 # Écrans qui ont (encore) un bloc dans style.css : chaque tâche d'écran retire le sien entre ses délimiteurs.
-STYLE_BLOCKS = ("dashboard", "videos", "review", "clips", "clip", "channels", "publish", "stats", "settings",
+STYLE_BLOCKS = ("videos", "review", "clips", "clip", "channels", "publish", "stats", "settings",
                 "journal", "shared", "shell")
 
 
@@ -382,8 +382,9 @@ def test_style_css_has_balanced_delimiters_for_every_screen_and_lost_its_shell_b
     closes = re.findall(r"/\* <<< ([a-z-]+) \*/", css)
     assert opens and sorted(opens) == sorted(closes)
     assert set(opens) <= set(STYLE_BLOCKS), set(opens) - set(STYLE_BLOCKS)
-    for name in ("dashboard", "videos", "review", "clips", "clip", "channels", "publish", "stats", "settings", "journal"):
+    for name in ("videos", "review", "clips", "clip", "channels", "publish", "stats", "settings", "journal"):
         assert name in opens, f"aucun bloc /* >>> {name} */"
+    assert "dashboard" not in opens, "le bloc dashboard est passé dans v3.css (U3)"
     # un délimiteur ouvert est fermé avant le suivant du même nom, et les blocs ne se chevauchent pas
     depth = None
     for kind, name in re.findall(r"/\* (>>>|<<<) ([a-z-]+) \*/", css):
