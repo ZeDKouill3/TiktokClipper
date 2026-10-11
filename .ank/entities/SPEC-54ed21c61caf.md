@@ -5,7 +5,7 @@ slug: installeur-portable-windows-contenu-du-zip-avec
 title: "Installeur portable Windows : contenu du zip (avec `installer/overrides.txt`), étapes, dossiers app et données (pointeur d'installation, options relues séparément, données jamais sous app), GPU (nvidia-smi en succès et un nom de GPU), claude, Chrome, modèles, mise à jour (prévol avant toute suppression), désinstallation (depuis app), tests (succède à SPEC-38f7)"
 created: 2026-10-11T00:20:54Z
 author: nicoc@zedk_ordi
-status: proposed
+status: accepted
 scope:
   - pyproject.toml
   - clipper/gpu.py
@@ -25,8 +25,12 @@ scope:
   - docs/INSTALLATION.md
 references: [ADR-e1dac9ba2284, ADR-ad2e562b1810, ADR-fb9bcb1e98f5]
 supersedes: SPEC-38f7761891f6
+ratified: 830bc25d1493
+verified:
+  - by: nicoc@zedk_ordi
+    at: 2026-10-11T00:21:31Z
 schema: 4
-version: 1
+version: 2
 ---
 
 ## Changements par rapport à SPEC-38f7
