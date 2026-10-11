@@ -523,3 +523,7 @@ html[data-nav="rail"] .sidenav .nav-rail .i { transform: rotate(180deg); }
   .v3 .sources-table td { padding: 0; border: 0; } .v3 .sources-table td:nth-child(3), .v3 .sources-table td:nth-child(4) { grid-column: 1 / -1; }
   .v3 .veille-toc { overflow-x: auto; flex-wrap: nowrap; }
 }
+.v3 details.releve > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 8px 0; font-weight: 500; list-style: none; }
+.v3 details.releve > summary::-webkit-details-marker { display: none; }
+.v3 details.releve[open] > summary svg { transform: rotate(90deg); }
+.v3 [data-veille-alert] { margin: 0 0 12px; }

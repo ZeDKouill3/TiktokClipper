@@ -95,8 +95,9 @@ const veilleReleaseBadge = (days) => (days == null ? "" : `<span class="chip acc
 
 /* ---------- sections ---------- */
 
+/* La décision d'abord (SPEC-7715 T9) : les propositions viennent sous l'en-tête, le relevé des sources en dernier, replié. */
 /* Sommaire en tête : une ancre par section (le défilement est fait par veilleWire, l'URL #/veille ne change pas). */
-const VEILLE_TOC = [["veille-releve", "Relevé"], ["veille-propositions", "Propositions"], ["veille-sorties", "Sorties"], ["veille-montent", "Ce qui monte"], ["veille-clips", "Meilleurs clips"]];
+const VEILLE_TOC = [["veille-propositions", "Propositions"], ["veille-sorties", "Sorties"], ["veille-montent", "Ce qui monte"], ["veille-clips", "Meilleurs clips"], ["veille-releve", "Relevé"]];
 const veilleToc = (data) => `<nav class="veille-toc" data-veille-toc aria-label="Sections de la veille">${VEILLE_TOC.map(([id, label]) => `<a href="#${id}" data-veille-jump>${esc(label)}</a>`).join("")}</nav>`;
 
 /* « Relevé incomplet » : seulement quand l'échéance globale a coupé quelque chose (deadline_hit écrit par la veille). */
@@ -131,8 +132,26 @@ function veilleSources(data) {
     : llm.status === "retry" ? `<p class="reason warn" role="status"><b>Choix de Claude reporté :</b> ${esc(llm.error)}</p>` : "";
   const when = data.running ? `<span class="chip running plain">Relevé en cours…</span>`
     : `<span>Relevé du <b class="mono">${esc(veilleWhen(day.finished_at || day.started_at, true))}</b></span>`;
-  return `<section id="veille-releve" data-veille-sources><div class="sources">${when}${llmChip}</div>${veilleIncomplete(data)}
-    <div class="table-wrap"><table class="table sources-table"><thead><tr><th>Source</th><th>État</th><th>Relevé</th><th>Erreur</th></tr></thead><tbody>${rows}</tbody></table></div>${llmError}</section>`;
+  const problem = veilleReleveProblem(data);
+  return `<details id="veille-releve" class="releve" data-veille-sources${veilleUi.more.releve ? " open" : ""}><summary>${icon("chevron-right", "i-xs")}Relevé des sources${problem ? `<span class="chip ${problem.bad ? "bad" : "warn"} plain">${esc(problem.label)}</span>` : ""}</summary><div class="sources">${when}${llmChip}</div>${veilleIncomplete(data)}
+    <div class="table-wrap"><table class="table sources-table"><thead><tr><th>Source</th><th>État</th><th>Relevé</th><th>Erreur</th></tr></thead><tbody>${rows}</tbody></table></div>${llmError}</details>`;
+}
+
+/* Ce qui rend le relevé douteux : une source en erreur ou incomplète, l'échéance atteinte, le choix de Claude en échec. */
+function veilleReleveProblem(data) {
+  const day = data.day || {};
+  const states = Object.values(day.sources || {}).map((src) => src.status);
+  const llm = (day.llm || {}).status;
+  if (states.includes("error") || llm === "error") return { bad: true, label: "en erreur" };
+  if (day.deadline_hit || states.includes("partial") || states.includes("skipped") || llm === "retry") return { bad: false, label: "incomplet" };
+  return null;
+}
+
+/* Une ligne d'alerte en tête (avant les propositions) quand le relevé est incomplet ou en erreur, avec le lien vers la section. */
+function veilleAlert(data) {
+  const problem = veilleReleveProblem(data);
+  if (!problem) return "";
+  return `<p class="reason ${problem.bad ? "bad" : "warn"}" data-veille-alert role="${problem.bad ? "alert" : "status"}">Relevé ${esc(problem.label)} : <a href="#veille-releve" data-veille-jump>voir le relevé des sources</a></p>`;
 }
 
 /* Pied du KPI « VOD proposées » : ce qui a été écarté et pourquoi, chaque nombre tel qu'écrit par la veille. */
@@ -589,7 +608,7 @@ function veilleView(body) {
   const channels = store.channels || [];
   const html = `<div class="stack">
     <div class="toolbar"><span class="muted">Relevé quotidien à ${esc((data.settings || {}).run_at || "?")} · les VOD déjà clippées ne sont plus proposées.</span><span class="grow"></span>${refresh}</div>
-    ${veilleToc(data)}${veilleSources(data)}${veilleKpis(data)}${veilleProposals(data, channels)}${veilleReleases(data)}${veilleBest(data)}${veilleRising(data)}${veilleSettings(data)}
+    ${veilleToc(data)}${veilleAlert(data)}${veilleProposals(data, channels)}${veilleReleases(data)}${veilleRising(data)}${veilleBest(data)}${veilleKpis(data)}${veilleSources(data)}${veilleSettings(data)}
   </div>`;
   if (veilleUi.html === html && body.childElementCount) return;
   veilleUi.html = html;
@@ -638,8 +657,11 @@ function veilleWire(body) {
   $$("[data-veille-jump]", body).forEach((a) => (a.onclick = (e) => {
     e.preventDefault();
     const target = body.querySelector(`#${a.getAttribute("href").slice(1)}`);
-    if (target) target.scrollIntoView({ block: "start" });
+    if (!target) return;
+    if (target.tagName === "DETAILS" && !target.open) { target.open = true; veilleUi.more.releve = true; }
+    target.scrollIntoView({ block: "start" });
   }));
+  $$("details[data-veille-sources]", body).forEach((d) => (d.ontoggle = () => { veilleUi.more.releve = d.open; }));
   $$("[data-veille-more]", body).forEach((b) => (b.onclick = () => { veilleUi.more[b.dataset.veilleMore] = !veilleUi.more[b.dataset.veilleMore]; renderCurrent(); }));
   $$("[data-veille-open]", body).forEach((b) => (b.onclick = () => { veilleUi.sheet = b.dataset.veilleOpen; veilleUi.focusSheet = true; renderCurrent(); }));
   $$("[data-veille-close]", body).forEach((b) => (b.onclick = veilleCloseSheet));

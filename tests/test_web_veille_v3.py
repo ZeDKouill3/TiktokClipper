@@ -75,17 +75,42 @@ def _between(html: str, start: str, end: str | None = None) -> str:
 
 # --- sommaire : ancres des 5 sections ---------------------------------------------------------------------------
 
-SECTION_IDS = ("veille-releve", "veille-propositions", "veille-sorties", "veille-montent", "veille-clips")
+SECTION_IDS = ("veille-propositions", "veille-sorties", "veille-montent", "veille-clips", "veille-releve")
 VIEW = "(function(){ const b = { innerHTML: '', childElementCount: 0 }; veilleView(b); return b.innerHTML; })()"
 
 
 @NODE
-def test_toc_links_the_five_sections_and_each_anchor_exists_in_the_rendered_view(tmp_path):
+def test_toc_and_sections_put_the_decision_first_and_the_releve_last(tmp_path):
     toc, view = _eval(tmp_path, _data(), "veilleToc(D)", VIEW)
     assert re.findall(r'href="#([a-z-]+)"', toc) == list(SECTION_IDS)
-    for anchor in SECTION_IDS:
-        assert f'id="{anchor}"' in view, anchor
-    assert view.index("data-veille-toc") < view.index('id="veille-releve"')  # le sommaire est en tête
+    positions = [view.index(f'id="{anchor}"') for anchor in SECTION_IDS]
+    assert positions == sorted(positions), "les sections suivent l'ordre du sommaire"
+    assert view.index("data-veille-toc") < positions[0]  # le sommaire est en tête
+    assert "data-veille-alert" not in view  # relevé sain : aucune alerte
+
+
+@NODE
+def test_releve_is_folded_by_default_and_open_once_the_user_opened_it(tmp_path):
+    folded, opened = _eval(tmp_path, _data(), "veilleSources(D)", "(veilleUi.more.releve = true, veilleSources(D))")
+    tags = [html[:html.index(">") + 1] for html in (folded, opened)]
+    assert tags[0].startswith("<details") and 'id="veille-releve"' in tags[0] and " open" not in tags[0]
+    assert " open" in tags[1]
+
+
+@NODE
+@pytest.mark.parametrize("patch", [
+    {"sources": {"twitch": {"status": "error", "at": "x", "error": "boom", "counts": {}}}},
+    {"sources": {"twitch": {"status": "partial", "at": "x", "error": "coupée", "counts": {}}}},
+    {"deadline_hit": True, "deadline_at": "2026-10-07T05:08:00+00:00"},
+    {"llm": {"status": "error", "error": "refus"}},
+])
+def test_an_incomplete_or_failed_releve_gives_one_alert_line_with_a_link_to_the_section(tmp_path, patch):
+    data = _data()
+    data["day"].update(patch)
+    (view,) = _eval(tmp_path, data, VIEW)
+    alert = re.search(r'<p[^>]*data-veille-alert[^>]*>(.*?)</p>', view, re.S)
+    assert alert and 'href="#veille-releve"' in alert.group(1)
+    assert view.index("data-veille-alert") < view.index('id="veille-propositions"')  # l'alerte précède la décision
 
 
 # --- sources : une ligne par source, avec état et erreur --------------------------------------------------------
