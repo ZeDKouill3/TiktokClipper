@@ -149,6 +149,17 @@ def rects(plan, panel="main"):
     return p["rects"]
 
 
+def inside(rect, box, eps=1e-6):
+    """``rect`` est contenu dans ``box`` (x0, y0, x1, y1) : cover, TASK-999b."""
+    x0, y0, x1, y1 = box
+    return (
+        x0 - eps <= rect["x"]
+        and y0 - eps <= rect["y"]
+        and rect["x"] + rect["w"] <= x1 + eps
+        and rect["y"] + rect["h"] <= y1 + eps
+    )
+
+
 def contains(rect, box, eps=1e-6):
     x0, y0, x1, y1 = box
     return (
@@ -1480,12 +1491,11 @@ def test_incrustation_edges_used_when_present_cover_the_panel(tmp_path, video_di
     assert data["edge_reason"] is None  # bords trouves, pas de repli
     rect = data["facecam"]
     px0, py0, px1, py1 = PANEL
-    # couvre l'incrustation entiere, a quelques px pres
-    assert contains(rect, PANEL, eps=3)
-    # largeur (axe non etire par la mise au format du panneau camera) calee
-    # sur les bords reels du panneau, pas sur une valeur bien plus grande
-    assert abs(rect["x"] - px0) <= 3
-    assert abs((rect["x"] + rect["w"]) - px1) <= 3
+    # rogne a l'interieur de l'incrustation (cover), jamais de pixels hors d'elle ;
+    # la hauteur (axe limitant) est celle du panneau reel
+    assert inside(rect, PANEL, eps=3)
+    assert abs(rect["y"] - py0) <= 3
+    assert abs((rect["y"] + rect["h"]) - py1) <= 3
     assert rect["w"] / rect["h"] == pytest.approx(1080 / 768, rel=0.02)
 
 
@@ -1524,9 +1534,9 @@ def test_incrustation_stuck_to_the_right_edge_uses_the_image_border_as_that_edge
     assert data["edge_reason"] is None  # bord droit = bord d'image, pas un repli
     rect = data["facecam"]
     px0, py0, px1, py1 = PANEL_AT_RIGHT_EDGE
-    assert contains(rect, PANEL_AT_RIGHT_EDGE, eps=3)
-    assert abs(rect["x"] - px0) <= 3
-    assert abs((rect["x"] + rect["w"]) - px1) <= 3
+    assert inside(rect, PANEL_AT_RIGHT_EDGE, eps=3)
+    assert abs(rect["y"] - py0) <= 3
+    assert abs((rect["y"] + rect["h"]) - py1) <= 3
     assert rect["w"] / rect["h"] == pytest.approx(1080 / 768, rel=0.02)
 
 
@@ -1538,11 +1548,10 @@ def test_incrustation_stuck_to_two_edges_in_a_corner_uses_the_image_border_for_b
     assert data["edge_reason"] is None  # bords droit et haut = bords d'image, pas un repli
     rect = data["facecam"]
     px0, py0, px1, py1 = PANEL_AT_TOP_RIGHT_CORNER
-    # couvre toute l'incrustation, y compris le coin haut-droit
-    assert contains(rect, PANEL_AT_TOP_RIGHT_CORNER, eps=3)
-    assert abs(rect["x"] - px0) <= 3
-    assert abs((rect["x"] + rect["w"]) - px1) <= 3
-    assert rect["y"] <= py0 + 3
+    # rogne a l'interieur de l'incrustation, bord haut = bord d'image
+    assert inside(rect, PANEL_AT_TOP_RIGHT_CORNER, eps=3)
+    assert abs(rect["y"] - py0) <= 3
+    assert abs((rect["y"] + rect["h"]) - py1) <= 3
     assert rect["w"] / rect["h"] == pytest.approx(1080 / 768, rel=0.02)
 
 
@@ -1552,8 +1561,8 @@ def test_incrustation_edges_are_excluded_from_the_game_window(tmp_path, video_di
 
     facecam = data["facecam"]
     px0, py0, px1, py1 = PANEL
-    # le rectangle facecam couvre le panneau reel, pas juste le visage
-    assert contains(facecam, PANEL, eps=3)
+    # le rectangle facecam est rogne dans le panneau reel, sans en sortir
+    assert inside(facecam, PANEL, eps=3)
     [g] = rects(data["plans"][0], "gameplay")
     assert g["x"] >= facecam["x"] + facecam["w"] or g["y"] >= facecam["y"] + facecam["h"]
 
@@ -2633,11 +2642,10 @@ def test_refine_snaps_each_edge_on_the_real_webcam_and_keeps_the_panel_aspect():
     assert refined is not None, reason
     x0, y0, x1, y1 = rect_box(refined)
     cx0, cy0, cx1, cy1 = REAL_CAM
-    # couvre toute la vraie webcam, a 2 px pres ...
-    assert x0 <= cx0 + 2 and y0 <= cy0 + 2 and x1 >= cx1 - 2 and y1 >= cy1 - 2
-    # ... agrandie au minimum pour le format du panneau camera (ici en hauteur),
-    # donc la largeur colle a la webcam : plus de bande d'overlay a gauche/droite
-    assert refined["w"] <= (cx1 - cx0) + 4
+    # reste dans la vraie webcam (cover, TASK-999b), a 2 px pres, et la couvre
+    # en hauteur (axe limitant)
+    assert x0 >= cx0 - 2 and x1 <= cx1 + 2 and y0 >= cy0 - 2 and y1 <= cy1 + 2
+    assert y0 <= cy0 + 2 and y1 >= cy1 - 2
     assert refined["w"] / refined["h"] == pytest.approx(1080 / 768, rel=0.02)
     # centree sur la vraie webcam
     assert (x0 + x1) / 2 == pytest.approx((cx0 + cx1) / 2, abs=3)
@@ -2711,7 +2719,8 @@ def test_detect_facecam_writes_refined_and_original_rectangles(tmp_path, video_d
     assert period["facecam"] == refined  # c'est lui que les clips utiliseront
     assert period["refine_reason"]
     x0, y0, x1, y1 = rect_box(refined)
-    assert x0 <= REAL_CAM[0] + 2 and x1 >= REAL_CAM[2] - 2 and y0 <= REAL_CAM[1] + 2 and y1 >= REAL_CAM[3] - 2
+    assert x0 >= REAL_CAM[0] - 2 and x1 <= REAL_CAM[2] + 2 and y0 >= REAL_CAM[1] - 2 and y1 <= REAL_CAM[3] + 2
+    assert y0 <= REAL_CAM[1] + 2 and y1 >= REAL_CAM[3] - 2
     assert refined["w"] <= REAL_CAM[2] - REAL_CAM[0] + 4
 
 
@@ -3430,3 +3439,59 @@ def test_force_recompute_empties_the_facecam_boards_folder_first(tmp_path, video
     run_detect(tmp_path, [webcam_answer(1)])
 
     assert sorted(p.name for p in boards.iterdir()) == ["period_0.jpg", "period_0_zoom.jpg"]
+
+
+# --------------------------------------------------------------------------
+# TASK-999b : incrustation collee en bas a gauche de l'image (bords gauche et
+# bas = bords d'image). Le rectangle de repli centre sur le visage depasse
+# au-dessus de l'incrustation (jeu) ; recale sur le bord haut reel, il etait
+# agrandi au format du panneau camera VERS LE HAUT, dans le jeu. Il doit etre
+# rogne a l'interieur de l'incrustation (cover).
+# --------------------------------------------------------------------------
+
+BOTTOM_LEFT_CAM = (0, 766, 558, 1080)  # 558 x 314, plus large que le panneau (1080/768)
+
+
+def bottom_left_images(n=10):
+    images = []
+    for _ in range(n):
+        image = np.full((1080, 1920, 3), 200, dtype=np.uint8)  # jeu au-dessus et a droite
+        x0, y0, x1, y1 = BOTTOM_LEFT_CAM
+        image[y0:y1, x0:x1] = 40  # incrustation collee aux bords gauche et bas
+        image[858:975, 217:338] = 255  # visage
+        images.append(image)
+    return images
+
+
+def test_refine_never_adds_pixels_above_a_webcam_stuck_to_the_bottom_of_the_image():
+    face = (217.0, 858.0, 338.0, 975.0)
+    # rectangle d'origine (centre sur le visage) qui deborde de 22 px au-dessus
+    start = {"x": 0, "y": 744, "w": 472, "h": 336}
+    from clipper.reframe import CONFIG_DEFAULTS, _refine_rect
+
+    refined, reason = _refine_rect(bottom_left_images(), start, face, dict(CONFIG_DEFAULTS))
+    assert refined is not None, reason
+    assert refined["y"] >= BOTTOM_LEFT_CAM[1] - 2, refined  # pas de bande de jeu en haut
+    assert inside(refined, BOTTOM_LEFT_CAM, eps=2), refined
+    assert refined["w"] / refined["h"] == pytest.approx(1080 / 768, rel=0.02)
+    # le visage reste dans le rectangle
+    assert contains(refined, face)
+
+
+def test_cover_camera_rect_crops_inside_the_incrustation_and_keeps_the_face():
+    from clipper.reframe import CONFIG_DEFAULTS, _cover_camera_rect
+
+    face = (217.0, 858.0, 338.0, 975.0)
+    rect, why = _cover_camera_rect(tuple(float(v) for v in BOTTOM_LEFT_CAM), face, 1920, 1080, dict(CONFIG_DEFAULTS))
+    assert rect is not None, why
+    x, y, w, h = rect
+    assert inside({"x": x, "y": y, "w": w, "h": h}, BOTTOM_LEFT_CAM)
+    assert h == 314 and y == 766  # la hauteur de l'incrustation, pas un pixel de plus
+    assert x <= face[0] and x + w >= face[2]
+
+
+def test_cover_camera_rect_refuses_an_area_beyond_a_quarter_of_the_image_with_a_reason():
+    from clipper.reframe import CONFIG_DEFAULTS, _cover_camera_rect
+
+    rect, why = _cover_camera_rect((0.0, 0.0, 1920.0, 1080.0), None, 1920, 1080, dict(CONFIG_DEFAULTS))
+    assert rect is None and "pas une incrustation" in why

@@ -1369,6 +1369,47 @@ def _size_camera_rect(
     return (x, y, w, h), None
 
 
+def _cover_camera_rect(
+    box: tuple[float, float, float, float],
+    face: Sequence[float] | None,
+    width: int,
+    height: int,
+    settings: dict[str, Any],
+) -> tuple[tuple[int, int, int, int] | None, str | None]:
+    """Rectangle au format du panneau camera a l'interieur de ``box`` (x0, y0, x1, y1,
+    les bords reels de l'incrustation) : l'ajustement au format rogne le cote
+    trop long de l'incrustation (cover) et n'ajoute jamais de pixels hors d'elle
+    (TASK-999b : une incrustation collee en bas de l'image etait agrandie vers
+    le haut, dans le jeu). Centre sur le visage ``face`` s'il est connu, ramene
+    dans ``box``. ``None`` et la raison si le resultat depasse
+    ``facecam_max_area`` de l'image ou n'a plus de taille."""
+    cam_w, cam_h, _ = _camera_size(settings)
+    aspect = cam_w / cam_h
+    x0, y0, x1, y1 = box
+    bw, bh = x1 - x0, y1 - y0
+    if bw / bh > aspect:
+        bw = bh * aspect
+    else:
+        bh = bw / aspect
+    w = min(_even(bw), _even((x1 - x0)))
+    h = _even(w / aspect)
+    if h > y1 - y0:
+        h = _even(y1 - y0)
+        w = _even(h * aspect)
+    if w < 2 or h < 2:
+        return None, f"zone de l'incrustation ({x1 - x0:g}x{y1 - y0:g} px) trop petite pour le format du panneau camera"
+    max_area = float(settings["facecam_max_area"])
+    if w > width or h > height or w * h >= max_area * width * height:
+        return None, (
+            f"zone de l'incrustation ({w}x{h} px au format du panneau camera) pas plus petite qu'un quart "
+            f"(facecam_max_area = {max_area:g}) de l'image {width}x{height} : pas une incrustation"
+        )
+    cx, cy = ((face[0] + face[2]) / 2, (face[1] + face[3]) / 2) if face is not None else ((x0 + x1) / 2, (y0 + y1) / 2)
+    x = min(max(round(cx - w / 2), math.ceil(x0)), math.floor(x1) - w)
+    y = min(max(round(cy - h / 2), math.ceil(y0)), math.floor(y1) - h)
+    return (x, y, w, h), None
+
+
 def _facecam_rect_from_face(
     face: Box, width: int, height: int, settings: dict[str, Any]
 ) -> tuple[tuple[int, int, int, int] | None, str | None]:
@@ -1479,9 +1520,7 @@ def _facecam_rect(
     edge_box, edge_reason = _incrustation_rect(counts, n_frames, face, width, height, settings)
     if edge_box is not None:
         ex0, ey0, ex1, ey1 = edge_box
-        rect, reason = _size_camera_rect(
-            (ex0 + ex1) / 2, (ey0 + ey1) / 2, ex1 - ex0, ey1 - ey0, width, height, settings
-        )
+        rect, reason = _cover_camera_rect((ex0, ey0, ex1, ey1), face, width, height, settings)
         if rect is not None:
             return rect, None, None
         edge_reason = reason
@@ -1585,9 +1624,8 @@ def _refine_rect(
         return None, f"rectangle affine trop petit, conserve tel quel ({reason})"
     if (box["gauche"], box["haut"], box["droit"], box["bas"]) == (x, y, x + w, y + h):
         return None, reason
-    sized, why = _size_camera_rect(
-        (box["gauche"] + box["droit"]) / 2, (box["haut"] + box["bas"]) / 2,
-        box["droit"] - box["gauche"], box["bas"] - box["haut"], width, height, settings,
+    sized, why = _cover_camera_rect(
+        (box["gauche"], box["haut"], box["droit"], box["bas"]), face, width, height, settings
     )
     if sized is None:
         return None, f"rectangle affine inutilisable, conserve tel quel ({why}; {reason})"
