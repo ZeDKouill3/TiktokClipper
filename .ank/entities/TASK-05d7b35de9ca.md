@@ -5,7 +5,7 @@ slug: ui-v3-u11-comptes-v3-table-tiroir-d-dition
 title: "UI v3 U11 : Comptes v3 (table, tiroir d'édition)"
 created: 2026-10-11T03:59:37Z
 author: nicoc@zedk_ordi
-status: in_progress
+status: done
 scope:
   - clipper/web/static/screens/accounts.js
   - clipper/web/static/screens/accounts.css
@@ -18,6 +18,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/b06aa233a24e@a0db56b
+    tree: scope/cea179eb0250
+    criteria: 8f632939bc0c
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 2
+version: 3
 ---
