@@ -5,7 +5,7 @@ slug: tests-reframe-et-qa-fixtures-r-solution-r-duite
 title: "Tests reframe et qa : fixtures à résolution réduite là où la résolution n'est pas l'objet du test"
 created: 2026-10-11T15:24:29Z
 author: nicoc@zedk_ordi
-status: open
+status: closed
 scope:
   - tests/test_reframe.py
   - tests/test_qa.py
@@ -17,5 +17,5 @@ criteria_by: creator
 verify: [tests]
 method: tdd
 schema: 4
-version: 1
+version: 2
 ---
