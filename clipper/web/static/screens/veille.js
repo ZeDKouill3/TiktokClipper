@@ -504,7 +504,7 @@ function veilleFollowersCell(g) {
    propre échelle (unités différentes). Un point par jour mesuré ; deux jours consécutifs sont reliés, un jour sans
    mesure fait un trou (jamais zéro ni interpolé). Résumés, pics et nombres de jours viennent du serveur (summary). */
 const TREND_SERIES = {
-  steam_reviews: { label: "avis Steam", unit: "avis Steam/jour", field: "value", color: "var(--accent)" },
+  steam_reviews: { label: "avis Steam", unit: "avis Steam/jour", field: "value", color: "var(--primary)" },
   twitch_vods_fr: { label: "VOD Twitch FR", unit: "VOD Twitch FR/jour", field: "vods", color: "var(--info)" },
   twitch_viewers_fr: { label: "viewers Twitch FR", unit: "viewers Twitch FR", field: "value", color: "var(--ok)" },
 };
@@ -699,8 +699,6 @@ document.addEventListener("keydown", (e) => {
 
 Screens.veille = {
   render(body) {
-    const section = body.closest(".screen");
-    if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
     if (Date.now() - veilleUi.at > VEILLE_STALE_MS) loadVeille();
     if (!veilleUi.data) {
       body.innerHTML = veilleUi.error

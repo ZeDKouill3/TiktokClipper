@@ -299,23 +299,20 @@ def test_clips_and_clip_sheet_render_by_morph_and_open_the_shell_drawer_never_th
     assert "drawer.open(" in clips and "openPanel(" not in clips and "closeLayer(" not in clips
     for legacy in ("btn-xs", "btn-ok", "btn-bad", "btn-primary", "btn-ghost", "icon-btn", "pill-dark", "class=\"phone\""):
         assert legacy not in clips, legacy
-    assert 'classList.add("v3")' in clips and 'classList.add("v3")' in _static("screens", "clip.js")
+    assert 'classList.add("v3")' not in clips and 'classList.add("v3")' not in _static("screens", "clip.js")
 
 
-def test_clips_blocks_left_style_css_for_v3_css():
-    css = _static("style.css")
-    assert "/* >>> clips */" not in css and "/* >>> clip */" not in css
-    for selector in (".clip-poster", ".drawer-head", ".sel-bar", ".qa-item", ".sheet-row", ".clip-sheet", ".phone"):
-        assert not re.search(rf"^{re.escape(selector)}\b", css, re.M), selector
-    v3 = _static("v3.css")
-    for selector in (".v3 .clips", ".v3 .clip-poster", ".v3 .scores", ".v3 .score", ".v3 .issue", ".v3 .sel-bar",
-                     ".v3 .clip-sheet", ".v3 .sheet-row", ".v3 .parts"):
+def test_clips_rules_live_in_console_css():
+    assert not (STATIC / "style.css").exists()
+    v3 = _static("console.css")
+    for selector in (".clips", ".clip-poster", ".scores", ".score", ".issue", ".sel-bar",
+                     ".clip-sheet", ".sheet-row", ".parts"):
         assert selector in v3, selector
     # jamais une couleur de texte ni un fond en dur hors des jetons (hors surimpressions sur l'image)
-    mobile = v3[v3.index("@media (max-width: 900px)", v3.index(".v3 .clips")):]
-    assert ".v3 .scores { grid-template-columns: repeat(3, 1fr); }" in mobile
+    mobile = v3[v3.index("@media (max-width: 900px)", v3.index(".clips")):]
+    assert ".scores { grid-template-columns: repeat(3, 1fr); }" in mobile
     assert "44px" in mobile
 
 
 def test_clips_v3_css_never_links_an_external_resource():
-    assert not re.search(r"(?i)https?://|@import|url\(", _static("v3.css"))
+    assert not re.search(r"(?i)https?://|@import|url\(", _static("console.css"))

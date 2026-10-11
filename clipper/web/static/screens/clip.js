@@ -1,7 +1,7 @@
 /* Ecran « Fiche clip » (TASK-fa7619ccf83a, SPEC-7715 E12) : #/clip/<video_id>/<clip_id>, la page plein ecran d'un
    lien partage. Lit GET /api/clips/.../sheet, lecture seule : rien n'est recalcule ici. Une donnee absente
    s'affiche « inconnu », jamais 0 (ADR-ad2e). Une video supprimee (.mp4 absent) garde la fiche avec la mention
-   « vidéo supprimée, fiche conservée ». Rendu v3 (cartes Basecoat, morph), les actions vivent dans le tiroir de
+   « vidéo supprimée, fiche conservée ». Rendu par cartes Basecoat et morph, les actions vivent dans le tiroir de
    l'ecran Clips (« Ouvrir dans Clips »). */
 "use strict";
 
@@ -150,8 +150,6 @@ function clipSheetHtml(sheet, accounts) {
 
 Screens.clip = {
   render(body) {
-    const section = body.closest(".screen");
-    if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
     const target = clipSheetHashKey();
     if (!target) {
       morph(body, emptyState("circle-alert", "Clip introuvable", "Adresse de fiche incomplète : ouvre un clip depuis l'écran Clips."));

@@ -94,12 +94,12 @@ def test_review_screen_paints_by_morph_and_no_longer_by_hand():
     assert "morph(body," in REVIEW_JS
 
 
-def test_review_block_left_style_css_and_lives_in_v3_css():
-    assert "/* >>> review */" not in (STATIC / "style.css").read_text(encoding="utf-8")
-    css = (STATIC / "v3.css").read_text(encoding="utf-8")
-    for selector in (".v3 .rv-layout", ".v3 .rv-item", ".v3 .sel-range", ".v3 .decide", ".v3 .tl-zoom"):
+def test_review_rules_live_in_console_css():
+    assert not (STATIC / "style.css").exists()
+    css = (STATIC / "console.css").read_text(encoding="utf-8")
+    for selector in (".rv-layout", ".rv-item", ".sel-range", ".decide", ".tl-zoom"):
         assert selector in css, selector
-    assert len(css.encode("utf-8")) <= 124_162  # budget de v3.css
+    assert len(css.encode("utf-8")) <= 163_840  # budget de console.css
 
 
 # --- état vide : cite le mode review et liste les vidéos candidates --------------------------------------------------

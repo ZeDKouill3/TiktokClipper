@@ -1,4 +1,4 @@
-/* Écran « Vidéos » v3 (SPEC-7715 E2 / T2 / T7 / T9, ADR-a308, SPEC-74e9 §4.3) : une table dense triée comme le
+/* Écran « Vidéos » (SPEC-7715 E2 / T2 / T7 / T9, ADR-a308, SPEC-74e9 §4.3) : une table dense triée comme le
    serveur la renvoie (texte, statut et style filtrés côté serveur), et la fiche d'une vidéo (#/videos/<id>) avec
    son stepper des 13 étapes, la bande de ses clips et son journal en table. Tout est rendu par rapprochement du
    DOM (morph) : le focus d'un champ de filtre ne se perd jamais, et un événement SSE ne remplace rien.
@@ -626,8 +626,6 @@ document.addEventListener("clipper:event", (e) => {
 Screens.videos = {
   render(body) {
     const s = videosState;
-    const section = body.closest(".screen");
-    if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
     const id = videosHashId();
     if (id !== s.detailId) videosOpenDetail(id);
     videosEnsureChannels();

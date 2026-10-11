@@ -277,8 +277,6 @@ async function lyOpen(body, name) {
    (liste, formulaire d'un preset) reste à channels.js. */
 const lyChannelsRender = Screens.channels.render;
 Screens.channels.render = function (body, store) {
-  const section = body.closest(".screen");
-  if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
   const name = lyName();
   if (!name) {
     if (lyUi.name) { lyUi.name = null; body.onclick = null; body.oninput = null; body.onchange = null; body.onfocusin = null; body.innerHTML = ""; }

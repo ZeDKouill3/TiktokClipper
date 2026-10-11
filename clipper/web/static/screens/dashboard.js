@@ -1,4 +1,4 @@
-/* Ecran « Tableau de bord » v3 (SPEC-7715 E1, T2, T4, T9 ; ADR-a308). Lit GET /api/dashboard et se remet a jour
+/* Ecran « Tableau de bord » (SPEC-7715 E1, T2, T4, T9 ; ADR-a308). Lit GET /api/dashboard et se remet a jour
    sur chaque evenement SSE (clipper:event, emis par app.js) ; charge apres screens.js dont il remplace l'entree
    Screens.dashboard. La decision d'abord : « A faire » (echecs regroupes par cause, reprises, VOD a confirmer,
    clips a valider, posts a 0 vue), puis ce qui tourne, la file, les dernieres videos terminees ; a droite les
@@ -458,7 +458,7 @@ function dashDiskRail() {
 }
 
 function dashLoading() {
-  return `<div class="v3 d3" aria-busy="true"><div class="d3-kpis">${"<div class=\"d3-kpi\"><div class=\"d3-skel\"></div></div>".repeat(6)}</div>
+  return `<div class="d3" aria-busy="true"><div class="d3-kpis">${"<div class=\"d3-kpi\"><div class=\"d3-skel\"></div></div>".repeat(6)}</div>
     <div class="d3-cols"><div class="d3-main"><div class="d3-skel d3-skel-card"></div><div class="d3-skel d3-skel-card"></div></div>
     <aside class="d3-aside"><div class="d3-skel d3-skel-card"></div></aside></div></div>`;
 }
@@ -487,12 +487,12 @@ Screens.dashboard = {
     if (Date.now() - dash.diskAt > DASH_DISK_STALE_MS) loadDisk();
     if (!data) {
       morph(body, dash.error
-        ? `<div class="v3 d3">${dashEmpty("circle-alert", "Chargement impossible", String(dash.error.message || dash.error))}</div>`
+        ? `<div class="d3">${dashEmpty("circle-alert", "Chargement impossible", String(dash.error.message || dash.error))}</div>`
         : dashLoading());
       return;
     }
     const todo = dashTodo(data);
-    morph(body, `<div class="v3 d3">
+    morph(body, `<div class="d3">
       ${dash.error ? dashError(`Actualisation impossible : ${dash.error.message || dash.error}`) : ""}
       ${dashKpis(data)}
       <div class="d3-cols">

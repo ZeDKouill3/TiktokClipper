@@ -20,8 +20,7 @@ STATIC = Path(__file__).resolve().parents[1] / "clipper" / "web" / "static"
 NODE = pytest.mark.skipif(shutil.which("node") is None, reason="node absent du PATH")
 
 JOURNAL_JS = (STATIC / "screens" / "journal.js").read_text(encoding="utf-8")
-V3_CSS = (STATIC / "v3.css").read_text(encoding="utf-8")
-STYLE_CSS = (STATIC / "style.css").read_text(encoding="utf-8")
+V3_CSS = (STATIC / "console.css").read_text(encoding="utf-8")
 
 STUBS = r"""
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -110,7 +109,7 @@ def test_empty_filter_says_no_line_matches_instead_of_an_empty_table():
 def test_screen_paints_its_body_through_morph_inside_a_v3_root():
     painted = _run("(() => { const el = {}; Screens.journal.render(el); return el.painted; })()",
                    _with_data(LINES))
-    assert painted.startswith('<div class="v3 journal">') and '<table class="table journal">' in painted
+    assert painted.startswith('<div class="journal">') and '<table class="table journal">' in painted
 
 
 def test_journal_js_has_no_manual_inner_html_rendering():
@@ -121,8 +120,8 @@ def test_journal_js_has_no_manual_inner_html_rendering():
 # --- CSS : table fixe, message qui passe à la ligne, aucun nowrap sur le message -----------------------------
 
 def test_journal_table_is_fixed_layout_and_its_message_cell_wraps():
-    assert re.search(r"\.v3\.journal \.table\s*\{[^}]*table-layout:\s*fixed", V3_CSS)
-    assert re.search(r"\.v3 \.table td\.wrap\s*\{[^}]*white-space:\s*normal", V3_CSS)
+    assert re.search(r"\.journal \.table\s*\{[^}]*table-layout:\s*fixed", V3_CSS)
+    assert re.search(r"\.table td\.wrap\s*\{[^}]*white-space:\s*normal", V3_CSS)
 
 
 def test_no_journal_rule_forces_nowrap_on_the_message_cell():
@@ -132,6 +131,8 @@ def test_no_journal_rule_forces_nowrap_on_the_message_cell():
             assert "wrap" not in selector and "message" not in selector, selector
 
 
-def test_journal_block_left_style_css_and_is_delimited_in_v3_css():
-    assert "/* >>> journal */" not in STYLE_CSS and "#screen-journal" not in STYLE_CSS
-    assert "/* >>> journal v3 */" in V3_CSS and "/* <<< journal v3 */" in V3_CSS
+def test_journal_block_is_delimited_in_console_css_and_style_css_is_gone():
+    assert not (STATIC / "style.css").exists() and "#screen-journal" not in V3_CSS
+    assert "/* >>> journal */" in V3_CSS and "/* <<< journal */" in V3_CSS
+
+

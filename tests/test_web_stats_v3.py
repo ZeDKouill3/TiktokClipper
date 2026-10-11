@@ -20,8 +20,7 @@ STATIC = Path(__file__).resolve().parents[1] / "clipper" / "web" / "static"
 NODE = pytest.mark.skipif(shutil.which("node") is None, reason="node absent du PATH")
 
 STATS_JS = (STATIC / "screens" / "stats.js").read_text(encoding="utf-8")
-V3_CSS = (STATIC / "v3.css").read_text(encoding="utf-8")
-STYLE_CSS = (STATIC / "style.css").read_text(encoding="utf-8")
+V3_CSS = (STATIC / "console.css").read_text(encoding="utf-8")
 
 STUBS = r"""
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -38,6 +37,7 @@ let currentScreen = 'stats';
 let painted = null;
 const morph = (el, html) => { painted = html; };
 const emptyState = (ic, title, text) => `<div class="empty"><h3>${title}</h3><p>${text}</p></div>`;
+const localStorage = { m: {}, getItem(k) { return k in this.m ? this.m[k] : null; }, setItem(k, v) { this.m[k] = String(v); } };
 const toasts = [], errors = [];
 const toast = (o) => toasts.push(o);
 const toastError = (title, err) => errors.push({ title, message: String(err && err.message || err) });
@@ -169,7 +169,7 @@ def test_load_fetches_measures_and_the_screen_shows_them():
 @NODE
 def test_screen_paints_by_morph_inside_a_v3_root_and_never_by_innerhtml():
     html = _run("(Screens.stats.render(body), painted)", FRESH + "statsUi.measures = MEASURES; statsUi.learning = LEARNING;")
-    assert html.startswith('<div class="v3 s3">')
+    assert html.startswith('<div class="s3">')
     assert "data-measures-cost" in html and "data-learning-state" in html and "data-stats-tiles" in html
     assert 'class="panel' not in html
 
@@ -177,26 +177,76 @@ def test_screen_paints_by_morph_inside_a_v3_root_and_never_by_innerhtml():
 @NODE
 def test_screen_without_account_is_painted_by_morph_too():
     html = _run("(Screens.stats.render(body), painted)", "statsUi.accounts = []; statsUi.key = statsKey(); statsUi.at = Date.now();")
-    assert html.startswith('<div class="v3 s3">') and "Aucun compte TikTok" in html
+    assert html.startswith('<div class="s3">') and "Aucun compte TikTok" in html
 
 
 def test_stats_js_has_no_manual_inner_html_rendering():
     assert not re.search(r"body\.innerHTML\s*=", STATS_JS)
 
 
+# --- compte affiché par défaut (revue 11/10) ----------------------------------------------------------------------
+
+DEFAULT_SETUP = (
+    "location.hash = '#/stats';"
+    "const alpha = { ...ACCOUNT, account: 'compte_alpha' }, beta = { ...ACCOUNT, account: 'compte_beta' }, gamma = { ...ACCOUNT, account: 'compte_gamma' };"
+    "const withViews = (account, n) => ({ ...OVERVIEW, account, tiles: { ...TILES, views: { value: n, change_pct: null, history_change_pct: null } } });"
+    "responses = { '/api/stats/tiktok/compte_alpha': withViews('compte_alpha', 0), '/api/stats/tiktok/compte_beta': withViews('compte_beta', 40),"
+    " '/api/stats/tiktok/compte_gamma': withViews('compte_gamma', 7), '/api/stats/tiktok': { accounts: [alpha, beta, gamma] }, '/api/learning': LEARNING, '/api/measures': MEASURES };"
+)
+
+
+@NODE
+def test_default_account_is_the_first_one_with_views_not_the_first_alphabetically():
+    out = _run("statsAccount().account", DEFAULT_SETUP + "await statsLoad();")
+    assert out == "compte_beta"
+
+
+@NODE
+def test_default_account_is_the_last_one_consulted_when_it_still_exists():
+    out = _run("statsAccount().account", DEFAULT_SETUP + "localStorage.setItem('clipper-stats-account', 'compte_gamma'); await statsLoad();")
+    assert out == "compte_gamma"
+
+
+@NODE
+def test_consulting_an_account_by_the_address_remembers_it_for_next_time():
+    out = _run("[localStorage.getItem('clipper-stats-account'), (location.hash = '#/stats', statsAccount().account)]",
+               DEFAULT_SETUP + "location.hash = '#/stats/compte_gamma'; await statsLoad();")
+    assert out == ["compte_gamma", "compte_gamma"]
+
+
+@NODE
+def test_default_account_is_the_first_one_when_none_has_views():
+    out = _run("statsAccount().account", DEFAULT_SETUP.replace("withViews('compte_beta', 40)", "withViews('compte_beta', 0)").replace("withViews('compte_gamma', 7)", "withViews('compte_gamma', 0)") + "await statsLoad();")
+    assert out == "compte_alpha"
+
+
+# --- en-tête de page identique sur tous les écrans (revue 11/10) ----------------------------------------------------
+
+def test_every_screen_header_has_the_same_shape_and_a_section_eyebrow():
+    page = (STATIC / "index.html").read_text(encoding="utf-8")
+    sections = re.findall(r'<section class="screen[^"]*" id="screen-(\w+)"[^>]*>(.*?)</section>', page, flags=re.S)
+    heads = {name: re.search(r'<div class="eyebrow">([^<]*)</div><h1>([^<]*)</h1><p class="sub">', body) for name, body in sections if 'class="page-head' in body}
+    assert len(heads) == 11, sorted(heads)
+    for name, match in heads.items():
+        assert match, f"{name} : en-tête hors gabarit (sur-titre, titre, sous-titre)"
+        assert match.group(1) in ("Production", "Configuration"), (name, match.group(1))
+    assert heads["stats"].group(1) == "Configuration"
+
+
 # --- CSS : bloc retiré de style.css, ajouté en fin de v3.css, budget -------------------------------------------------
 
-def test_stats_blocks_left_style_css():
-    assert "/* >>> stats */" not in STYLE_CSS and "/* <<< stats */" not in STYLE_CSS
+def test_stats_css_lives_in_console_css_and_style_css_is_gone():
+    assert not (STATIC / "style.css").exists()
+    assert "/* >>> stats */" in V3_CSS and "/* <<< stats */" in V3_CSS
 
 
 def test_v3_css_ends_with_the_stats_block_and_stays_within_budget():
-    assert len(V3_CSS.encode("utf-8")) <= 124_162
-    start = V3_CSS.index("/* >>> stats v3 */")
-    assert V3_CSS.index("/* <<< stats v3 */") > start
+    assert len(V3_CSS.encode("utf-8")) <= 163_840
+    start = V3_CSS.index("/* >>> stats */")
+    assert V3_CSS.index("/* <<< stats */") > start
     # bloc ferme, pas forcement le dernier : les ecrans migres ensuite ajoutent le leur a la suite
-    assert V3_CSS.index("/* >>> stats v3 */") < V3_CSS.index("/* <<< stats v3 */")
+    assert V3_CSS.index("/* >>> stats */") < V3_CSS.index("/* <<< stats */")
     block = V3_CSS[start:]
-    for needle in (".v3.s3 ", ".v3 .kpi ", ".s3-card", "@media screen and (max-width: 900px)"):
+    for needle in (".s3 ", ".kpi ", ".s3-card", "@media screen and (max-width: 900px)"):
         assert needle in block, needle
     assert "overflow-x" in block  # tableaux défilants : pas de débordement de page à 390 px

@@ -17,7 +17,7 @@ const SET_VEILLE_KEYS = ["twitch_client_id", "twitch_client_secret", "youtube_ap
 const SET_STALE_MS = 4000;
 
 /* Libellé français de chaque champ (chemin pointé, comme dans le brouillon). La clé technique reste
-   affichée en mono discret. tests/test_web_settings_v3.py compare cette table aux clés servies par le serveur. */
+   affichée en mono discret. le test de l'écran Réglages (tests/) compare cette table aux clés servies par le serveur. */
 const SET_LABELS = {
   "mode": "Mode de traitement",
   "workspace_dir": "Dossier de travail",
@@ -549,8 +549,6 @@ function setWire(root) {
 
 Screens.settings = {
   render(body) {
-    const section = body.closest(".screen");
-    if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
     if (setUi.data === null || (!setUi.dirty && Date.now() - setUi.at > SET_STALE_MS)) setLoad(false);
     if (setUi.data === null) {
       body.innerHTML = `<div class="skeleton skeleton-line"></div><div class="skeleton skeleton-card"></div>`;

@@ -34,7 +34,7 @@ const CHAN_MODELS = [
 const CHAN_STALE_MS = 4000;
 
 /* Libellé français de chaque réglage affiché (clé « section.clé » de CONFIG_DEFAULTS) ; la clé technique reste
-   visible en petit, en mono. tests/test_web_channels_v3.py compare cette table aux clés servies par le serveur. */
+   visible en petit, en mono. le test de l'écran Styles (tests/) compare cette table aux clés servies par le serveur. */
 const FIELD_LABELS = {
   "channel.display_name": "Nom affiché",
   "channel.source_url": "Adresse de la source",
@@ -741,8 +741,6 @@ async function chOpenEdit(body, name) {
 
 Screens.channels = {
   render(body) {
-    const section = body.closest(".screen");
-    if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
     const name = chHash();
     if (name) {
       if (!chUi.edit || chUi.edit.name !== name || chUi.edit.failed) { chUi.html = ""; chOpenEdit(body, name); }

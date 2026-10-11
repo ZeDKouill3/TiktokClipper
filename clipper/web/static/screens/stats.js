@@ -90,11 +90,36 @@ function statsHref(account, tab, post) {
   return base;
 }
 
-/* Compte affiche : celui de l'adresse s'il existe, sinon le premier. */
+/* Compte affiche : celui de l'adresse s'il existe, sinon le dernier consulte (s'il existe encore), sinon le
+   premier qui a des vues (cherche au chargement, statsPickDefault), sinon le premier. */
+const STATS_LAST_KEY = "clipper-stats-account";
+
+function statsLastConsulted() {
+  try { return localStorage.getItem(STATS_LAST_KEY) || ""; } catch (err) { return ""; } // stockage indisponible : pas de memoire
+}
+
 function statsAccount() {
   const accounts = statsUi.accounts || [];
+  const find = (id) => accounts.find((a) => a.account === id);
+  return find(statsRoute().account) || find(statsLastConsulted()) || find(statsUi.defaultAccount) || accounts[0] || null;
+}
+
+/* Memorise le compte consulte (adresse explicite seulement : le choix par defaut n'est pas une consultation). */
+function statsRemember() {
   const wanted = statsRoute().account;
-  return accounts.find((a) => a.account === wanted) || accounts[0] || null;
+  if (!wanted || !(statsUi.accounts || []).some((a) => a.account === wanted)) return;
+  try { localStorage.setItem(STATS_LAST_KEY, wanted); } catch (err) { /* stockage indisponible : le choix ne sera pas retenu */ }
+}
+
+/* Aucun compte demande ni retenu : le premier dont la vue d'ensemble compte des vues (releves de TikTok Studio). */
+async function statsPickDefault() {
+  const accounts = statsUi.accounts || [];
+  if (statsRoute().account || accounts.some((a) => a.account === statsLastConsulted())) return;
+  for (const a of accounts) {
+    const overview = await api(`/api/stats/tiktok/${encodeURIComponent(a.account)}?period=${statsUi.period}`);
+    if (overview.tiles && overview.tiles.views && overview.tiles.views.value > 0) { statsUi.defaultAccount = a.account; return; }
+  }
+  statsUi.defaultAccount = "";
 }
 
 /* ---------- chargement ---------- */
@@ -111,6 +136,8 @@ function statsLoad() {
   statsUi.loading = (async () => {
     try {
       statsUi.accounts = (await api("/api/stats/tiktok")).accounts;
+      statsRemember();
+      if (statsUi.defaultAccount === undefined) await statsPickDefault();
       try { statsUi.learning = await api("/api/learning"); statsUi.learningError = null; } catch (err) { statsUi.learningError = err; }
       try { statsUi.measures = await api("/api/measures"); statsUi.measuresError = null; } catch (err) { statsUi.measuresError = err; }
       const account = statsAccount();
@@ -432,7 +459,7 @@ function statsVideoSheet(account) {
   const tab = STATS_VIDEO_TABS.some(([id]) => id === statsUi.vtab) ? statsUi.vtab : "overview";
   const content = { overview: statsVideoOverviewTab, viewers: statsVideoViewersTab, engagement: statsVideoEngagementTab }[tab](v);
   return `${back}<div class="video-sheet" data-stats-sheet>
-    <div><div class="poster-big" style="${v.processing ? "background:var(--surface-3)" : statsPoster(v.post_id)}"><span>${esc((v.caption || "").split("#")[0].trim() || v.post_id)}</span></div>
+    <div><div class="poster-big" style="${v.processing ? "background:var(--muted)" : statsPoster(v.post_id)}"><span>${esc((v.caption || "").split("#")[0].trim() || v.post_id)}</span></div>
       <h2 style="font-size:17px;margin-top:16px">${esc(v.caption || "(sans légende)")}</h2>
       <div class="muted" style="font-size:13px;margin-top:8px">Publié le ${esc(statsPostedAt(v.posted_at, v.posted_at_text))} · <span class="chip plain ${v.visibility === "public" ? "ok" : ""}">${esc(vis)}</span> ${statsRestrictedChip(v)}</div>
       ${v.fyf_eligible === false ? `<div class="reason" data-stats-fyf-notice>${icon("triangle-alert", "i-sm")}<span><b>TikTok ne recommande pas cette vidéo dans le fil Pour toi.</b> ${esc(v.fyf_notice || "")}</span></div>` : ""}
@@ -691,14 +718,14 @@ Screens.stats = {
     statsUi.lastRender = Date.now();
     if (!statsUi.accounts || statsUi.key !== statsKey() || Date.now() - statsUi.at > STATS_STALE_MS) statsLoad();
     if (!statsUi.accounts) {
-      morph(body, `<div class="v3 s3">${statsUi.error
+      morph(body, `<div class="s3">${statsUi.error
         ? emptyState("circle-alert", "Chargement impossible", String(statsUi.error.message || statsUi.error))
         : `<div class="skeleton sk-line"></div><div class="skeleton sk-card"></div><div class="skeleton sk-card"></div>`}</div>`);
       return;
     }
     const account = statsAccount();
     if (!account) {
-      morph(body, `<div class="v3 s3">${emptyState("users", "Aucun compte TikTok", "Ajoute un compte dans l'écran Comptes : les statistiques sont relevées compte par compte.", `<a class="btn" data-variant="outline" href="#/accounts">${icon("users")}Aller à Comptes</a>`)}</div>`);
+      morph(body, `<div class="s3">${emptyState("users", "Aucun compte TikTok", "Ajoute un compte dans l'écran Comptes : les statistiques sont relevées compte par compte.", `<a class="btn" data-variant="outline" href="#/accounts">${icon("users")}Aller à Comptes</a>`)}</div>`);
       return;
     }
     const route = statsRoute();
@@ -709,7 +736,7 @@ Screens.stats = {
       pane = statsTabs(account, route.tab, count) + (route.tab === "videos" ? statsVideosList(account) : statsOverview(account));
     }
     const sheet = route.tab === "videos" && route.post;
-    morph(body, `<div class="v3 s3">${statsUi.error ? `<p class="reason bad">Actualisation impossible : ${esc(statsUi.error.message || statsUi.error)}</p>` : ""}${statsControls(account)}${pane}${sheet ? "" : statsMeasuresSection() + statsLearningSection()}</div>`);
+    morph(body, `<div class="s3">${statsUi.error ? `<p class="reason bad">Actualisation impossible : ${esc(statsUi.error.message || statsUi.error)}</p>` : ""}${statsControls(account)}${pane}${sheet ? "" : statsMeasuresSection() + statsLearningSection()}</div>`);
     statsWire(body, account);
   },
 };

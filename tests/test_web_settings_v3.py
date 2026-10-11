@@ -69,7 +69,7 @@ def test_the_field_shows_the_french_label_with_its_key_as_a_small_mono_reference
     js = _static("screens", "settings.js")
     assert "SET_LABELS[path.join(\".\")]" in js
     assert 'class="mono set-key"' in js
-    assert "set-key" in _static("v3.css")
+    assert "set-key" in _static("console.css")
 
 
 def test_save_button_sits_in_a_sticky_foot():
@@ -77,8 +77,8 @@ def test_save_button_sits_in_a_sticky_foot():
     foot = re.search(r'class="sticky-foot[^"]*"[\s\S]*?</div>', js)
     assert foot is not None, "pas de .sticky-foot"
     assert "data-set-save" in foot.group(0) and "data-set-cancel" in foot.group(0)
-    css = _static("v3.css")
-    rule = css[css.index(".v3 .sticky-foot {"):]
+    css = _static("console.css")
+    rule = css[css.index(".sticky-foot {"):]
     rule = rule[:rule.index("}")]
     assert "position: sticky" in rule and "bottom:" in rule
 
@@ -93,20 +93,19 @@ def test_comments_lost_warning_is_one_line_under_the_save_button():
     assert "commentaires du fichier perdus" in js           # le texte d'avertissement reste
 
 
-def test_settings_is_a_v3_screen_and_its_css_left_style_css():
+def test_settings_has_no_migration_class_and_its_css_lives_in_console_css():
     js = _static("screens", "settings.js")
-    assert 'section.classList.add("v3")' in js
-    legacy, v3 = _static("style.css"), _static("v3.css")
-    assert "/* >>> settings */" not in legacy and "/* <<< settings */" not in legacy
-    assert "/* >>> settings */" in v3 and "/* <<< settings */" in v3
+    assert 'classList.add("v3")' not in js
+    console = _static("console.css")
+    assert not (STATIC / "style.css").exists()
+    assert "/* >>> settings */" in console and "/* <<< settings */" in console
     for selector in (".set-layout", ".set-nav", ".set-backend", ".set-usages", ".sticky-foot", ".set-key"):
-        assert f".v3 {selector}" in v3 or f"#screen-settings {selector}" in v3, selector
-        assert selector + " {" not in legacy, selector
+        assert selector in console, selector
 
 
 def test_settings_block_is_the_last_block_of_v3_css_and_stays_in_budget():
-    v3 = _static("v3.css")
-    assert len(v3.encode("utf-8")) <= 124_162
+    v3 = _static("console.css")
+    assert len(v3.encode("utf-8")) <= 163_840
     # bloc ferme, pas forcement le dernier : les ecrans migres ensuite ajoutent le leur a la suite
     assert v3.index("/* >>> settings */") < v3.index("/* <<< settings */")
     block = v3[v3.rindex("/* >>> settings */"):]
@@ -115,7 +114,7 @@ def test_settings_block_is_the_last_block_of_v3_css_and_stays_in_budget():
 
 
 def test_settings_sticky_summary_stays_on_screen():
-    v3 = _static("v3.css")
-    rule = v3[v3.index(".v3 .set-nav {"):]
+    v3 = _static("console.css")
+    rule = v3[v3.index(".set-nav {"):]
     rule = rule[:rule.index("}")]
     assert "position: sticky" in rule and "top:" in rule

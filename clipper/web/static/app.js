@@ -288,10 +288,9 @@ function route() {
   }
 }
 
-/* Ecrans non migres : ecrit body.innerHTML seulement si le HTML calcule differe
+/* Ecrans qui ecrivent body.innerHTML : ecrit le DOM seulement si le HTML calcule differe
    du precedent, donc un rendu identique (evenement SSE sans changement, polling)
-   ne touche pas au DOM. Les ecrans v3 passent par morph() et n'en ont pas besoin ;
-   la garde disparait avec le dernier ecran migre (ADR-a308 §3). */
+   ne touche pas au DOM. Les ecrans qui passent par morph() n'en ont pas besoin. */
 function guardBodyHtml(body) {
   if (body.dataset.guarded) return;
   body.dataset.guarded = "1";
@@ -497,13 +496,12 @@ async function openAddVideo(channel) {
 /* ---------- Theme : clair par defaut, sombre memorise par navigateur (SPEC-7715 T12) ----------
    Le choix memorise est la seule source : jamais la preference du systeme (un seul theme par page, le README est
    en clair). L'inline de index.html applique la meme regle avant le premier rendu. `.dark` sur <html> pilote
-   Basecoat et v3.css ; data-theme reste pose pour style.css le temps de la migration. */
+   Basecoat et console.css. */
 function chooseTheme(saved) {
   return saved === "dark" ? "dark" : "light";
 }
 
 function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme;
   document.documentElement.classList.toggle("dark", theme === "dark");
   morph($("#btn-theme"), icon(theme === "light" ? "moon" : "sun"));
   $('meta[name="theme-color"]').content = theme === "light" ? "#f6f4ef" : "#121210";

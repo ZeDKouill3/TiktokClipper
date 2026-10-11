@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="fr" data-theme="light">
+<html lang="fr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -7,31 +7,24 @@
 <meta name="theme-color" content="#f6f4ef">
 <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
 <link rel="stylesheet" href="/static/fonts.css">
-<!-- Cascade pendant la migration (ADR-a308). Basecoat est en couches Tailwind (properties, theme, base = jetons
-     :root et resets, components = .v3 .btn, .v3 .input..., utilities). Les feuilles des ecrans non migres vont dans
-     une couche « legacy » placee ENTRE base et components, declaree ici avant toute feuille (l'ordre des couches est
-     fixe par leur premiere apparition) :
-     - au-dessus de theme/base : les jetons :root de style.css (--muted, --accent, --font-mono, --ease-out... memes
-       noms chez Basecoat) et ses resets gardent la main dans les ecrans non migres, comme avant (pas un pixel) ;
-     - en dessous de components : dans la coquille, `.v3 .btn` l'emporte sur le `.btn` global de style.css.
-     Entre les feuilles legacy, ordre et specificite ne changent pas (meme couche, meme ordre). v3.css reste hors
-     couche, au-dessus de tout ; ses jetons sont sur .v3, jamais sur :root. -->
-<style>@layer properties, theme, base, legacy, components, utilities;</style>
+<!-- Cascade (ADR-a308) : Basecoat est en couches Tailwind (properties, theme, base, components, utilities). La couche
+     « socle » (restes des anciennes feuilles, dans console.css, et veille.css) passe entre base et components,
+     declaree ici avant toute feuille (l'ordre des couches est fixe par leur premiere apparition) : un composant
+     Basecoat l'emporte sur elle. console.css reste hors couche, au-dessus de tout. -->
+<style>@layer properties, theme, base, socle, components, utilities;</style>
 <link rel="stylesheet" href="/static/vendor/basecoat.cdn.min.css">
 <style>
-  @import url("/static/style.css") layer(legacy);
-  @import url("/static/screens/veille.css") layer(legacy);
+  @import url("/static/screens/veille.css") layer(socle);
 </style>
-<link rel="stylesheet" href="/static/v3.css">
+<link rel="stylesheet" href="/static/console.css">
 <script>
   // Theme avant le premier rendu : clair par defaut, sombre seulement s'il a ete choisi (SPEC-7715 T12).
-  // Meme regle que chooseTheme() dans app.js ; data-theme reste pose le temps de la migration (style.css).
+  // Meme regle que chooseTheme() dans app.js ; le theme est la classe « dark » de <html>.
   // La barre laterale reduite (rail) est restauree ici aussi, pour que la grille ne saute pas au chargement.
   (function () {
     var saved = null, nav = null;
     try { saved = localStorage.getItem("clipper-theme"); nav = localStorage.getItem("clipper-nav"); } catch (e) { /* stockage indisponible */ }
     var theme = saved === "dark" ? "dark" : "light";
-    document.documentElement.dataset.theme = theme;
     document.documentElement.classList.toggle("dark", theme === "dark");
     if (nav === "rail") document.documentElement.dataset.nav = "rail";
   })();
@@ -40,9 +33,8 @@
 <body>
 <div class="app" id="app">
 
-  <!-- Coquille v3 : chaque piece porte « v3 » (jamais un ancetre des sections .screen, que Basecoat restylerait).
-       La barre s'appelle .sidenav : basecoat.all.min.js prend le controle de tout .sidebar. -->
-  <aside class="sidenav v3" id="sidenav" aria-label="Navigation principale">
+  <!-- Coquille : la barre s'appelle .sidenav (et non .sidebar) : basecoat.all.min.js prend le controle de tout .sidebar. -->
+  <aside class="sidenav" id="sidenav" aria-label="Navigation principale">
     <a class="brand" href="#/dashboard">
       <img src="/static/logo.svg" alt="" width="28" height="28">
       <b class="brand-name">Clipper</b>
@@ -67,7 +59,7 @@
   </aside>
 
   <div class="main">
-    <header class="topbar v3">
+    <header class="topbar">
       <button class="btn-icon menu-btn" id="btn-menu" type="button" aria-label="Menu"><span data-icon="menu"></span></button>
       <div class="crumbs" id="crumbs"><span class="crumb-group" id="crumb-group">Production</span><span class="sep">/</span><span class="cur" id="crumb-title">Tableau de bord</span></div>
       <span class="spacer"></span>
@@ -78,7 +70,7 @@
       <button class="btn-icon notif-btn" id="btn-notif" type="button" aria-label="Notifications du navigateur" aria-pressed="false"><span data-icon="bell"></span></button>
       <button class="btn" data-size="sm" id="btn-add" type="button"><span data-icon="plus"></span><span class="lbl">Ajouter une vidéo</span></button>
     </header>
-    <div class="conn-banner v3" id="conn-banner" role="status" hidden><span data-icon="triangle-alert"></span>Connexion perdue : les données sont actualisées toutes les 5 secondes.</div>
+    <div class="conn-banner" id="conn-banner" role="status" hidden><span data-icon="triangle-alert"></span>Connexion perdue : les données sont actualisées toutes les 5 secondes.</div>
 
     <main class="view" id="view" tabindex="-1">
     <section class="screen" id="screen-dashboard" data-title="Tableau de bord" hidden>
@@ -132,7 +124,7 @@
     </section>
     <section class="screen" id="screen-stats" data-title="Statistiques" hidden>
       <div class="page-head reveal">
-        <div class="titles"><div class="eyebrow">Statistiques TikTok</div><h1>Statistiques</h1><p class="sub">Chiffres relevés sur TikTok Studio, compte par compte. Rien n'est importé à la main : tout vient du relevé automatique.</p></div>
+        <div class="titles"><div class="eyebrow">Configuration</div><h1>Statistiques</h1><p class="sub">Chiffres relevés sur TikTok Studio, compte par compte. Rien n'est importé à la main : tout vient du relevé automatique.</p></div>
         <div class="actions" data-actions></div>
       </div>
       <div class="panel" data-body><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-card"></div></div>
@@ -164,7 +156,7 @@
     </main>
   </div>
 
-  <nav class="tabbar v3" id="tabbar" aria-label="Navigation mobile">
+  <nav class="tabbar" id="tabbar" aria-label="Navigation mobile">
     <a href="#/dashboard" data-screen="dashboard"><span data-icon="layout-dashboard"></span><span>Accueil</span><span class="count" data-count-for="dashboard" hidden></span></a>
     <a href="#/veille" data-screen="veille"><span data-icon="trending-up"></span><span>Veille</span><span class="count" data-count-for="veille" hidden></span></a>
     <a href="#/review" data-screen="review"><span data-icon="sparkles"></span><span>Revue</span><span class="count" data-count-for="review" hidden></span></a>
@@ -186,9 +178,8 @@
 
 <div class="overlay" id="overlay" hidden></div>
 
-<!-- Couche v3 : toasts Basecoat, dialogues natifs, tiroir, palette. Le conteneur porte « v3 » pour que les
-     selecteurs descendants `.v3 .dialog` / `.v3 .toaster` s'appliquent (un <dialog class="v3"> seul ne recevrait rien). -->
-<div class="v3" id="layers">
+<!-- Couche des dialogues natifs, du toaster, du tiroir et de la palette. -->
+<div id="layers">
   <div class="toaster" id="toaster" data-align="end" aria-live="polite"></div>
   <div class="drawer-scrim" id="drawer-scrim"></div>
   <aside class="drawer-panel" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden></aside>

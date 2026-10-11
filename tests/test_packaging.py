@@ -84,14 +84,14 @@ def test_wheel_contains_the_font_assets(built_wheel):
 @pytest.mark.skipif(shutil.which("uv") is None, reason="uv absent du PATH")
 def test_wheel_contains_the_web_static_assets(built_wheel):
     """TASK-4ed9 : une installation non editable (uv pip install .) doit
-    apporter clipper/web/static/index.html, app.js et style.css, en plus des
+    apporter clipper/web/static/index.html, app.js et console.css, en plus des
     polices deja couvertes. Lit le wheel de la session (fixture built_wheel)."""
 
     with zipfile.ZipFile(built_wheel) as zf:
         names = zf.namelist()
     assert "clipper/web/static/index.html" in names
     assert "clipper/web/static/app.js" in names
-    assert "clipper/web/static/style.css" in names
+    assert "clipper/web/static/console.css" in names
 
 
 def test_console_script_clipper_is_declared():

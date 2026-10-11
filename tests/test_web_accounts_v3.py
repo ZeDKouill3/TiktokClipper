@@ -94,16 +94,13 @@ def _run(body: str):
 def test_accounts_screen_is_one_table_with_connexion_pret_creneaux_posts_columns():
     out = _run("""
       accUi.list = ACCOUNTS_FIXTURE;
-      const section = { classList: { contains: () => false, add(c) { this.added = c; } } };
-      Screens.accounts.render({ closest: () => section });
+      Screens.accounts.render({});
       const html = painted[painted.length - 1];
       const heads = [...html.matchAll(/<th[^>]*>([^<]*)<\\/th>/g)].map((m) => m[1].trim());
-      console.log(JSON.stringify({ heads, rows: (html.match(/<tr[ >]/g) || []).length, table: html.includes('<table class="table acc-table">'),
-                                   added: section.classList.added || null }));
+      console.log(JSON.stringify({ heads, rows: (html.match(/<tr[ >]/g) || []).length, table: html.includes('<table class="table acc-table">') }));
     """)
     assert out["heads"] == ["Compte", "Connexion", "Prêt", "Créneaux", "Posts", ""], out["heads"]
     assert out["table"] is True and out["rows"] >= 3   # en-tête + 2 comptes
-    assert out["added"] == "v3"                      # écran migré (ADR-a308 §6)
 
 
 @NODE
@@ -163,18 +160,18 @@ def test_accounts_js_has_no_modal_and_no_innerhtml_assignment_in_render():
     assert "openPanel(" not in js and "acc-modal" not in js
     render = js[js.index("Screens.accounts = {"):]
     assert "innerHTML =" not in render
-    assert 'classList.add("v3")' in js
+    assert 'classList.add("v3")' not in js  # plus de classe de migration posée par l'écran
 
 
 # --- C6 : CSS fusionné dans v3.css, accounts.css retiré --------------------------------------------------------
 
-def test_accounts_css_is_merged_into_v3_css_and_its_sheet_is_gone():
+def test_accounts_css_is_merged_into_console_css_and_its_sheet_is_gone():
     page = (STATIC / "index.html").read_text(encoding="utf-8")
-    v3 = (STATIC / "v3.css").read_text(encoding="utf-8")
+    v3 = (STATIC / "console.css").read_text(encoding="utf-8")
     assert "screens/accounts.css" not in page
     assert not (STATIC / "screens" / "accounts.css").exists()
-    assert "Comptes v3" in v3
-    assert ".v3 .acc-table" in v3 or ".v3 .acc-row" in v3
+    assert "Comptes (E10" in v3
+    assert ".acc-table" in v3 or ".acc-row" in v3
     assert re.search(r"(?m)^\.acc-modal\b", v3) is None
 
 

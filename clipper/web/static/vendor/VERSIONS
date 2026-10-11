@@ -1,6 +1,6 @@
 # Vendoring par tools/vendor_basecoat.py (ADR-a308). Ne pas éditer à la main.
 basecoat-css 1.0.2 MIT
-sha256 basecoat.cdn.min.css b5334753f20498c3d62d000a549f465a897a6b7256e7895bad1ed1631edd2680
+sha256 basecoat.cdn.min.css 8123677adb9bba43be3298e1543bcc5fc763e8cda3d32dc74c806046a3537ca0
 sha256 basecoat.all.min.js bdb364d43e0f3e7b8dfcfa27bbbe8baac96249e57b79e7f0d241bf70b056ea98
 sha256 LICENSE-basecoat.md 160a6cea26ff1931297957499ab739e94c4bc79ecea18b490c9f533fa76ace78
 idiomorph 0.8.0 0BSD

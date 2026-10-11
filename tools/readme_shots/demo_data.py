@@ -38,8 +38,8 @@ CONFIG_DEFAULTS: dict[str, object] = {
 
 PASSWORD_PLACEHOLDER = "demo-factice-pas-un-secret"  # injecté dans le coffre mémoire du lanceur seulement
 
-STEPS = ("download", "transcribe", "scenes", "audio", "moments", "vision", "parts", "captions",
-         "reframe", "subtitles", "render", "qa")
+STEPS = ("download", "transcribe", "audio", "scenes", "action", "moments", "vision", "parts", "captions",
+         "reframe", "subtitles", "render", "qa")  # l'ordre de clipper.pipeline.STEPS
 
 CRITERIA = {"hook": 3, "standalone": 3, "payoff": 2, "emotion": 2, "value": 2, "trend": 0}
 JUDGES = ("retention", "monteur", "avocat", "spectateur", "conformite")
@@ -253,7 +253,11 @@ def build_demo(root: Path, *, now: datetime | None = None, settings: dict[str, o
     out = _inside(root, root / "output")
     state = _inside(root, root / "state")
 
-    (root / "config.toml").write_text('mode = "review"\n', encoding="utf-8")
+    (root / "config.toml").write_text(
+        'mode = "review"\n\n[veille]\nenabled = true\nrun_at = "23:59"\ntimezone = "Europe/Paris"\n'
+        f'default_channel = "{channel}"\n'
+        "\n[tiktok]\nstats_stale_min = 0\n",  # jamais de relevé TikTok à l'ouverture de l'écran Statistiques
+        encoding="utf-8")
     _write_json(root, state / "accounts.json", {"accounts": [{
         "id": account, "label": cfg["account_label"], "platform": "TikTok", "username": account,
         "notes": "Compte fictif pour les captures.", "has_password": True,
@@ -278,7 +282,7 @@ def build_demo(root: Path, *, now: datetime | None = None, settings: dict[str, o
         folder = work / video_id
         folder.mkdir(parents=True)
         frame = scratch / f"{video_id}.png"
-        synthetic_frame((source_w, source_h), number + 1, f"Démo {number + 1}").save(frame)
+        synthetic_frame((source_w, source_h), number + 1, f"Demo {number + 1}").save(frame)
         encode_still(frame, folder / f"{video_id}.mp4", int(cfg["source_seconds"]), fps=1)
         _write_json(root, folder / "meta.json", {"title": title, "duration": float(cfg["source_seconds"]),
                                                   "uploader": channel, "thumbnail": f"/media/source/{video_id}/thumbnail"})
@@ -290,7 +294,7 @@ def build_demo(root: Path, *, now: datetime | None = None, settings: dict[str, o
             moments = _moments_json(video_id, 6, 2, seed=11)
             _write_json(root, folder / "moments.json", moments)
             _write_json(root, folder / "parts.json", _parts_json(video_id, moments["moments"]))
-            base_state["steps"] = _steps(now, 12, started=started)
+            base_state["steps"] = _steps(now, len(STEPS), started=started)
             _events(folder / "events.jsonl", root, now, [
                 ("info", "download", "téléchargement terminé"), ("info", "moments", "jury : 6 moments retenus, 2 écartés"),
                 ("info", "render", "6 clips rendus"), ("info", "qa", "contrôle qualité : 5 acceptés, 1 refusé")])
@@ -298,7 +302,7 @@ def build_demo(root: Path, *, now: datetime | None = None, settings: dict[str, o
             moments = _moments_json(video_id, 4, 1, seed=23)
             _write_json(root, folder / "moments.json", moments)
             _write_json(root, folder / "parts.json", _parts_json(video_id, moments["moments"]))
-            base_state["steps"] = _steps(now, 7, started=started)
+            base_state["steps"] = _steps(now, 8, started=started)
             base_state["awaiting"] = [m["id"] for m in moments["moments"]]
             _events(folder / "events.jsonl", root, now, [("info", "moments", "4 moments proposés : en attente de revue")])
         else:
@@ -338,8 +342,134 @@ def build_demo(root: Path, *, now: datetime | None = None, settings: dict[str, o
     with _working_in(root):  # clipper.channel lit state/accounts.json relativement au dossier courant
         posts = _publication_state(root, state, clips_dir, video_id, channel, account, now)
     _write_stats(root, state, account, posts, now, int(cfg["stats_days"]))
+    _write_veille(root, state, now, video_id, channel, [clip_id for clip_id, *_ in CLIPS if clip_id != "05"])
     shutil.rmtree(scratch)
     return {"posts": posts, "video_id": video_id, "channel": channel, "account": account}
+
+
+# ---------------------------------------------------------------- veille (relevé du jour factice)
+
+VEILLE_GAMES = (  # (nom, spectateurs FR, moyenne, variation %, appid Steam, joueurs, variation Steam %)
+    ("Jeu Alpha", 8200, 3100.0, 164, "9000001", 41200, 38),
+    ("Jeu Bêta", 5400, 2600.0, 108, None, None, None),
+    ("Jeu Gamma", 2300, 1900.0, 21, "9000003", 12800, 9),
+    ("Jeu Delta", 900, 400.0, 125, None, None, None),
+)
+VEILLE_SOURCES = {  # source -> compteurs d'un relevé réussi
+    "twitch": {"games": 20, "vods": 64, "private": 0, "restricted": 3, "unreachable": 1, "untested": 0, "deadline": 0},
+    "youtube": {"videos": 50}, "steam": {"games": 100}, "steam_fr": {"games": 50},
+    "igdb": {"rows": 120, "recent": 3, "upcoming": 3, "skipped_rows": 0},
+    "steam_players": {"requested": 2, "found": 2, "unknown": 0, "skipped": 0},
+    "steam_followers": {"requested": 2, "found": 2, "unknown": 0, "skipped": 0},
+    "steam_reviews": {"requested": 2, "found": 2, "unknown": 0, "skipped": 0, "rate_limited": 0},
+    "twitch_vods_30d": {"requested": 4, "found": 4, "unknown": 0, "skipped": 0, "rate_limited": 0},
+}
+
+
+def _trend(now: datetime, base: int, slope: int) -> dict[str, Any]:
+    """Historique de tendance sur 12 jours pour un jeu de la démonstration (séries sans trou, valeurs inventées)."""
+    today = now.date()
+    days = [today - timedelta(days=12 - i) for i in range(13)]
+    viewers = [{"date": d.isoformat(), "value": max(100, base + slope * i + (i % 3) * 120)} for i, d in enumerate(days)]
+    vods = [{"date": d.isoformat(), "vods": 6 + i, "views": 9000 + slope * 40 * i} for i, d in enumerate(days)]
+    unavailable = {"status": "unavailable", "reason": "hors Steam", "since": None, "points": [], "summary": None}
+
+    def summary(points: list[dict[str, Any]], field: str) -> dict[str, Any]:
+        values = [p[field] for p in points]
+        peak = max(range(len(values)), key=lambda i: values[i])
+        return {"weeks": [None, round(100 * (values[-1] - values[0]) / max(1, values[0]))],
+                "peak": {"date": points[peak]["date"], "value": values[peak]},
+                "last": {"date": points[-1]["date"], "value": values[-1]},
+                "last_vs_peak_pct": round(100 * (values[-1] - values[peak]) / max(1, values[peak])),
+                "s1_vs_s2_pct": None, "measured_days": len(values), "window_days": 30}
+    series = {"steam_reviews": unavailable, "steam_players_peak": unavailable, "steam_players_now": unavailable,
+              "steam_followers": unavailable,
+              "twitch_vods_fr": {"status": "ok", "reason": None, "since": days[0].isoformat(), "points": vods,
+                                 "summary": summary(vods, "vods")},
+              "twitch_viewers_fr": {"status": "ok", "reason": None, "since": days[0].isoformat(), "points": viewers,
+                                    "summary": summary(viewers, "value")}}
+    return {"days": 30, "since": days[0].isoformat(), "series": series}
+
+
+def _write_veille(root: Path, state: Path, now: datetime, video_id: str, channel: str, clip_ids: list[str]) -> None:
+    """``state/veille/days/<jour>.json`` (relevé terminé, choix de Claude fait) et ``selection/<jour>.json`` : le jour est
+    déjà fini, le worker ne relance donc jamais de relevé (aucun appel réseau)."""
+    from zoneinfo import ZoneInfo
+
+    local = now.astimezone(ZoneInfo("Europe/Paris"))
+    day = local.date().isoformat()
+    started = local.replace(hour=7, minute=0, second=5, microsecond=0)
+    if started > local:  # le relevé de 7 h du jour est toujours antérieur à l'instant des captures
+        started -= timedelta(days=1)
+    sources = {name: {"status": "ok", "at": _iso(started + timedelta(seconds=20 + 6 * i)), "error": None, "counts": counts}
+               for i, (name, counts) in enumerate(VEILLE_SOURCES.items())}
+    games = []
+    for index, (name, viewers, avg, delta, appid, players, steam_delta) in enumerate(VEILLE_GAMES):
+        followers = None if appid is None else 120000 + 9000 * index
+        games.append({
+            "key": name.lower(), "name": name, "source": "twitch", "twitch_match": True, "twitch_fr_viewers": viewers, "twitch_avg": avg,
+            "twitch_delta_pct": delta, "steam_appid": appid, "steam_match": appid is not None, "steam_players": players,
+            "steam_avg": None if players is None else round(players / (1 + steam_delta / 100), 1), "steam_delta_pct": steam_delta,
+            "steam_rank": None if appid is None else 4 + index, "steam_rank_gain": None if appid is None else 12 - index,
+            "steam_new_in_top": False if appid else None, "youtube_views_per_hour": None, "vod_count": 2,
+            "baseline_days_available": 7, "steam_sellers_rank": None, "steam_sellers_last_week_rank": None,
+            "steam_sellers_gain": None, "steam_sellers_new": None, "twitch_id": str(900100 + index),
+            "trend_30d": _trend(now, int(avg), 220 - 40 * index), "release": None,
+            "steam_players_now": players, "steam_now_avg": None, "steam_now_delta_pct": None, "steam_players_history": [],
+            "steam_followers": followers, "steam_followers_gain_7d": None, "steam_followers_history": [],
+            "community": {"ok": True, "steam_players": players, "steam_kind": None if appid is None else "now",
+                          "steam_followers": followers, "twitch_fr_viewers": viewers, "hypes": None, "met": ["twitch"]}})
+    candidates = []
+    for number, (game, hours, views, duration) in enumerate((("Jeu Alpha", 6, 18400, 9800), ("Jeu Alpha", 11, 9100, 7400),
+                                                              ("Jeu Bêta", 9, 12600, 8600), ("Jeu Delta", 14, 4300, 6100),
+                                                              ("Jeu Gamma", 20, 3900, 5200))):
+        candidates.append({
+            "id": f"twitch:9100{number}", "source": "twitch", "video_id": f"9100{number}",
+            "url": f"https://exemple.invalid/vod/9100{number}", "title": f"Session d'exemple n°{number + 1} : {game}",
+            "channel_name": f"streamer_{'abcde'[number]}", "game_key": game.lower(), "game_name": game, "duration_s": duration,
+            "published_at": _iso(now - timedelta(hours=hours)), "view_count": views,
+            "thumbnail_url": f"/media/source/{VIDEOS[number % len(VIDEOS)][0]}/thumbnail", "views_per_hour": round(views / hours, 1),
+            "signals": {"release_days_since": None, "twitch_delta_pct": next(g[3] for g in VEILLE_GAMES if g[0] == game),
+                        "steam_delta_pct": None, "steam_rank_gain": None, "steam_new_in_top": None, "steam_sellers_gain": None,
+                        "steam_sellers_new": None}, "game_source": None, "tags": []})
+    reasons = ("Jeu Alpha bondit de +164 % sur Twitch FR : la session la plus vue du jour, une durée qui laisse de la matière.",
+               "Jeu Bêta double ses spectateurs : une VOD récente avec des temps forts probables.",
+               "Jeu Delta, petit mais en nette hausse : un créneau encore peu clippé.")
+    proposals = [{"candidate_id": candidate["id"], "rank": rank, "reason": reason, "status": "proposed", "decided_at": None,
+                  "channel": None, "queue_entry_id": None, "candidate": candidate}
+                 for rank, (candidate, reason) in enumerate(zip((candidates[0], candidates[2], candidates[3]), reasons), start=1)]
+    releases: dict[str, Any] = {"recent": [], "upcoming": [], "excluded_low_hypes": 12, "truncated": {"recent": 0, "upcoming": 0}}
+    for number, (name, offset) in enumerate((("Jeu Epsilon", -3), ("Jeu Zêta", -8), ("Jeu Êta", -11), ("Jeu Thêta", 2),
+                                             ("Jeu Iota", 6), ("Jeu Kappa", 11))):
+        release_day = (local + timedelta(days=offset)).date()
+        entry = {"igdb_id": str(5000 + number), "name": name, "key": name.lower(), "slug": f"jeu-{number}",
+                 "url": f"https://exemple.invalid/jeu-{number}", "hypes": 220 - 25 * number, "cover_image_id": None,
+                 "steam_appid": None,
+                 "first_release_date": int(datetime(release_day.year, release_day.month, release_day.day, tzinfo=timezone.utc).timestamp()),
+                 "date": release_day.isoformat(), "human": release_day.strftime("%d/%m/%Y"), "days": offset,
+                 "platforms": ["PC"], "regions": ["worldwide"], "statuses": ["Full Release"], "portage": False,
+                 "trend": None, "steam_players_now": None, "steam_followers": None}
+        releases["recent" if offset < 0 else "upcoming"].append(entry)
+    day_state = {
+        "date": day, "started_at": _iso(started), "finished_at": _iso(started + timedelta(minutes=2, seconds=40)),
+        "sources": sources, "games": games, "candidates": candidates,
+        "excluded": {"too_short": 3, "too_old": 1, "already_known": 2, "no_community": 9, "access_restricted": 3,
+                     "access_unreachable": 1, "access_untested": 0, "access_deadline": 0},
+        "releases": releases, "deadline_at": _iso(started + timedelta(seconds=480)), "deadline_hit": False,
+        "llm": {"status": "ok", "error": None, "model": "demonstration"}, "proposals": proposals,
+        "skipped_note": "Les autres VOD sont trop courtes ou sur des jeux sans communauté francophone suffisante.",
+        "refresh_requested_at": None}
+    sdir = state / "veille"
+    _write_json(root, sdir / "days" / f"{day}.json", day_state)
+    # une série compte pour un rang ; le clip « à valider » (06) et les clips déjà programmés restent affichés, un clip en échec
+    # (04) est archivé (jamais supprimé) : de quoi montrer les deux colonnes de la sélection.
+    order = ("01", "02-p1", "02-p2", "06", "03", "04")
+    ranks = {"01": 1, "02-p1": 2, "02-p2": 2, "06": 3, "03": 4, "04": 5}
+    ranked = [{"video_id": video_id, "clip_id": clip_id, "score": round(88 - 3.2 * ranks[clip_id], 1), "rank": ranks[clip_id]}
+              for clip_id in order if clip_id in clip_ids]
+    _write_json(root, sdir / "selection" / f"{day}.json", {
+        "date": day, "computed_at": _iso(now), "kept": [r for r in ranked if r["clip_id"] != "04"],
+        "archived": [r for r in ranked if r["clip_id"] == "04"], "restored": []})
 
 
 def _fake_profile(root: Path, profile: Path, now: datetime) -> None:

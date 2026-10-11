@@ -9,7 +9,7 @@
 
 const JR_R = 112;       // rayon de la grille (note 10)
 const JR_C = 180;       // centre du SVG (viewBox elargi pour les etiquettes)
-const JR_COLORS = 6;    // --jr-c0 ... --jr-c5 (style.css)
+const JR_COLORS = 6;    // --jr-c0 ... --jr-c5 (console.css)
 
 const jrEsc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const jrNum = (n) => (Math.round(n * 10) / 10).toString();

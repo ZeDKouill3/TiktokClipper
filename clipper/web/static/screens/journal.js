@@ -36,7 +36,7 @@ function jrnLoad() {
   return jrnUi.loading;
 }
 
-// Niveau colore par les classes .lvl de v3.css (error, warning ; le reste reste neutre).
+// Niveau colore par les classes .lvl de console.css (error, warning ; le reste reste neutre).
 const JRN_LEVEL_CLASS = { ERROR: "error", CRITICAL: "error", WARNING: "warning" };
 
 function jrnRow(line) {
@@ -88,7 +88,7 @@ function jrnWire(root) {
 Screens.journal = {
   render(body) {
     if (jrnUi.data === null) jrnLoad();
-    morph(body, `<div class="v3 journal">${jrnHtml()}</div>`); // rapprochement du DOM (ADR-a308) : le champ de filtre garde son focus
+    morph(body, `<div class="journal">${jrnHtml()}</div>`); // rapprochement du DOM (ADR-a308) : le champ de filtre garde son focus
     jrnWire(body);
   },
 };
