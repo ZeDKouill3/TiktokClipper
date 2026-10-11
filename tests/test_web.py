@@ -4776,7 +4776,7 @@ def test_accounts_ready_box_is_clickable_and_drives_pause_and_resume():
     handler = js[js.index("$$(\"[data-acc-ready]\""):js.index("$$(\"[data-acc-resolve]\"")]
 
     assert "aria-readonly" not in box and "aria-readonly" not in js
-    assert "En pause (manuel) depuis le" in box
+    assert "En pause" in box and "depuis le" in box
     assert "paused_at" in box and "accFmtDate(a.paused_at)" in box  # fmtParis via accFmtDate
     assert "/pause" in js and "/resume" in js
     assert "accPause(" in handler and "accResume(" in handler and "accBrowserLogin(" in handler

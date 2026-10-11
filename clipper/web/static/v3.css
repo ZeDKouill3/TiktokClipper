@@ -792,10 +792,10 @@ html[data-nav="rail"] .sidenav .nav-rail .i { transform: rotate(180deg); }
 .v3 .acc-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 .v3 .acc-table { table-layout: auto; }
 .v3 .acc-table th { white-space: nowrap; }
-.v3 .acc-table td { white-space: normal; overflow: visible; text-overflow: clip; vertical-align: top; padding: 12px; }
+.v3 .acc-table td { white-space: normal; overflow: visible; text-overflow: clip; vertical-align: top; padding: 10px 12px; }
 .v3 .acc-table td.acc-act { white-space: nowrap; }
 .v3 .acc-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
-.v3 .acc-line { font-size: 12.5px; color: var(--muted-foreground); margin-top: 4px; overflow-wrap: anywhere; }
+.v3 .acc-line { font-size: 12.5px; color: var(--muted-foreground); margin-top: 2px; overflow-wrap: anywhere; }
 .v3 .acc-line.bad { color: var(--bad); }
 .v3 .acc-line.faint { color: var(--muted-foreground); opacity: .8; }
 .v3 .acc-table .mono { font-family: var(--font-mono); }
@@ -803,7 +803,9 @@ html[data-nav="rail"] .sidenav .nav-rail .i { transform: rotate(180deg); }
 .v3 .acc-login, .v3 .acc-ready { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .v3 .acc-check { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--foreground-2); }
 .v3 .acc-ready .acc-line { margin-top: 0; }
-.v3 .acc-ready .chip { height: auto; min-height: 22px; max-width: 100%; white-space: normal; padding: 2px 8px; line-height: 1.35; }
+.v3 .acc-ready .chip { white-space: nowrap; }
+.v3 .acc-ellipsis { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v3 .acc-table th:first-child, .v3 .acc-table td:first-child { width: 30%; }
 .v3 .acc-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: nowrap; }
 .v3 .acc-menu-wrap { position: relative; }
 .v3 .acc-menu-wrap .vmenu { display: flex; flex-direction: column; right: 0; left: auto; min-width: 230px; }
@@ -826,7 +828,7 @@ html[data-nav="rail"] .sidenav .nav-rail .i { transform: rotate(180deg); }
   .v3 .acc-table tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border); }
   .v3 .acc-table tbody tr:first-child { border-top: 0; }
   .v3 .acc-table td { padding: 0; border: 0; min-width: 0; }
-  .v3 .acc-table td:first-child { grid-column: 1 / -1; }
+  .v3 .acc-table td:first-child { grid-column: 1 / -1; width: auto; }
   .v3 .acc-table td[data-l]::before { content: attr(data-l); display: block; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted-foreground); margin-bottom: 4px; }
   .v3 .acc-table td.acc-act { grid-column: 1 / -1; }
   .v3 .acc-actions { justify-content: flex-start; flex-wrap: wrap; }

@@ -139,7 +139,7 @@ def test_each_row_shows_at_most_three_buttons_outside_the_menu(index):
 def test_the_pause_note_is_shown_once_per_row():
     out = _run("""
       const html = accRow(ACCOUNTS_FIXTURE[1]);
-      console.log(JSON.stringify({ count: html.split('En pause (manuel)').length - 1 }));
+      console.log(JSON.stringify({ count: html.split("En pause").length - 1 }));
     """)
     assert out["count"] == 1
 
@@ -185,3 +185,14 @@ def test_the_service_tag_is_not_repeated_as_platform_tag():
       console.log(JSON.stringify({ tags: (html.match(/<span class="tag"/g) || []).length }));
     """)
     assert out["tags"] == 1
+
+
+@NODE
+def test_posts_cell_shows_only_the_count_and_the_email_keeps_a_title():
+    out = _run("""
+      const html = accRow(ACCOUNTS_FIXTURE[0]);
+      console.log(JSON.stringify({ label: html.includes('>Posts du jour'), count: html.includes('<b>1 / 3</b>'),
+                                   title: html.includes('class="acc-line mono acc-ellipsis" title="compte_alpha"') }));
+    """)
+    assert out["label"] is False      # l'intitulé est déjà en en-tête de colonne
+    assert out["count"] is True and out["title"] is True   # adresse coupée proprement, complète en infobulle

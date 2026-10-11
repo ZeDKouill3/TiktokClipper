@@ -159,7 +159,7 @@ function accBrowserState(a) {
   if (!b) return "";
   if (b.error) return `<div class="acc-line bad">Profil du navigateur illisible : ${esc(b.error)}</div>`;
   const when = b.modified_at ? ` · ${esc(fmtParis(b.modified_at, { dateStyle: "medium", timeStyle: "short" }))}` : "";
-  return `<div class="acc-line" data-acc-browser-state>Profil du navigateur : ${b.present ? `<b>présent</b>${when}` : "<b>absent</b> (jamais connecté)"}</div>`;
+  return `<div class="acc-line" data-acc-browser-state>Profil : ${b.present ? `<b>présent</b>${when}` : "<b>absent</b> (jamais connecté)"}</div>`;
 }
 
 /* Après « Se connecter » : la console revérifie la connexion à la fermeture de la fenêtre ; on relit l'écran
@@ -227,7 +227,7 @@ function accReadyBox(a) {
     : a.paused_at ? "clique pour reprendre le compte" : "clique pour te connecter";
   return `<div class="acc-ready" data-acc-ready-cell>
     <label class="acc-check"><input type="checkbox" data-acc-ready="${esc(a.id)}"${a.ready_to_publish ? " checked" : ""} title="${esc(state)} : ${esc(action)}"> Prêt à publier</label>
-    ${a.paused_at ? `<span class="chip pending" data-acc-paused>En pause (manuel) depuis le ${esc(accFmtDate(a.paused_at))}</span>` : ""}
+    ${a.paused_at ? `<span class="chip pending" data-acc-paused>En pause</span><span class="acc-line" title="Pause manuelle depuis le ${esc(accFmtDate(a.paused_at))}">depuis le ${esc(accFmtDate(a.paused_at))}</span>` : ""}
     ${accNotes(a)}</div>`;
 }
 
@@ -256,7 +256,7 @@ function accPosts(a) {
   if (a.publish_error) return `<div class="acc-line bad">Publications illisibles : ${esc(a.publish_error)}</div>`;
   const today = a.posts_today === null || a.posts_today === undefined ? "—" : fr(a.posts_today);
   const cap = a.max_posts_per_day === null || a.max_posts_per_day === undefined ? "—" : fr(a.max_posts_per_day);
-  return `<div class="acc-line" data-acc-posts>Posts du jour : <b>${today} / ${cap}</b></div>`;
+  return `<div class="acc-line" data-acc-posts title="Posts du jour"><b>${today} / ${cap}</b></div>`;
 }
 
 function accLastFailure(a) {
@@ -355,7 +355,7 @@ function accRow(a) {
   return `<tr class="acc-row" data-acc="${esc(a.id)}">
     <td data-l="Compte">
       <div class="acc-title"><span class="tag" data-acc-service>${esc(ACC_SERVICES[accService(a)])}</span> ${a.platform && a.platform !== ACC_SERVICES[accService(a)] ? `<span class="tag">${esc(a.platform)}</span> ` : ""}<b>${esc(a.label)}</b></div>
-      <div class="acc-line mono">${a.username ? esc(a.username) : "—"}</div>
+      <div class="acc-line mono acc-ellipsis" title="${esc(a.username)}">${a.username ? esc(a.username) : "—"}</div>
       ${a.notes ? `<div class="acc-line faint">${esc(a.notes)}</div>` : ""}
       <div class="acc-line">Mot de passe : ${pass}</div>
       ${accBrowserState(a)}
