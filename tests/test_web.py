@@ -1998,9 +1998,8 @@ def test_review_screen_has_keyboard_shortcuts_documented_in_the_screen():
     assert 'addEventListener("keydown"' in js
     for key in ('"a"', '"r"', '"j"', '"k"', '" "'):
         assert key in js, key
-    assert "<kbd>A</kbd>" in js and "<kbd>R</kbd>" in js
-    assert "<kbd>J</kbd>" in js and "<kbd>K</kbd>" in js
-    assert "<kbd>Espace</kbd>" in js
+    for label in ("A", "R", "J", "K", "Espace"):
+        assert f'<kbd class="kbd">{label}</kbd>' in js, label
 
 
 def test_review_screen_render_button_is_blocked_while_moments_await_a_decision():
@@ -2011,8 +2010,8 @@ def test_review_screen_render_button_is_blocked_while_moments_await_a_decision()
     assert "/render" in js
     assert "disabled" in js
     assert "sans décision" in js  # la raison affichee
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
-    assert ".review-layout" in css
+    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # écran migré (U7) : sa mise en page vit dans v3.css
+    assert ".rv-layout" in css
 # Ecran Clips (TASK-3b9c) : GET /api/clips, approve/reject, PATCH, rerender
 # (publish et worker simules ; l'API ne touche jamais un mp4 ni un sidecar)
 # --------------------------------------------------------------------------
