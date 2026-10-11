@@ -1,5 +1,5 @@
 @echo off
-rem Desinstalle Clipper (SPEC-38f7761891f6 R8). Double-clic, ou depuis un
+rem Desinstalle Clipper (SPEC-54ed21c61caf R8). Double-clic, ou depuis un
 rem terminal avec des options : Desinstaller.bat [--app <dossier>] [--donnees]
 rem [--dry-run]. Toutes les options sont transmises telles quelles a
 rem installer\desinstaller.ps1.

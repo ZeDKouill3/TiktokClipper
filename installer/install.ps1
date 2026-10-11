@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Installe Clipper pour un utilisateur sans outil de developpement : Python,
-    ffmpeg, claude, modeles, lanceur (SPEC-38f7761891f6 R2, R3 ; ADR-e1dac9ba2284).
+    ffmpeg, claude, modeles, lanceur (SPEC-54ed21c61caf R2, R3 ; ADR-e1dac9ba2284).
 
 .DESCRIPTION
     Compatible Windows PowerShell 5.1 (pas de &&, ni ??, ni operateur

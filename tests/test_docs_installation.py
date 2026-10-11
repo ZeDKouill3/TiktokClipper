@@ -1,4 +1,4 @@
-"""TASK-1b5a73188dba : documentation de l'installeur portable (SPEC-38f7761891f6
+"""TASK-1b5a73188dba : documentation de l'installeur portable (SPEC-54ed21c61caf
 R10). Verifie mecaniquement ce qui peut l'etre : sections de docs/INSTALLATION.md
 dans l'ordre du critere, chemins par defaut cites, section README et entree
 CHANGELOG. Le contenu redactionnel fin se lit a l'oeil."""

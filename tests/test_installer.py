@@ -1,4 +1,4 @@
-"""TASK-b82ee001ec52 : scripts de l'installeur portable (SPEC-38f7761891f6
+"""TASK-b82ee001ec52 : scripts de l'installeur portable (SPEC-54ed21c61caf
 R2, R3, R4, R6, R8 ; ADR-e1dac9ba2284). Tous les tests lancent
 installer/install.ps1 et installer/desinstaller.ps1 avec ``--dry-run`` via
 ``powershell -NoProfile -ExecutionPolicy Bypass`` sur des dossiers
@@ -62,7 +62,7 @@ def installer_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def zip_layout_dir(tmp_path: Path) -> Path:
-    """Disposition exacte du zip (SPEC-38f7761891f6 R1) : Installer.bat et
+    """Disposition exacte du zip (SPEC-54ed21c61caf R1) : Installer.bat et
     Desinstaller.bat a la racine, le reste sous installer/ ; contrairement a
     ``installer_dir`` ci-dessus (tout a plat dans un seul dossier), c'est la
     seule disposition qui exerce le chemin relatif que les .bat calculent

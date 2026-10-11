@@ -1,4 +1,4 @@
-"""TASK-9623bdba2126 (SPEC-38f7761891f6 R1, ADR-e1dac9ba2284) : construction
+"""TASK-9623bdba2126 (SPEC-54ed21c61caf R1, ADR-e1dac9ba2284) : construction
 du zip d'amorcage par tools/build_portable.py. Tout tourne sans reseau : le
 telechargement de uv.exe est injecte (fetch_uv), la wheel est fausse (zip
 vide au bon nom) sauf quand le contenu precis importe peu, et les fichiers

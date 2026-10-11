@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Enchaine tools/build_portable.py (SPEC-38f7761891f6 R1) : construit la
+    Enchaine tools/build_portable.py (SPEC-54ed21c61caf R1) : construit la
     wheel puis Clipper-portable-<version>.zip dans dist/.
 
 .DESCRIPTION

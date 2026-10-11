@@ -1,4 +1,4 @@
-"""Construit le zip d'amorcage Clipper-portable-<version>.zip (SPEC-38f7761891f6
+"""Construit le zip d'amorcage Clipper-portable-<version>.zip (SPEC-54ed21c61caf
 R1, ADR-e1dac9ba2284).
 
 ``build()`` assemble un dossier ``Clipper-portable-<version>/`` (wheel, uv.exe,

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Desinstalle Clipper (SPEC-38f7761891f6 R8). Appele par Desinstaller.bat.
+    Desinstalle Clipper (SPEC-54ed21c61caf R8). Appele par Desinstaller.bat.
 
 .DESCRIPTION
     Compatible Windows PowerShell 5.1. Options (style GNU) : --app <dossier>

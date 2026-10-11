@@ -1,4 +1,4 @@
-"""TASK-a093c293ea3f (SPEC-38f7761891f6 R9, ADR-e1dac9ba2284) : le seul test
+"""TASK-a093c293ea3f (SPEC-54ed21c61caf R9, ADR-e1dac9ba2284) : le seul test
 reel de l'installeur portable. Jamais lance par defaut ni en CI (ADR-ad2e :
 aucun repli silencieux sur un test qui aurait du tourner - il est saute
 explicitement, pas masque).
