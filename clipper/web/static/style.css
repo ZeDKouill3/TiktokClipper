@@ -707,11 +707,6 @@ input[type="color"] { width: 36px; height: 36px; padding: 2px; border-radius: va
 .reason.warn { border-color: var(--warn); }
 /* <<< shared */
 
-/* >>> journal */
-/* Ecran Journal (TASK-8067) : barre de filtre + tableau, contenu colle au panneau sinon. */
-#screen-journal [data-body] { padding: 20px 24px 24px; }
-@media (max-width: 900px) { #screen-journal [data-body] { padding: 16px; } }
-/* <<< journal */
 
 
 

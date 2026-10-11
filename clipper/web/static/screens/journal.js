@@ -36,16 +36,17 @@ function jrnLoad() {
   return jrnUi.loading;
 }
 
-const JRN_LEVEL_CHIP = { ERROR: "bad", CRITICAL: "bad", WARNING: "warn" };
+// Niveau colore par les classes .lvl de v3.css (error, warning ; le reste reste neutre).
+const JRN_LEVEL_CLASS = { ERROR: "error", CRITICAL: "error", WARNING: "warning" };
 
 function jrnRow(line) {
   const level = line.level || "";
   return `<tr>
-    <td class="mono">${esc(line.timestamp || "")}</td>
-    <td class="mono">${esc(line.process || "")}</td>
-    <td><span class="chip ${esc(JRN_LEVEL_CHIP[level] || "plain")}">${esc(level)}</span></td>
-    <td class="mono">${esc(line.logger || "")}</td>
-    <td>${esc(line.message || line.raw || "")}</td>
+    <td class="mono" data-l="Horodatage">${esc(line.timestamp || "")}</td>
+    <td class="mono" data-l="Processus">${esc(line.process || "")}</td>
+    <td data-l="Niveau"><span class="lvl${JRN_LEVEL_CLASS[level] ? " " + JRN_LEVEL_CLASS[level] : ""}">${esc(level)}</span></td>
+    <td class="mono" data-l="Logger">${esc(line.logger || "")}</td>
+    <td class="wrap" data-l="Message">${esc(line.message || line.raw || "")}</td>
   </tr>`;
 }
 
@@ -53,7 +54,7 @@ function jrnHtml() {
   const data = jrnUi.data;
   if (!data) return `<div class="skeleton skeleton-line"></div><div class="skeleton skeleton-card"></div>`;
   if (data.failed) return emptyState("circle-alert", "Journal indisponible", jrnUi.error ? jrnUi.error.message : "");
-  const toolbar = `<div class="panel-head">
+  const toolbar = `<div class="jrn-bar">
       <input class="input mono" id="jrn-q" placeholder="Filtrer le texte..." value="${esc(jrnUi.q)}">
       <select class="input" id="jrn-level" aria-label="Niveau">${JRN_LEVELS.map((l) => `<option value="${esc(l)}"${l === jrnUi.level ? " selected" : ""}>${l ? esc(l) : "Tous les niveaux"}</option>`).join("")}</select>
       <button type="button" class="btn btn-sm" id="jrn-refresh">${icon("refresh-cw", "i-xs")}Rafraîchir</button>
@@ -65,7 +66,7 @@ function jrnHtml() {
   if (!rows.length) {
     return toolbar + `<div class="list-item muted">Aucune ligne ne correspond au filtre.</div>`;
   }
-  return `${toolbar}<table class="table"><thead><tr>
+  return `${toolbar}<table class="table journal"><colgroup><col class="jc-time"><col class="jc-proc"><col class="jc-lvl"><col class="jc-logger"><col></colgroup><thead><tr>
       <th>Horodatage (Paris)</th><th>Processus</th><th>Niveau</th><th>Logger</th><th>Message</th>
     </tr></thead><tbody>${rows.map(jrnRow).join("")}</tbody></table>
     <p class="muted">${esc(data.path || "")}</p>`;
@@ -87,8 +88,7 @@ function jrnWire(root) {
 Screens.journal = {
   render(body) {
     if (jrnUi.data === null) jrnLoad();
-    if (body.resetHtmlGuard) body.resetHtmlGuard(); // les champs de filtre ne doivent jamais etre ecrases par un rendu identique
-    body.innerHTML = jrnHtml();
+    morph(body, `<div class="v3 journal">${jrnHtml()}</div>`); // rapprochement du DOM (ADR-a308) : le champ de filtre garde son focus
     jrnWire(body);
   },
 };

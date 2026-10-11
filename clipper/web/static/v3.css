@@ -1124,3 +1124,20 @@ html[data-nav="rail"] .sidenav .nav-rail .i { transform: rotate(180deg); }
 }
 @media (max-width: 520px) { .v3 .src-row { grid-template-columns: 96px minmax(0, 1fr) 48px; } .v3 .kpi-value { font-size: 26px; } }
 /* <<< stats v3 */
+
+/* >>> journal v3 */
+/* ---------- Journal v3 (U13) : table fixe, message replié, niveau coloré, filtre texte + niveau (SPEC-7715 E11) ---------- */
+.screen[id="screen-journal"] [data-body] { background: none; border: 0; box-shadow: none; padding: 0; }
+.v3.journal { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.v3.journal .jrn-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.v3.journal .jrn-bar #jrn-q { flex: 1 1 220px; min-width: 0; }
+.v3.journal .jrn-bar #jrn-level { flex: 0 0 auto; width: auto; }
+.v3.journal .table { table-layout: fixed; }
+.v3.journal .table col.jc-time { width: 168px; }
+.v3.journal .table col.jc-proc { width: 96px; }
+.v3.journal .table col.jc-lvl { width: 96px; }
+.v3.journal .table col.jc-logger { width: 200px; }
+.v3.journal .table td.wrap { white-space: normal; overflow-wrap: anywhere; }
+.v3.journal .table td.mono { white-space: nowrap; }
+.v3.journal p.muted { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+/* <<< journal v3 */
