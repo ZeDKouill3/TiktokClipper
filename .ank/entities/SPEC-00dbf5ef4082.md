@@ -5,7 +5,7 @@ slug: boucle-d-apprentissage-rattachement-post-clip-ap
 title: "Boucle d'apprentissage : rattachement post→clip après relevé, versement stats→outcomes avec video_id/clip_id/moment_id, métrique views_percentile à maturité par compte, recalibrage automatique, coach sur déclencheur validé dans l'interface (Adopter/Refuser), bilan des VOD de veille dans le prompt ; réglages [learning], état state/learning/, tests sans réseau"
 created: 2026-10-07T10:26:36Z
 author: w-learnplan
-status: accepted
+status: superseded
 scope:
   - clipper/jury_calibration.py
   - clipper/jury_coach.py
@@ -19,7 +19,7 @@ verified:
   - by: nicoc@zedk_ordi
     at: 2026-10-07T10:32:22Z
 schema: 4
-version: 3
+version: 4
 ---
 
 ## Objet
