@@ -12,7 +12,7 @@ const COUNT_LABELS = { rows: "lignes", recent: "récentes", upcoming: "à venir"
 /* Le compteur « échéance » d'une source de tendance compte des jeux ou des appid, pas des VOD. */
 const veilleCountLabel = (source, key) => (key === "deadline" && source !== "twitch" ? "non relevés (échéance)" : COUNT_LABELS[key] || key);
 
-const veilleUi = { data: null, clips: [], error: null, loading: null, dirty: false, at: 0, style: {}, busy: false, html: "", sheet: null };
+const veilleUi = { data: null, clips: [], error: null, loading: null, dirty: false, at: 0, style: {}, busy: false, html: "", sheet: null, more: {} };
 
 function loadVeille() {
   if (veilleUi.loading) { veilleUi.dirty = true; return veilleUi.loading; }
@@ -95,6 +95,10 @@ const veilleReleaseBadge = (days) => (days == null ? "" : `<span class="chip acc
 
 /* ---------- sections ---------- */
 
+/* Sommaire en tête : une ancre par section (le défilement est fait par veilleWire, l'URL #/veille ne change pas). */
+const VEILLE_TOC = [["veille-releve", "Relevé"], ["veille-propositions", "Propositions"], ["veille-sorties", "Sorties"], ["veille-montent", "Ce qui monte"], ["veille-clips", "Meilleurs clips"]];
+const veilleToc = (data) => `<nav class="veille-toc" data-veille-toc aria-label="Sections de la veille">${VEILLE_TOC.map(([id, label]) => `<a href="#${id}" data-veille-jump>${esc(label)}</a>`).join("")}</nav>`;
+
 /* « Relevé incomplet » : seulement quand l'échéance globale a coupé quelque chose (deadline_hit écrit par la veille). */
 function veilleIncomplete(data) {
   const day = data.day || {};
@@ -106,20 +110,18 @@ function veilleIncomplete(data) {
 function veilleSources(data) {
   const day = data.day;
   const sources = day.sources || {};
-  const pills = Object.keys(SOURCE_LABELS).map((name) => {
+  const rows = Object.keys(SOURCE_LABELS).map((name) => {
     const s = sources[name];
-    if (!s) return `<span class="src-pill">${veilleSrcIcon(name)}${esc(SOURCE_LABELS[name])} : pas relevée</span>`;
+    const label = `${veilleSrcIcon(name)}${esc(SOURCE_LABELS[name])}`;
+    if (!s) return `<tr data-veille-source="${esc(name)}"><td>${label}</td><td><span class="src-pill">pas relevée</span></td><td class="muted">aucun</td><td></td></tr>`;
     const bad = s.status === "error";
     const warn = s.status === "partial" || s.status === "skipped";
     const counts = Object.entries(s.counts || {}).map(([k, v]) => `${v} ${veilleCountLabel(name, k)}`).join(", ");
     const style = warn ? ` style="background:var(--warn-soft);color:var(--warn)"` : "";
-    return `<span class="src-pill${bad ? " bad" : warn ? " warn" : ""}"${style}>${veilleSrcIcon(name)}${esc(SOURCE_LABELS[name])}${bad ? " : erreur" : warn ? " : incomplète" : ""}${!bad && counts ? ` : ${esc(counts)}` : ""}</span>`;
+    const state = `<span class="src-pill${bad ? " bad" : warn ? " warn" : ""}"${style}>${bad ? "erreur" : s.status === "skipped" ? "ignorée" : warn ? "incomplète" : "ok"}</span>`;
+    const message = s.error ? `<p class="reason ${bad ? "bad" : "warn"}" role="${bad ? "alert" : "status"}">${esc(s.error)}</p>` : "";
+    return `<tr data-veille-source="${esc(name)}"><td>${label}</td><td>${state}</td><td>${counts ? esc(counts) : `<span class="muted">aucun</span>`}</td><td>${message}</td></tr>`;
   }).join("");
-  const named = Object.keys(SOURCE_LABELS).filter((n) => sources[n]);
-  const errors = named.filter((n) => sources[n].status === "error")
-    .map((n) => `<p class="reason bad" role="alert"><b>${esc(SOURCE_LABELS[n])} :</b> ${esc(sources[n].error)}</p>`).join("");
-  const warnings = named.filter((n) => (sources[n].status === "partial" || sources[n].status === "skipped") && sources[n].error)
-    .map((n) => `<p class="reason warn" role="status"><b>${esc(SOURCE_LABELS[n])} :</b> ${esc(sources[n].error)}</p>`).join("");
   const llm = day.llm || {};
   const llmChip = llm.status === "ok" ? `<span class="chip accent plain">Claude : ${esc(day.proposals.length)} proposition${day.proposals.length > 1 ? "s" : ""}</span>`
     : llm.status === "error" ? `<span class="chip bad plain">Claude : erreur</span>`
@@ -129,7 +131,8 @@ function veilleSources(data) {
     : llm.status === "retry" ? `<p class="reason warn" role="status"><b>Choix de Claude reporté :</b> ${esc(llm.error)}</p>` : "";
   const when = data.running ? `<span class="chip running plain">Relevé en cours…</span>`
     : `<span>Relevé du <b class="mono">${esc(veilleWhen(day.finished_at || day.started_at, true))}</b></span>`;
-  return `<div data-veille-sources><div class="sources">${when}${pills}${llmChip}</div>${veilleIncomplete(data)}${errors}${warnings}${llmError}</div>`;
+  return `<section id="veille-releve" data-veille-sources><div class="sources">${when}${llmChip}</div>${veilleIncomplete(data)}
+    <div class="table-wrap"><table class="table sources-table"><thead><tr><th>Source</th><th>État</th><th>Relevé</th><th>Erreur</th></tr></thead><tbody>${rows}</tbody></table></div>${llmError}</section>`;
 }
 
 /* Pied du KPI « VOD proposées » : ce qui a été écarté et pourquoi, chaque nombre tel qu'écrit par la veille. */
@@ -232,7 +235,7 @@ function veilleProposals(data, channels) {
   const note = day.skipped_note ? `<div class="arch-row"><span class="t muted">${esc(day.skipped_note)}</span></div>` : "";
   const dropped = ignored ? `<div class="arch-row" data-veille-ignored><span class="t muted">${esc(ignored)} proposition${ignored > 1 ? "s" : ""} ignorée${ignored > 1 ? "s" : ""} aujourd'hui : elle${ignored > 1 ? "s ne seront" : " ne sera"} plus proposée${ignored > 1 ? "s" : ""}.</span></div>` : "";
   const folded = decided.length ? `<details class="archived" data-veille-decided><summary>${icon("check", "i-xs")}Déjà décidées (${esc(decided.length)})</summary>${decided.map(card).join("")}</details>` : "";
-  return `<section data-veille-proposals><div class="panel">
+  return `<section id="veille-propositions" data-veille-proposals><div class="panel">
     ${pending.length ? pending.map(card).join("") : `<div class="list-item muted">${esc(empty)}</div>`}
     ${note}${dropped}${folded}</div></section>`;
 }
@@ -243,7 +246,7 @@ function veilleClipTitle(c) {
 
 function veilleBest(data) {
   const sel = data.selection;
-  if (!sel) return `<section data-veille-best><div class="panel"><div class="list-item muted">Aucun clip de veille terminé pour l'instant : la sélection des meilleurs clips du jour apparaît ici.</div></div></section>`;
+  if (!sel) return `<section id="veille-clips" data-veille-best><div class="panel"><div class="list-item muted">Aucun clip de veille terminé pour l'instant : la sélection des meilleurs clips du jour apparaît ici.</div></div></section>`;
   const byKey = Object.fromEntries(veilleUi.clips.map((c) => [`${c.video_id}/${c.clip_id}`, c]));
   const clipOf = (row) => byKey[`${row.video_id}/${row.clip_id}`] || { video_id: row.video_id, clip_id: row.clip_id };
   const keptCards = sel.kept.map((row) => {
@@ -256,7 +259,7 @@ function veilleBest(data) {
     const c = clipOf(row);
     return `<div class="arch-row" data-veille-archived="${esc(row.video_id)}/${esc(row.clip_id)}"><span class="score">${esc(fr(row.score, 1))}</span><span class="t">${esc(veilleClipTitle(c))}</span><span class="why">rang ${esc(row.rank)}</span><button class="btn btn-xs btn-ghost" type="button" data-veille-restore>${icon("undo-2", "i-xs")}Restaurer</button></div>`;
   }).join("");
-  return `<section data-veille-best><div class="panel">
+  return `<section id="veille-clips" data-veille-best><div class="panel">
     <div class="panel-head"><h2>Sélection du ${esc(veilleDay(`${sel.date}T12:00:00Z`))}</h2><div class="right"><span class="chip ok plain">${sel.kept.length} gardé${sel.kept.length > 1 ? "s" : ""}</span><span class="chip plain">${sel.archived.length} archivé${sel.archived.length > 1 ? "s" : ""}</span></div></div>
     ${keptCards ? `<div class="clips-grid">${keptCards}</div>` : `<div class="list-item muted">Aucun clip gardé.</div>`}
     ${archivedRows ? `<details class="archived"><summary>${icon("check", "i-xs")}Archivés (${sel.archived.length}) : sous le meilleur du jour, masqués de l'écran Clips, jamais supprimés</summary>${archivedRows}</details>` : ""}
@@ -269,6 +272,9 @@ function veilleBest(data) {
 const IGDB_COVER_URL = "https://images.igdb.com/igdb/image/upload/t_cover_big/";
 const VEILLE_DATE_LONG = { weekday: "long", day: "numeric", month: "long", year: "numeric" };
 const VEILLE_FRISE_MAX = 5;
+const VEILLE_COVERS_MAX = 12; // jaquettes à l'écran dans « Sorties » avant « Voir plus »
+const VEILLE_RISING_MAX = 10; // lignes de « Ce qui monte » avant « Voir plus » (la table compte vite des centaines de jeux)
+const VEILLE_RECENT_SHOWN = 6; // dont au plus 6 pour le bandeau des sorties récentes
 const VEILLE_PLATFORMS_CARD = 3;
 
 const veilleDate = (iso, opts) => new Date(`${iso}T12:00:00Z`).toLocaleDateString("fr-FR", Object.assign({ timeZone: CLIPPER_TZ }, opts));
@@ -350,9 +356,9 @@ function veilleDayHead(iso, offset) {
 /* Les sorties d'un jour de la frise : aujourd'hui = recent à days = 0, les autres = upcoming du jour, dans l'ordre du tableau. */
 const veilleDayEntries = (rel, offset) => (offset === 0 ? rel.recent.filter((e) => e.days === 0) : rel.upcoming.filter((e) => e.days === offset));
 
-function veilleFriseColumn(rel, iso, offset) {
+function veilleFriseColumn(rel, iso, offset, take = VEILLE_FRISE_MAX) {
   const list = veilleDayEntries(rel, offset);
-  const shown = list.slice(0, VEILLE_FRISE_MAX), rest = list.length - shown.length;
+  const shown = list.slice(0, Math.min(VEILLE_FRISE_MAX, take)), rest = list.length - shown.length;
   const weekend = [0, 6].includes(new Date(`${iso}T12:00:00Z`).getUTCDay());
   const cls = ["day", offset === 0 ? "today" : "", list.length ? "" : "empty", weekend ? "we" : ""].filter(Boolean).join(" ");
   const cells = shown.map((e, k) => `<button type="button" class="pick${k === 0 ? " big" : ""}" data-veille-open="${esc(e.igdb_id)}" aria-label="Détail de ${esc(e.name)}">${veilleCover(e, e.trend ? `<span class="hot">${icon("trending-up", "i-xs")}</span>` : "")}<span class="t">${esc(e.name)}${k === 0 ? `<br><span class="mono hy">${esc(veilleHypes(e))}</span>` : ""}</span></button>`).join("");
@@ -362,7 +368,7 @@ function veilleFriseColumn(rel, iso, offset) {
 }
 
 /* La même chose pour le téléphone : seulement les jours avec sortie, et « N jours sans sortie notable » entre deux. */
-function veilleMobileList(rel, today, span) {
+function veilleMobileList(rel, today, span, plan) {
   let html = "", gap = 0, started = false;
   for (let offset = 0; offset <= span; offset += 1) {
     const list = veilleDayEntries(rel, offset);
@@ -371,8 +377,9 @@ function veilleMobileList(rel, today, span) {
     gap = 0;
     started = true;
     const iso = veilleAddDays(today, offset);
-    const rows = list.slice(0, VEILLE_FRISE_MAX).map((e, k) => `<button type="button" class="mrow${k === 0 ? " bigr" : ""}" data-veille-open="${esc(e.igdb_id)}">${veilleCover(e)}<span><span class="nm${k ? " small" : ""}">${esc(e.name)}</span><span class="sub2">${veillePlatforms(e, VEILLE_PLATFORMS_CARD)}${e.trend ? `<span class="chip info plain">Tendance</span>` : ""}</span></span><span class="mono muted hyp">${esc(veilleHypes(e))}</span></button>`).join("");
-    html += `<div class="mday${offset === 0 ? " today" : ""}">${veilleDayHead(iso, offset)}${rows}${list.length > VEILLE_FRISE_MAX ? `<div class="mgap more-gap">+${list.length - VEILLE_FRISE_MAX} autres</div>` : ""}</div>`;
+    const take = Math.min(VEILLE_FRISE_MAX, plan ? plan[offset] : VEILLE_FRISE_MAX);
+    const rows = list.slice(0, take).map((e, k) => `<button type="button" class="mrow${k === 0 ? " bigr" : ""}" data-veille-open="${esc(e.igdb_id)}">${veilleCover(e)}<span><span class="nm${k ? " small" : ""}">${esc(e.name)}</span><span class="sub2">${veillePlatforms(e, VEILLE_PLATFORMS_CARD)}${e.trend ? `<span class="chip info plain">Tendance</span>` : ""}</span></span><span class="mono muted hyp">${esc(veilleHypes(e))}</span></button>`).join("");
+    html += `<div class="mday${offset === 0 ? " today" : ""}">${veilleDayHead(iso, offset)}${rows}${list.length > take ? `<div class="mgap more-gap">+${list.length - take} autres</div>` : ""}</div>`;
   }
   return html;
 }
@@ -397,27 +404,49 @@ function veilleSheet(rel, id) {
     <div><h3 id="veille-sheet-name">${esc(e.name)}</h3><dl>${rows}</dl><div class="acts">${link}</div></div></div></div>`;
 }
 
+/* Le corps de « Sorties » (récentes, frise, agenda téléphone) : au plus VEILLE_COVERS_MAX jaquettes à l'écran
+   (bandeau + frise, ou bandeau + agenda sur téléphone) tant que « Voir plus » n'est pas ouvert. Le budget va d'abord
+   au bandeau (6 au plus), puis aux jours dans l'ordre ; chaque jour garde son « +N autres » pour ce qui est caché. */
+function gamesHtml(rel, today, span, expanded) {
+  const recentShown = expanded ? rel.recent.length : Math.min(rel.recent.length, VEILLE_RECENT_SHOWN);
+  let budget = expanded ? Infinity : VEILLE_COVERS_MAX - recentShown;
+  const plan = [];
+  let friseTotal = 0;
+  for (let offset = 0; offset <= span; offset += 1) {
+    const n = veilleDayEntries(rel, offset).length;
+    const take = Math.min(n, VEILLE_FRISE_MAX, budget);
+    plan.push(take);
+    budget -= take;
+    friseTotal += Math.min(n, VEILLE_FRISE_MAX);
+  }
+  const hidden = (rel.recent.length - recentShown) + (friseTotal - plan.reduce((a, b) => a + b, 0));
+  const more = (n) => (n > 0 ? `<div class="more-line muted">+${esc(n)} autres</div>` : "");
+  const recent = rel.recent.length ? `<div class="recent">${rel.recent.slice(0, recentShown).map(veilleRecentCard).join("")}</div>` : `<div class="list-item muted">Aucune sortie récente</div>`;
+  const columns = plan.map((take, offset) => veilleFriseColumn(rel, veilleAddDays(today, offset), offset, take)).join("");
+  const toggle = expanded ? `<button type="button" class="btn btn-sm" data-veille-more="releases">Voir moins</button>`
+    : hidden > 0 ? `<button type="button" class="btn btn-sm" data-veille-more="releases">Voir plus (${esc(hidden)} jaquette${hidden > 1 ? "s" : ""})</button>` : "";
+  return `<div class="cal-sub"><b>Sorties récentes</b>les plus attendues d'abord</div>${recent}${more(rel.truncated.recent)}
+    <div class="cal-sub cal-sub-next"><b>À venir (${esc(span)} j)</b>une colonne par jour, la plus attendue en grand</div>
+    <div class="cal-frise">${columns}</div><div class="mlist">${veilleMobileList(rel, today, span, plan)}</div>${more(rel.truncated.upcoming)}
+    ${toggle ? `<div class="more-row">${toggle}</div>` : ""}`;
+}
+
 function veilleReleases(data) {
   const day = data.day, igdb = (day.sources || {}).igdb, cfg = data.settings || {};
   const head = `<div class="section-title">${icon("calendar")}Sorties de jeux</div>`;
   if (igdb && igdb.status === "error") {
-    return `<section data-veille-releases>${head}<div class="panel"><p class="reason bad" role="alert"><b>${esc(SOURCE_LABELS.igdb)} :</b> ${esc(igdb.error)}</p></div></section>`;
+    return `<section id="veille-sorties" data-veille-releases>${head}<div class="panel"><p class="reason bad" role="alert"><b>${esc(SOURCE_LABELS.igdb)} :</b> ${esc(igdb.error)}</p></div></section>`;
   }
   const rel = day.releases || { recent: [], upcoming: [], excluded_low_hypes: 0, truncated: { recent: 0, upcoming: 0 } };
   const span = Number(cfg.upcoming_days) || 14;
-  const more = (n) => (n > 0 ? `<div class="more-line muted">+${esc(n)} autres</div>` : "");
   const excluded = rel.excluded_low_hypes > 0 ? `<p class="cal-note">${esc(rel.excluded_low_hypes)} sortie${rel.excluded_low_hypes > 1 ? "s" : ""} écartée${rel.excluded_low_hypes > 1 ? "s" : ""} (moins de ${esc(cfg.igdb_min_hypes ?? 0)} hypes)</p>` : "";
   const chips = `<span class="chip plain">${rel.recent.length} récentes</span><span class="chip plain">${rel.upcoming.length} à venir</span><span class="chip info plain">Source : IGDB</span>`;
   const title = `<div class="panel-head"><h2>Calendrier du ${esc(veilleDate(day.date, VEILLE_DATE_LONG))}</h2><div class="right">${chips}</div></div>`;
   if (!rel.recent.length && !rel.upcoming.length) {
-    return `<section data-veille-releases>${head}<div class="panel">${title}<div class="panel-body"><div class="list-item muted">Aucune sortie dans la fenêtre</div>${excluded}</div></div></section>`;
+    return `<section id="veille-sorties" data-veille-releases>${head}<div class="panel">${title}<div class="panel-body"><div class="list-item muted">Aucune sortie dans la fenêtre</div>${excluded}</div></div></section>`;
   }
-  const recent = rel.recent.length ? `<div class="recent">${rel.recent.map(veilleRecentCard).join("")}</div>` : `<div class="list-item muted">Aucune sortie récente</div>`;
-  const columns = Array.from({ length: span + 1 }, (_, offset) => veilleFriseColumn(rel, veilleAddDays(day.date, offset), offset)).join("");
-  return `<section data-veille-releases>${head}<div class="panel">${title}<div class="panel-body">
-    <div class="cal-sub"><b>Sorties récentes</b>les plus attendues d'abord</div>${recent}${more(rel.truncated.recent)}
-    <div class="cal-sub cal-sub-next"><b>À venir (${esc(span)} j)</b>une colonne par jour, la plus attendue en grand</div>
-    <div class="cal-frise">${columns}</div><div class="mlist">${veilleMobileList(rel, day.date, span)}</div>${more(rel.truncated.upcoming)}
+  return `<section id="veille-sorties" data-veille-releases>${head}<div class="panel">${title}<div class="panel-body">
+    ${gamesHtml(rel, day.date, span, !!veilleUi.more.releases)}
     <div class="legend"><span><i class="lg-today"></i>Aujourd'hui</span><span><i class="lg-trend"></i>En tendance dans le relevé du jour</span></div>
     ${excluded}<p class="cal-note">Dates en Europe/Paris. Jaquettes chargées par ton navigateur depuis images.igdb.com.</p></div></div>${veilleSheet(rel, veilleUi.sheet)}</section>`;
 }
@@ -505,16 +534,18 @@ function veilleTrend(game) {
 function veilleRising(data) {
   const games = [...(data.day.games || [])].sort((a, b) => Math.max(b.twitch_delta_pct ?? -1e9, b.steam_delta_pct ?? -1e9) - Math.max(a.twitch_delta_pct ?? -1e9, a.steam_delta_pct ?? -1e9));
   const num = (v, reason) => (v == null ? `<span class="muted">${esc(reason)}</span>` : esc(fr(v)));
-  const rows = games.map((g) => `<tr>
+  const expanded = !!veilleUi.more.rising;
+  const rows = (expanded ? games : games.slice(0, VEILLE_RISING_MAX)).map((g) => `<tr>
     <td>${esc(g.name)} ${g.release ? veilleReleaseBadge(g.release.days_since) : ""}</td>
     <td class="r">${g.twitch_match === false ? `<span class="muted">hors Twitch FR</span>` : num(g.twitch_fr_viewers, "pas relevé")}</td><td class="r">${veilleDelta(g, "twitch")}</td>
     <td class="r">${veilleSteamCell(g)}</td><td class="r">${veilleDelta(g, "steam")}</td><td class="r">${veilleFollowersCell(g)}</td><td class="r">${veilleSellers(g)}</td>
     <td class="r">${veilleCommunityCell(g)}</td>
     <td class="r">${num(g.youtube_views_per_hour == null ? null : Math.round(g.youtube_views_per_hour), "clé absente ou pas de vidéo")}</td>
     <td class="r">${esc(g.vod_count)}</td><td class="r" data-veille-trend>${veilleTrend(g)}</td></tr>`).join("");
-  return `<section data-veille-rising><div class="section-title">${icon("trending-up")}Ce qui monte</div><div class="panel">
+  return `<section id="veille-montent" data-veille-rising><div class="section-title">${icon("trending-up")}Ce qui monte</div><div class="panel">
     ${rows ? `<div class="table-wrap"><table class="table"><thead><tr><th>Jeu</th><th class="r">Twitch FR (viewers)</th><th class="r">Δ 7 j</th><th class="r">Steam (pic du jour / à l'instant)</th><th class="r">Δ 7 j</th><th class="r">Abonnés Steam</th><th class="r">Ventes FR</th><th class="r">Communauté</th><th class="r">YouTube FR (vues/h)</th><th class="r">VOD FR</th><th class="r">30 j</th></tr></thead><tbody>${rows}</tbody></table></div>`
       : `<div class="list-item muted">Aucun jeu relevé : vérifie les sources ci-dessus.</div>`}
+    ${games.length > VEILLE_RISING_MAX ? `<div class="more-row"><button type="button" class="btn btn-sm" data-veille-more="rising">${expanded ? "Voir moins" : `Voir plus (${games.length - VEILLE_RISING_MAX} jeux)`}</button></div>` : ""}
     <div class="arch-row"><span class="t muted">Un jeu sans correspondance Steam ou hors du top ventes FR l'indique ; une donnée absente est expliquée, aucune valeur n'est inventée.</span></div>
   </div></section>`;
 }
@@ -558,7 +589,7 @@ function veilleView(body) {
   const channels = store.channels || [];
   const html = `<div class="stack">
     <div class="toolbar"><span class="muted">Relevé quotidien à ${esc((data.settings || {}).run_at || "?")} · les VOD déjà clippées ne sont plus proposées.</span><span class="grow"></span>${refresh}</div>
-    ${veilleSources(data)}${veilleKpis(data)}${veilleProposals(data, channels)}${veilleReleases(data)}${veilleBest(data)}${veilleRising(data)}${veilleSettings(data)}
+    ${veilleToc(data)}${veilleSources(data)}${veilleKpis(data)}${veilleProposals(data, channels)}${veilleReleases(data)}${veilleBest(data)}${veilleRising(data)}${veilleSettings(data)}
   </div>`;
   if (veilleUi.html === html && body.childElementCount) return;
   veilleUi.html = html;
@@ -604,6 +635,12 @@ function veilleWire(body) {
     if (!(await confirmDialog({ title: "Ignorer cette VOD ?", body: "Elle ne sera plus jamais proposée.", confirmLabel: "Ignorer" }))) return;
     await veilleCall(`/api/veille/${encodeURIComponent(dayDate())}/${encodeURIComponent(id)}/ignore`, "POST", undefined, null, "Impossible d'ignorer cette VOD");
   }));
+  $$("[data-veille-jump]", body).forEach((a) => (a.onclick = (e) => {
+    e.preventDefault();
+    const target = body.querySelector(`#${a.getAttribute("href").slice(1)}`);
+    if (target) target.scrollIntoView({ block: "start" });
+  }));
+  $$("[data-veille-more]", body).forEach((b) => (b.onclick = () => { veilleUi.more[b.dataset.veilleMore] = !veilleUi.more[b.dataset.veilleMore]; renderCurrent(); }));
   $$("[data-veille-open]", body).forEach((b) => (b.onclick = () => { veilleUi.sheet = b.dataset.veilleOpen; veilleUi.focusSheet = true; renderCurrent(); }));
   $$("[data-veille-close]", body).forEach((b) => (b.onclick = veilleCloseSheet));
   const scrim = body.querySelector("[data-veille-scrim]");
@@ -633,6 +670,8 @@ document.addEventListener("keydown", (e) => {
 
 Screens.veille = {
   render(body) {
+    const section = body.closest(".screen");
+    if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
     if (Date.now() - veilleUi.at > VEILLE_STALE_MS) loadVeille();
     if (!veilleUi.data) {
       body.innerHTML = veilleUi.error
