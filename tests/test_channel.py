@@ -522,3 +522,26 @@ def test_read_text_retrying_raises_when_the_lock_persists(tmp_path, monkeypatch)
     monkeypatch.setattr(channel_mod, "_REPLACE_DELAY_S", 0)
     with pytest.raises(PermissionError):
         channel_mod.read_text_retrying(path)
+
+
+def test_save_channel_locked_does_not_retake_the_lock_the_caller_holds(isolated_cwd):
+    """Un appelant qui tient deja file_lock(preset) pour son cycle lecture-modification-ecriture passe
+    ``locked=True`` : sinon le verrou (non reentrant) se bloquerait lui-meme."""
+    from clipper.channel import file_lock, save_channel
+
+    presets = isolated_cwd / "presets"
+    presets.mkdir()
+    (isolated_cwd / "config.toml").write_text('mode = "review"\n', encoding="utf-8")
+    done = threading.Event()
+
+    def write():
+        with file_lock(presets / "ma_chaine.toml"):
+            save_channel("ma_chaine", {"channel": {"display_name": "A"}}, presets_dir=presets,
+                         base=isolated_cwd / "config.toml", locked=True)
+        done.set()
+
+    thread = threading.Thread(target=write, daemon=True)
+    thread.start()
+
+    assert done.wait(5), "save_channel(locked=True) s'est bloque sur le verrou de son propre appelant"
+    assert 'display_name = "A"' in (presets / "ma_chaine.toml").read_text(encoding="utf-8")

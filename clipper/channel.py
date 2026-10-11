@@ -211,11 +211,14 @@ def save_channel(
     *,
     presets_dir: str | Path = "presets",
     base: str | Path = "config.toml",
+    locked: bool = False,
 ) -> None:
     """Serialize data (the full preset, e.g. {"channel": {...}}) and replace
     the preset file, via config.write_config: reread and validated against
     base first, an invalid file is left intact (SPEC-74e9 1.5). The legacy
-    [channel] keys (SPEC-6076 R2) are dropped here, with a log."""
+    [channel] keys (SPEC-6076 R2) are dropped here, with a log.
+    ``locked=True`` : l'appelant tient deja ``file_lock(<preset>)`` pour son cycle
+    lecture-modification-ecriture (le verrou n'est pas reentrant)."""
     _validate_name(name)
     table = data.get("channel")
     dropped = legacy_keys(table)
@@ -223,6 +226,9 @@ def save_channel(
         data = {**data, "channel": {k: v for k, v in table.items() if k not in LEGACY_KEYS}}
         logger.info("style %s : [channel] %s retiré à la sauvegarde", name, " et ".join(dropped))
     path = _preset_path(presets_dir, name)
+    if locked:
+        write_config(path, data, base=base)
+        return
     with file_lock(path):
         write_config(path, data, base=base)
 
@@ -273,8 +279,11 @@ def migrate_legacy_presets(
                 name, account_id, state_dir=config.section("publish")["state_dir"])
             if moved:
                 logger.info("style %s : compte %s reporté sur %d publication(s) sans compte", name, account_id, moved)
-        data["channel"] = {k: v for k, v in table.items() if k not in LEGACY_KEYS}
-        write_config(path, data, base=base)
+        with file_lock(path):  # relu sous verrou : une modification concurrente du style n'est pas ecrasee
+            with path.open("rb") as f:
+                data = tomllib.load(f)
+            data["channel"] = {k: v for k, v in (data.get("channel") or {}).items() if k not in LEGACY_KEYS}
+            write_config(path, data, base=base)
         logger.info("style %s : [channel] %s retiré du preset", name, " et ".join(keys))
         migrated.append(name)
     return migrated
