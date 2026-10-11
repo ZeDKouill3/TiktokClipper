@@ -6,7 +6,7 @@
   **Une vidéo longue en entrée, des clips verticaux sous-titrés en sortie, publiés sur TikTok et YouTube Shorts depuis une console web locale.**
 
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-0.6.0%20pr%C3%A9--version-orange">
+    <img alt="Version" src="https://img.shields.io/badge/version-0.7.0%20pr%C3%A9--version-orange">
     <img alt="Python" src="https://img.shields.io/badge/python-3.11-blue">
     <img alt="Plateforme" src="https://img.shields.io/badge/plateforme-Windows-lightgrey">
     <img alt="GPU" src="https://img.shields.io/badge/GPU-CUDA%20optionnel-76b900">
@@ -17,7 +17,8 @@
 
 > ⚠️ **Pré-version.** Pas encore de garantie de stabilité de la ligne de
 > commande ni du format de configuration. Voir
-> [`CHANGELOG.md`](CHANGELOG.md) (section `[0.6.0]`) et le plan de versions
+> [`CHANGELOG.md`](CHANGELOG.md) (section `[0.7.0]`), les
+> [notes de version](docs/releases/v0.7.0.md) et le plan de versions
 > [`docs/versions.md`](docs/versions.md).
 
 ## Ce que ça fait
@@ -83,7 +84,7 @@ id neutre), puis le schéma du pipeline :
 Pas envie de cloner le dépôt, d'installer Python ou `uv` ? Télécharge le zip
 portable de la
 [Release GitHub](https://github.com/ZeDKouill3/TiktokClipper/releases)
-(`Clipper-portable-0.6.0.zip`), dézippe-le et double-clique sur
+(`Clipper-portable-0.7.0.zip`), dézippe-le et double-clique sur
 `Installer.bat` : il installe Python, ffmpeg, `claude` et les modèles dans son
 propre dossier (programme sous `%LOCALAPPDATA%\Clipper`, données sous
 `Documents\Clipper`), CUDA seulement si un GPU NVIDIA est détecté, puis
@@ -109,7 +110,7 @@ Python 3.11, ffmpeg, `claude`, `ank`, GPU optionnel, Google Chrome pour
 [publier](#publier-sur-tiktok)).
 
 Depuis la release (sans cloner le dépôt) : télécharge le `.whl`, `uv pip
-install clipper-0.6.0-py3-none-any.whl` puis `clipper init` (écrit
+install clipper-0.7.0-py3-none-any.whl` puis `clipper init` (écrit
 `config.toml` et `rubric.toml` dans le dossier courant). La commande
 `clipper` s'ajoute à `python -m clipper`.
 
@@ -584,7 +585,7 @@ sont détaillés dans [`docs/GUIDE.md`](docs/GUIDE.md).
 - [`docs/tiktok-cadence.md`](docs/tiktok-cadence.md) : rythme de publication
   sur TikTok.
 - Notes de version :
-  [`v0.3.0`](docs/releases/v0.3.0.md), [`v0.2.0`](docs/releases/v0.2.0.md),
+  [`v0.7.0`](docs/releases/v0.7.0.md), [`v0.3.0`](docs/releases/v0.3.0.md), [`v0.2.0`](docs/releases/v0.2.0.md),
   [`v0.1.0`](docs/releases/v0.1.0.md).
 - [`CHANGELOG.md`](CHANGELOG.md) : historique des versions.
 - [`AGENTS.md`](AGENTS.md) : conventions du dépôt et décisions ratifiées

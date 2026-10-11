@@ -640,8 +640,9 @@ def _repartition_section() -> str:
 
 
 def _unreleased_changelog() -> str:
+    """Section de la version en cours : [Non publié] est vide juste après une publication."""
     text = CHANGELOG.read_text(encoding="utf-8")
-    start = text.index("## [Non publié]")
+    start = text.index(f"## [{_current_version()}]")
     following = re.search(r"^## \[", text[start + 1:], flags=re.MULTILINE)
     return text[start:start + 1 + following.start()] if following else text[start:]
 
