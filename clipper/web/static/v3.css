@@ -619,3 +619,4 @@ html[data-nav="rail"] .sidenav .nav-rail .i { transform: rotate(180deg); }
   .v3 .pub-toolbar #pub-account { max-width: none; flex: 1 1 100%; }
   .v3 .agenda-row, .v3 .cal-free, .v3 .pub-dialog .btn { min-height: 44px; }
 }
+#screen-publish [data-body] { background: none; border: 0; box-shadow: none; padding: 0; }
