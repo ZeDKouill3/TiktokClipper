@@ -480,3 +480,45 @@ def test_saving_a_style_drops_the_legacy_keys(isolated_cwd, caplog):
     assert keys == {"display_name": "Nouveau"}
     assert "retiré" in caplog.text
     load_channel("ma_chaine")
+
+
+def test_read_text_retrying_survives_a_transient_windows_lock(tmp_path, monkeypatch):
+    # 11/10 : le worker est mort sur PermissionError en lisant pipeline.json pendant que l'enfant le remplacait
+    from pathlib import Path
+
+    from clipper import channel as channel_mod
+
+    path = tmp_path / "pipeline.json"
+    path.write_text('{"ok": true}', encoding="utf-8")
+    real = Path.read_text
+    calls = {"n": 0}
+
+    def flaky(self, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise PermissionError(13, "Permission denied")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", flaky)
+    monkeypatch.setattr(channel_mod, "_REPLACE_DELAY_S", 0)
+    assert channel_mod.read_text_retrying(path) == '{"ok": true}'
+    assert calls["n"] == 3
+
+
+def test_read_text_retrying_raises_when_the_lock_persists(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    import pytest
+
+    from clipper import channel as channel_mod
+
+    path = tmp_path / "pipeline.json"
+    path.write_text("{}", encoding="utf-8")
+
+    def locked(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "read_text", locked)
+    monkeypatch.setattr(channel_mod, "_REPLACE_DELAY_S", 0)
+    with pytest.raises(PermissionError):
+        channel_mod.read_text_retrying(path)

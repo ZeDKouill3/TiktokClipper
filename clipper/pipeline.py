@@ -226,7 +226,8 @@ def load_state(video_id: str, *, config: Config | None = None) -> dict[str, Any]
     path = _video_dir(video_id, config) / STATE_FILE
     if not path.exists():
         raise PipelineError(f"aucun etat pour la video {video_id} ({path}) : lancer d'abord 'run <url>'")
-    state = json.loads(path.read_text(encoding="utf-8"))
+    # l'enfant remplace pipeline.json pendant que le worker le lit : verrou Windows passager (worker mort le 11/10)
+    state = json.loads(channel_mod.read_text_retrying(path))
     steps = state.get("steps")
     if isinstance(steps, dict) and any(name not in steps for name in STEPS):
         # Etat ecrit avant l'ajout d'une etape (ex. action) : elle est simplement a faire.

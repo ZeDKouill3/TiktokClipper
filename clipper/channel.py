@@ -101,6 +101,20 @@ def replace_retrying(tmp: Path, path: Path) -> None:
             time.sleep(_REPLACE_DELAY_S)
 
 
+def read_text_retrying(path: Path) -> str:
+    """``path.read_text`` reessaye tant qu'un ecrivain remplace ``path`` sous
+    Windows (``os.replace`` concurrent : PermissionError a l'ouverture). Si le
+    verrou persiste, releve l'erreur d'origine : jamais d'etat invente."""
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            return path.read_text(encoding="utf-8")
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(_REPLACE_DELAY_S)
+    raise AssertionError("inatteignable")
+
+
 def atomic_write_json(path: str | Path, data: Any) -> None:
     """Ecrit ``data`` en JSON dans un fichier temporaire du meme dossier puis
     ``os.replace`` (jamais de fichier a moitie ecrit). Sous Windows, le
