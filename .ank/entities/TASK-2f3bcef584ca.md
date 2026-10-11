@@ -5,7 +5,7 @@ slug: ui-v3-u12-r-glages-v3-sommaire-collant-libell-s
 title: "UI v3 U12 : Réglages v3 (sommaire collant, libellés, Enregistrer collant)"
 created: 2026-10-11T03:59:38Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/web/static/screens/settings.js
   - clipper/web/static/v3.css
@@ -17,6 +17,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/388c61b3df1c@b731e17
+    tree: scope/b61ea01122c5
+    criteria: 993ac49c369b
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---

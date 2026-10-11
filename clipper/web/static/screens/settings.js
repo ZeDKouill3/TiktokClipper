@@ -13,10 +13,102 @@ const SET_SECTIONS = [
 ];
 const SET_TIERS = ["strong", "fast"];
 // Clés d'API de la veille : jamais renvoyées par le serveur (seulement `<clé>_set`), jamais préremplies ; vide = on garde.
-const SET_VEILLE_KEYS = [
-  ["twitch_client_id", "Twitch : client id"], ["twitch_client_secret", "Twitch : client secret"], ["youtube_api_key", "YouTube : clé API"],
-];
+const SET_VEILLE_KEYS = ["twitch_client_id", "twitch_client_secret", "youtube_api_key"];
 const SET_STALE_MS = 4000;
+
+/* Libellé français de chaque champ (chemin pointé, comme dans le brouillon). La clé technique reste
+   affichée en mono discret. tests/test_web_settings_v3.py compare cette table aux clés servies par le serveur. */
+const SET_LABELS = {
+  "mode": "Mode de traitement",
+  "workspace_dir": "Dossier de travail",
+  "output_dir": "Dossier des clips",
+  "llm.backend": "Backend par défaut",
+  "llm.repair_attempts": "Renvois en cas de réponse invalide",
+  "llm.claude_cli.command": "Commande de l'interface Claude",
+  "llm.claude_cli.timeout": "Délai maximum d'un appel (s)",
+  "llm.claude_cli.models.strong": "Modèle du niveau strong",
+  "llm.claude_cli.models.fast": "Modèle du niveau fast",
+  "llm.claude_api.max_tokens": "Taille maximum de réponse (jetons)",
+  "llm.claude_api.timeout": "Délai maximum d'un appel (s)",
+  "llm.claude_api.models.strong": "Modèle du niveau strong",
+  "llm.claude_api.models.fast": "Modèle du niveau fast",
+  "llm.ollama.url": "Adresse du serveur Ollama",
+  "llm.ollama.timeout": "Délai maximum d'un appel (s)",
+  "llm.ollama.models.strong": "Modèle du niveau strong",
+  "llm.ollama.models.fast": "Modèle du niveau fast",
+  "web.host": "Adresse d'écoute",
+  "web.port": "Port",
+  "web.sse_poll_interval_s": "Rafraîchissement en direct de secours (s)",
+  "worker.poll_interval_s": "Intervalle de lecture de la file (s)",
+  "worker.cancel_grace_s": "Délai avant arrêt forcé (s)",
+  "worker.queue_path": "Fichier de la file",
+  "worker.heartbeat_interval_s": "Intervalle de signe de vie (s)",
+  "worker.prefetch_download": "Télécharger la vidéo suivante en avance",
+  "worker.prefetch_min_free_gb": "Espace libre minimum pour l'avance (Go)",
+  "network.expected_country": "Pays attendu de l'IP",
+  "network.geo_url": "Service de géolocalisation de l'IP",
+  "network.cache_s": "Durée de cache de l'IP (s)",
+  "network.block_browser": "Bloquer le navigateur hors du pays",
+  "veille.enabled": "Veille activée",
+  "veille.run_at": "Heure du relevé quotidien",
+  "veille.timezone": "Fuseau horaire",
+  "veille.language": "Langue des VOD",
+  "veille.region": "Région des VOD",
+  "veille.taste": "Goûts",
+  "veille.default_channel": "Style par défaut des VOD",
+  "veille.max_vods_per_day": "VOD proposées par jour",
+  "veille.best_clips_per_day": "Meilleurs clips archivés par jour",
+  "veille.baseline_days": "Jours de référence pour la montée",
+  "veille.history_days": "Jours d'historique conservés",
+  "veille.rise_min_pct": "Montée minimum pour être retenu (%)",
+  "veille.vod_min_duration_s": "Durée minimum d'une VOD (s)",
+  "veille.vod_max_age_h": "Âge maximum d'une VOD (h)",
+  "veille.twitch_top_games": "Jeux Twitch les plus suivis relevés",
+  "veille.twitch_vods_per_game": "VOD Twitch relevées par jeu",
+  "veille.youtube_max_results": "Résultats YouTube maximum",
+  "veille.youtube_min_duration_s": "Durée minimum d'une vidéo YouTube (s)",
+  "veille.steam_top": "Jeux Steam les plus joués relevés",
+  "veille.steam_name_lookups_max": "Recherches de noms Steam maximum",
+  "veille.twitch_access_attempts": "Tentatives d'accès Twitch par jeu",
+  "veille.twitch_access_retry_pause_s": "Pause entre deux tentatives Twitch (s)",
+  "veille.twitch_access_workers": "Jeux testés en parallèle (Twitch)",
+  "veille.steam_sellers_top": "Jeux Steam les plus vendus relevés",
+  "veille.state_dir": "Dossier d'état de la veille",
+  "veille.http_timeout_s": "Délai maximum d'une requête HTTP (s)",
+  "veille.steam_rank_gain_min": "Gain de rang Steam minimum",
+  "veille.steam_risers_max": "Jeux Steam en hausse retenus au maximum",
+  "veille.upcoming_days": "Sorties à venir affichées (jours)",
+  "veille.release_window_days": "Fenêtre des sorties (jours)",
+  "veille.igdb_min_hypes": "Hype IGDB minimum",
+  "veille.igdb_recent_max": "Sorties récentes IGDB maximum",
+  "veille.igdb_upcoming_max": "Sorties à venir IGDB maximum",
+  "veille.igdb_pages_max": "Pages IGDB maximum",
+  "veille.youtube_game_min_chars": "Longueur minimum d'un nom de jeu pour YouTube",
+  "veille.steam_players_lookups_max": "Jeux Steam interrogés pour les joueurs",
+  "veille.steam_followers_lookups_max": "Jeux Steam interrogés pour les abonnés",
+  "veille.steam_followers_pause_s": "Pause entre deux relevés d'abonnés Steam (s)",
+  "veille.steam_followers_retry_max": "Nouvelles tentatives d'abonnés Steam",
+  "veille.steam_followers_retry_wait_max_s": "Attente maximum avant nouvel essai d'abonnés (s)",
+  "veille.community_min_steam_players": "Seuil de joueurs Steam simultanés",
+  "veille.community_min_steam_followers": "Seuil d'abonnés Steam",
+  "veille.community_min_twitch_viewers": "Seuil de spectateurs Twitch",
+  "veille.community_min_hypes": "Seuil de hype IGDB",
+  "veille.max_vods_per_game": "VOD maximum par jeu",
+  "veille.trend_days": "Jours de tendance affichés",
+  "veille.trend_games_max": "Jeux en tendance suivis au maximum",
+  "veille.steam_reviews_pause_s": "Pause entre deux relevés d'avis Steam (s)",
+  "veille.steam_reviews_retry_max": "Nouvelles tentatives d'avis Steam",
+  "veille.steam_reviews_retry_wait_max_s": "Attente maximum avant nouvel essai d'avis (s)",
+  "veille.twitch_history_pages_max": "Pages d'historique Twitch maximum",
+  "veille.twitch_history_retry_max": "Nouvelles tentatives d'historique Twitch",
+  "veille.twitch_history_retry_wait_max_s": "Attente maximum avant nouvel essai d'historique (s)",
+  "veille.veille_deadline_s": "Échéance globale du relevé (s)",
+  "veille.llm_retry_delay_min": "Délai entre deux appels à Claude (min)",
+  "veille.llm_retry_max": "Nouvelles tentatives d'appel à Claude",
+  "veille.twitch_client_id": "Identifiant client Twitch",
+  "veille.twitch_client_secret": "Secret client Twitch",
+  "veille.youtube_api_key": "Clé API YouTube",
+};
 
 const setUi = { data: null, draft: null, loading: null, at: 0, dirty: false, saving: false, error: "" };
 
@@ -118,12 +210,12 @@ function setInput(id, path, kind, value, extra) {
   return `<input class="input${extra && extra.mono === false ? "" : " mono"}" id="${id}" ${data} type="text" value="${esc(value)}" autocomplete="off">`;
 }
 
-function setField(path, label, hint, kind) {
+function setField(path, hint, kind) {
   const def = setDefault(path);
   const k = kind || setKind(def);
   const id = `set-${path.join("-")}`;
   return `<div class="field set-field" data-fpath="${esc(path.join("."))}">
-    <label for="${id}" class="mono">${esc(label || path[path.length - 1])}</label>
+    <label for="${id}">${esc(SET_LABELS[path.join(".")])}<code class="mono set-key">${esc(path[path.length - 1])}</code></label>
     ${setInput(id, path, k, setEffective(path))}
     ${hint ? `<span class="hint">${esc(hint)}</span>` : ""}${setHelpDetails(path, hint)}
     <span class="field-error" role="alert"></span></div>`;
@@ -140,7 +232,7 @@ function setSectionFields(section, skip) {
   const docs = setUi.data.defaults[section];
   return Object.keys(docs)
     .filter((k) => !(skip || []).includes(k) && (typeof docs[k].default !== "object" || docs[k].default === null))
-    .map((k) => setField([section, k], k, docs[k].comment)).join("");
+    .map((k) => setField([section, k], docs[k].comment)).join("");
 }
 
 /* ---------- Sections ---------- */
@@ -157,8 +249,8 @@ function setGeneral() {
 
 function setDirs() {
   return `<section class="panel" id="set-dirs"><div class="panel-head"><h2>Dossiers</h2></div><div class="panel-pad"><div class="form-grid">
-    ${setField(["workspace_dir"], "workspace_dir", "Un sous-dossier par vidéo : audio, transcription, moments, état.")}
-    ${setField(["output_dir"], "output_dir", "Clips rendus et leur fichier .json.")}
+    ${setField(["workspace_dir"], "Un sous-dossier par vidéo : audio, transcription, moments, état.")}
+    ${setField(["output_dir"], "Clips rendus et leur fichier .json.")}
   </div></div></section>`;
 }
 
@@ -192,19 +284,19 @@ function setLlm() {
     const def = docs[key] && docs[key].default;
     if (!def || typeof def !== "object") return "";
     const scalars = Object.keys(def).filter((k) => k !== "models" && typeof def[k] !== "object")
-      .map((k) => setField(["llm", key, k], k)).join("");
+      .map((k) => setField(["llm", key, k])).join("");
     const models = def.models ? SET_TIERS.concat(Object.keys(def.models).filter((t) => !SET_TIERS.includes(t)))
-      .filter((t) => t in def.models).map((t) => setField(["llm", key, "models", t], `niveau ${t}`, `Modèle utilisé pour le niveau ${t} par ${name}.`, "text")).join("") : "";
+      .filter((t) => t in def.models).map((t) => setField(["llm", key, "models", t], `Modèle utilisé pour le niveau ${t} par ${name}.`, "text")).join("") : "";
     return `<details class="set-backend" data-backend="${esc(name)}"${name === current ? " open" : ""}>
       <summary><span class="mono">${esc(name)}</span>${name === current ? ` <span class="chip running plain">actif</span>` : ""}</summary>
       <div class="form-grid">${scalars}${models}</div></details>`;
   }).join("");
   return `<section class="panel" id="set-llm"><div class="panel-head"><h2>LLM et modèles</h2><span class="muted mono">[llm]</span></div><div class="panel-pad">
     <div class="form-grid">
-      <div class="field set-field" data-fpath="llm.backend"><label for="set-llm-backend" class="mono">backend</label>
+      <div class="field set-field" data-fpath="llm.backend"><label for="set-llm-backend">${esc(SET_LABELS["llm.backend"])}<code class="mono set-key">backend</code></label>
         <select class="input" id="set-llm-backend" data-path="llm.backend" data-kind="text">${backends.map((b) => `<option value="${esc(b)}"${b === current ? " selected" : ""}>${esc(b)}</option>`).join("")}</select>
         <span class="hint">${esc(docs.backend.comment || "Backend de tout appel LLM, sauf usage qui en redéfinit un. Texte et images fixes seulement.")}</span><span class="field-error" role="alert"></span></div>
-      ${setField(["llm", "repair_attempts"], "repair_attempts", docs.repair_attempts.comment || "Réponse refusée (schéma JSON) : nombre de renvois au modèle ; 0 échoue tout de suite.")}
+      ${setField(["llm", "repair_attempts"], docs.repair_attempts.comment || "Réponse refusée (schéma JSON) : nombre de renvois au modèle ; 0 échoue tout de suite.")}
     </div>
     ${setLlmUsages()}
     <h3 class="set-sub">Backends et niveaux</h3>
@@ -235,7 +327,7 @@ function setNetwork() {
   return `<section class="panel" id="set-network"><div class="panel-head"><h2>Réseau</h2><span class="muted mono">[network]</span></div><div class="panel-pad">
     <p class="muted set-note">Le pays de l'IP publique s'affiche en haut à droite ; hors du pays attendu, la pastille passe au rouge et le navigateur piloté refuse de s'ouvrir.</p>
     <div class="form-grid">
-      <div class="field set-field" data-fpath="network.expected_country"><label for="set-network-expected_country" class="mono">expected_country</label>
+      <div class="field set-field" data-fpath="network.expected_country"><label for="set-network-expected_country">${esc(SET_LABELS["network.expected_country"])}<code class="mono set-key">expected_country</code></label>
         <input class="input mono" id="set-network-expected_country" data-path="network.expected_country" data-kind="text" type="text" list="set-countries" maxlength="2" value="${esc(value)}" autocomplete="off">
         <datalist id="set-countries">${options}</datalist>
         <span class="hint">${esc(comment || "Pays attendu de l'IP publique : choisis dans la liste ou saisis un code ISO à deux lettres.")}</span>
@@ -245,30 +337,30 @@ function setNetwork() {
 }
 
 /* [veille] (SPEC-bdd9 R1, R8) : activation, goûts, nombres, heure, puis les clés en écriture seule. */
-function setVeilleKey(key, label) {
+function setVeilleKey(key) {
   const isSet = Boolean((setUi.data.effective.veille || {})[`${key}_set`]);
   const typed = Boolean(setGet(setUi.draft, ["veille", key]));
   const id = `set-veille-${key}`;
   return `<div class="field set-field" data-fpath="veille.${key}">
-    <label for="${id}" class="mono">${esc(key)}</label>
+    <label for="${id}">${esc(SET_LABELS[`veille.${key}`])}<code class="mono set-key">${esc(key)}</code></label>
     <input class="input mono" id="${id}" data-secret="veille.${key}" type="password" autocomplete="new-password" placeholder="${isSet ? "•••••••• (saisie, laisser vide pour la garder)" : "à saisir"}">
-    <span class="hint">${esc(label)} : ${isSet ? "déjà enregistrée dans config.toml" : "absente"}${typed ? " · nouvelle valeur à enregistrer" : ""}. Elle n'est jamais affichée ni renvoyée.</span>
+    <span class="hint">${esc(SET_LABELS[`veille.${key}`])} : ${isSet ? "déjà enregistrée dans config.toml" : "absente"}${typed ? " · nouvelle valeur à enregistrer" : ""}. Elle n'est jamais affichée ni renvoyée.</span>
     <span class="field-error" role="alert"></span></div>`;
 }
 
 function setVeille() {
   const shown = ["enabled", "run_at", "max_vods_per_day", "best_clips_per_day", "language", "region", "rise_min_pct", "baseline_days", "upcoming_days", "release_window_days", "igdb_min_hypes", "igdb_recent_max", "igdb_upcoming_max", "steam_players_lookups_max", "steam_followers_lookups_max", "steam_followers_pause_s", "community_min_steam_players", "community_min_steam_followers", "community_min_twitch_viewers", "community_min_hypes", "max_vods_per_game", "trend_days", "trend_games_max", "veille_deadline_s", "twitch_access_attempts", "twitch_access_retry_pause_s", "steam_reviews_pause_s", "twitch_history_pages_max"];
-  const hidden = [...shown, "taste", "state_dir", ...SET_VEILLE_KEYS.map(([k]) => k)];
+  const hidden = [...shown, "taste", "state_dir", ...SET_VEILLE_KEYS];
   const taste = setEffective(["veille", "taste"]);
   return `<section class="panel" id="set-veille"><div class="panel-head"><h2>Veille</h2><span class="muted mono">[veille]</span></div><div class="panel-pad">
     <p class="muted set-note">Chaque jour, Claude propose des VOD à clipper d'après Twitch, YouTube et Steam, et liste les sorties de jeux d'IGDB (mêmes clés Twitch). Rien ne tourne tant que « enabled » est faux. Les clés se créent dans les consoles Twitch et Google Cloud (docs/GUIDE.md) ; Steam n'en demande aucune.</p>
     <div class="form-grid">
-      ${shown.map((k) => setField(["veille", k], k, (setUi.data.defaults.veille[k] || {}).comment)).join("")}
-      <div class="field set-field full" data-fpath="veille.taste"><label for="set-veille-taste" class="mono">taste</label>
+      ${shown.map((k) => setField(["veille", k], (setUi.data.defaults.veille[k] || {}).comment)).join("")}
+      <div class="field set-field full" data-fpath="veille.taste"><label for="set-veille-taste">${esc(SET_LABELS["veille.taste"])}<code class="mono set-key">taste</code></label>
         <textarea class="input" id="set-veille-taste" data-path="veille.taste" data-kind="text" rows="2" autocomplete="off">${esc(taste)}</textarea>
         <span class="hint">${esc((setUi.data.defaults.veille.taste || {}).comment || "Tes goûts, en texte libre : Claude les lit pour choisir les VOD.")}</span>
         <span class="field-error" role="alert"></span></div>
-      ${SET_VEILLE_KEYS.map(([k, label]) => setVeilleKey(k, label)).join("")}
+      ${SET_VEILLE_KEYS.map((k) => setVeilleKey(k)).join("")}
     </div>
     <details class="set-help"><summary>autres réglages</summary><div class="form-grid">${setSectionFields("veille", hidden)}</div></details>
   </div></section>`;
@@ -294,7 +386,7 @@ function setAccess() {
 
 function setWarning() {
   if (!setUi.data.comments_lost) return "";
-  return `<p class="reason set-warning" data-set-warning role="note">${icon("circle-alert", "i-sm")}<span>Enregistrer réécrit ${esc(setUi.data.path)} : les commentaires du fichier perdus (seules les valeurs sont conservées).</span></p>`;
+  return `<p class="set-warning" data-set-warning role="note">${icon("circle-alert", "i-sm")}<span>Enregistrer réécrit ${esc(setUi.data.path)} : les commentaires du fichier perdus (seules les valeurs sont conservées).</span></p>`;
 }
 
 function setHtml() {
@@ -302,13 +394,14 @@ function setHtml() {
   return `<div class="set-layout">
     <nav class="set-nav" aria-label="Sections des réglages">${nav}</nav>
     <div class="stack set-stack">
-      ${setWarning()}
       <p class="reason bad" data-set-error role="alert" hidden></p>
       ${setGeneral()}${setDirs()}${setLlm()}${setWeb()}${setWorker()}${setNetwork()}${setVeille()}${setAccess()}
-      <div class="set-savebar${setUi.dirty ? " show" : ""}" id="set-savebar"><span class="muted">${icon("pencil", "i-sm")}</span>
-        <p>Modifications non enregistrées dans <span class="mono">${esc(setUi.data.path)}</span></p>
+      <div class="sticky-foot${setUi.dirty ? " show" : ""}" id="set-savebar">
+        <p><span class="muted">${icon("pencil", "i-sm")}</span> Modifications non enregistrées dans <span class="mono">${esc(setUi.data.path)}</span></p>
         <button type="button" class="btn btn-sm btn-ghost" data-set-cancel>Annuler</button>
-        <button type="button" class="btn btn-sm btn-primary" data-set-save>Enregistrer</button></div>
+        <button type="button" class="btn btn-sm btn-primary" data-set-save>Enregistrer</button>
+        ${setWarning()}
+      </div>
     </div></div>`;
 }
 
@@ -456,6 +549,8 @@ function setWire(root) {
 
 Screens.settings = {
   render(body) {
+    const section = body.closest(".screen");
+    if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
     if (setUi.data === null || (!setUi.dirty && Date.now() - setUi.at > SET_STALE_MS)) setLoad(false);
     if (setUi.data === null) {
       body.innerHTML = `<div class="skeleton skeleton-line"></div><div class="skeleton skeleton-card"></div>`;
