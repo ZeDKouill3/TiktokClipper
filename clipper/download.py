@@ -344,7 +344,7 @@ def _check_duration(real: float, declared: Any, video_id: str) -> None:
     if abs(real - declared) > tolerance:
         raise DownloadError(
             f"{video_id} : telechargement incomplet, {real:.0f} s dans le fichier pour {declared:.0f} s "
-            f"annoncees (ecart tolere {tolerance:.0f} s) ; relance l'etape download pour reprendre"
+            f"annoncees (ecart tolere {tolerance:.0f} s) ; relance l'etape download"
         )
 
 
@@ -359,6 +359,14 @@ def _remove_ytdlp_leftovers(video_dir: Path, video_id: str) -> None:
             removed += 1
     if removed:
         log.info("%s : %d reste(s) de yt-dlp supprime(s) (%.1f Mo)", video_id, removed, freed / 1e6)
+
+
+def _discard_unusable_download(video_dir: Path, video_id: str) -> None:
+    """Supprime <id>.mp4 refuse par un controle et les restes de yt-dlp, pour que la relance
+    de l'etape retelecharge au lieu de re-mesurer le meme fichier."""
+    (video_dir / f"{video_id}.mp4").unlink(missing_ok=True)
+    _remove_ytdlp_leftovers(video_dir, video_id)
+    log.warning("%s : fichier refuse supprime, la prochaine execution retelechargera", video_id)
 
 
 def download(
@@ -386,7 +394,8 @@ def download(
 
     Le fichier produit est verifie avant meta.json : present, mp4, non vide, duree ffprobe a
     max(5 s, 1 %) de la duree annoncee (meta.json : `duration` = reelle, `declared_duration` =
-    annoncee). Sinon DownloadError, meta.json non ecrit, fichier garde pour la reprise.
+    annoncee). Sinon DownloadError, meta.json non ecrit, fichier refuse supprime (yt-dlp ne
+    reecrit pas un fichier existant) : la relance de l'etape retelecharge.
     """
     video_id = extract_video_id(url)
     if isinstance(concurrent_fragments, bool) or not isinstance(concurrent_fragments, int)             or concurrent_fragments < 1:
@@ -428,10 +437,21 @@ def download(
         url, opts, ydl_factory, video_id, network_retries, network_retry_pause_s, sleep
     )
 
-    _check_file_present(video_file, video_id)
+    try:
+        _check_file_present(video_file, video_id)
+    except DownloadError:
+        # yt-dlp ne reecrit jamais un fichier final existant (meme vide) : sans cette mise de cote,
+        # la relance le declarerait « deja telecharge » et echouerait a l'identique.
+        if video_file.exists():
+            _discard_unusable_download(video_dir, video_id)
+        raise
     _remux_if_fragmented(video_file, video_id, ffmpeg_bin)
     real_duration = _probe_duration(video_file, ffprobe_bin)
-    _check_duration(real_duration, info.get("duration"), video_id)
+    try:
+        _check_duration(real_duration, info.get("duration"), video_id)
+    except DownloadError as exc:
+        _discard_unusable_download(video_dir, video_id)
+        raise DownloadError(f"{exc} ; fichier supprime, la relance retelechargera") from exc
     _remove_ytdlp_leftovers(video_dir, video_id)
 
     meta = _build_meta(info, url)

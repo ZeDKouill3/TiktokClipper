@@ -1021,7 +1021,68 @@ def test_download_refuses_a_file_far_shorter_than_announced_and_writes_no_meta(i
 
     video_dir = isolated_cwd / "workspace" / "abcdefghijk"
     assert not (video_dir / "meta.json").exists()
-    assert (video_dir / "abcdefghijk.mp4").exists()  # garde pour la reprise
+    assert not (video_dir / "abcdefghijk.mp4").exists()  # ecarte : la relance retelecharge
+
+
+def test_download_rerun_after_a_too_short_file_downloads_again_and_succeeds(isolated_cwd, monkeypatch):
+    """Regression I2 : yt-dlp ne reecrit jamais un fichier final existant ('already downloaded') ;
+    le fichier juge incomplet doit donc etre ecarte pour que la relance retelecharge."""
+    from clipper.download import DownloadError, download
+
+    durations = iter([3.0, 3600.0])  # 1er telechargement : trop court ; 2e : complet
+    monkeypatch.setattr("clipper.download._probe_duration", lambda path, ffprobe_bin: next(durations))
+    calls: list[str] = []
+
+    class FakeYdl:
+        """Comme le vrai yt-dlp : un fichier video final deja present n'est pas retelecharge."""
+
+        def __init__(self, opts):
+            self._opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            return False
+
+        def extract_info(self, url, download=True):
+            path = Path(self._opts["outtmpl"] % {"id": _INFO["id"], "ext": "mp4"})
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                calls.append("already downloaded")
+            else:
+                calls.append("downloaded")
+                path.write_bytes(b"x" * 100)
+            return _INFO
+
+    video_dir = isolated_cwd / "workspace" / "abcdefghijk"
+    with pytest.raises(DownloadError, match="incomplet") as excinfo:
+        download(_URL, isolated_cwd / "workspace", ydl_factory=FakeYdl)
+    assert "relance" in str(excinfo.value)
+    assert not (video_dir / "meta.json").exists()
+
+    meta = download(_URL, isolated_cwd / "workspace", ydl_factory=FakeYdl)
+
+    assert calls == ["downloaded", "downloaded"]
+    assert meta["duration"] == 3600.0
+    assert (video_dir / "meta.json").exists()
+
+
+def test_download_too_short_file_is_set_aside_with_its_leftovers(isolated_cwd, monkeypatch):
+    from clipper.download import DownloadError, download
+
+    _probe_returns(monkeypatch, 3.0)
+    video_dir = isolated_cwd / "workspace" / "abcdefghijk"
+
+    def write(d):
+        (d / "abcdefghijk.mp4").write_bytes(b"x" * 100)
+        (d / "abcdefghijk.mp4.part").write_bytes(b"y" * 10)
+        (d / "abcdefghijk.mp4.ytdl").write_bytes(b"{}")
+
+    with pytest.raises(DownloadError, match="incomplet"):
+        download(_URL, isolated_cwd / "workspace", ydl_factory=_ydl_writing(_INFO, write))
+
+    assert sorted(p.name for p in video_dir.iterdir()) == []
 
 
 def test_download_refuses_an_empty_file(isolated_cwd, monkeypatch):
@@ -1108,21 +1169,6 @@ def test_download_removes_ytdlp_leftovers_after_success(isolated_cwd, monkeypatc
 
     names = sorted(p.name for p in (isolated_cwd / "workspace" / "abcdefghijk").iterdir())
     assert names == ["abcdefghijk.mp4", "meta.json"]
-
-
-def test_download_keeps_leftovers_when_the_check_fails(isolated_cwd, monkeypatch):
-    from clipper.download import DownloadError, download
-
-    _probe_returns(monkeypatch, 3.0)
-
-    def write(d: Path) -> None:
-        (d / "abcdefghijk.mp4").write_bytes(b"x" * 100)
-        (d / "abcdefghijk.mp4.ytdl").write_text("{}")
-
-    with pytest.raises(DownloadError):
-        download(_URL, isolated_cwd / "workspace", ydl_factory=_ydl_writing(_INFO, write))
-
-    assert (isolated_cwd / "workspace" / "abcdefghijk" / "abcdefghijk.mp4.ytdl").exists()
 
 
 def test_config_defaults_declares_ffprobe_bin():
