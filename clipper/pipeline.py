@@ -1362,7 +1362,8 @@ def queued(*, config: Config | None = None) -> list[dict[str, Any]]:
             continue
         if state["status"] == "queued" and not state.get("dismissed_at"):
             states.append(state)
-    return sorted(states, key=lambda s: s["retry_at"])
+    # un retry_at absent (etat ancien ou ecrit a la main) passe en dernier : l'appelant le signale, sans lever
+    return sorted(states, key=lambda s: (s.get("retry_at") is None, s.get("retry_at") or ""))
 
 
 def process_queue(
@@ -1393,9 +1394,13 @@ def process_queue(
     now = now or _now()
     out = []
     for state in queued(config=config):
-        if datetime.fromisoformat(state["retry_at"]) > now:
-            continue
         video_id = state.get("video_id")
+        try:
+            if datetime.fromisoformat(state["retry_at"]) > now:
+                continue
+        except (KeyError, TypeError, ValueError) as exc:
+            log.error("%s : retry_at illisible (%r), reprise ignoree : %s", video_id, state.get("retry_at"), exc)
+            continue
         try:
             run_config = config
             if state.get("channel") is not None:

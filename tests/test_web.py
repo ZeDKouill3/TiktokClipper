@@ -12129,3 +12129,27 @@ def test_two_concurrent_letterbox_writes_on_different_keys_keep_both(tmp_path, i
     saved = _preset_of(tmp_path)
     assert saved["reframe"]["letterbox_top"] == 470
     assert saved["render"]["cta_handle_gap"] == 14
+def test_sse_clients_of_a_reloaded_config_share_one_hub(tmp_path, isolated_cwd):
+    """Point 4 (CONFIRMÉ) : après PUT /api/settings la config est un autre objet (mêmes dossiers) ; le hub indexé par
+    ``id(config)`` doublait le scanner. Un seul hub actif, retiré au départ du dernier client."""
+    import asyncio
+
+    from clipper.web import app as web_app
+
+    old, new = _sse_config(tmp_path), _sse_config(tmp_path)
+    assert old is not new
+
+    async def _run() -> int:
+        a, b = web_app._event_stream(old).__aiter__(), web_app._event_stream(new).__aiter__()
+        ta, tb = asyncio.create_task(a.__anext__()), asyncio.create_task(b.__anext__())
+        await asyncio.sleep(0.2)
+        count = len(web_app._SSE_HUBS)
+        ta.cancel()
+        tb.cancel()
+        await asyncio.gather(ta, tb, return_exceptions=True)
+        await a.aclose()
+        await b.aclose()
+        assert web_app._SSE_HUBS == {}
+        return count
+
+    assert asyncio.run(_run()) == 1

@@ -91,11 +91,46 @@ def heartbeat_path(config: Config) -> Path:
     return _queue_path(config).with_name(HEARTBEAT_FILE)
 
 
+REFUSED_FILE = "worker-refused.json"
+
+
+def refused_path(config: Config) -> Path:
+    return _queue_path(config).with_name(REFUSED_FILE)
+
+
+def note_refused(config: Config, exit_code: int) -> None:
+    """``serve`` : son worker enfant est sorti en erreur (typiquement refusé car un orphelin tourne encore sur la
+    file). Marqueur lu par ``read_heartbeat`` pour que l'interface le dise, jamais un ``serve`` muet."""
+    path = refused_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"at": datetime.now(timezone.utc).isoformat(), "exit_code": exit_code}),
+                    encoding="utf-8")
+
+
+def watch_spawned(proc: Any, config: Config) -> threading.Thread:
+    """Fil de ``serve`` : attend le worker enfant ; une sortie non nulle laisse le marqueur ``note_refused``.
+    Une sortie normale (arrêt de ``serve``) n'écrit rien."""
+    def _watch() -> None:
+        try:
+            code = proc.wait()
+            if code:
+                note_refused(config, int(code))
+                log.error("le worker lancé par serve est sorti (code %s) : voir son message ci-dessus", code)
+        except Exception:  # noqa: BLE001 - le fil de surveillance ne doit jamais tuer serve
+            log.exception("surveillance du worker enfant impossible")
+
+    thread = threading.Thread(target=_watch, name="worker-watch", daemon=True)
+    thread.start()
+    return thread
+
+
 def read_heartbeat(config: Config, now: datetime | None = None) -> dict[str, Any]:
     """État du worker d'après son battement : ``active`` (battement récent, pid
-    vivant), ``stale`` (battement périmé : plus de trois intervalles) ou
-    ``stopped`` (aucun battement, ou pid mort). Toujours la commande pour le
-    lancer. Un fichier illisible lève ``WorkerError`` : jamais un état inventé."""
+    vivant), ``stale`` (battement périmé : plus de trois intervalles),
+    ``orphan`` (un worker bat mais le worker lancé par ``serve`` a été refusé : il
+    garde son ancienne config) ou ``stopped`` (aucun battement, ou pid mort).
+    Toujours la commande pour le lancer. Un fichier illisible lève
+    ``WorkerError`` : jamais un état inventé."""
     section = config.section("worker")
     path = heartbeat_path(config)
     out: dict[str, Any] = {"command": WORKER_COMMAND, "pid": None, "at": None, "age_s": None}
@@ -115,6 +150,11 @@ def read_heartbeat(config: Config, now: datetime | None = None) -> dict[str, Any
         return {**out, "state": "stopped", "reason": f"le processus {pid} du worker n'existe plus"}
     if age_s > float(section["heartbeat_interval_s"]) * _STALE_AFTER_BEATS:
         return {**out, "state": "stale", "reason": f"battement périmé : dernier il y a {int(age_s)} s"}
+    if refused_path(config).is_file():
+        return {**out, "state": "orphan", "reason": (
+            f"le worker lancé par « clipper serve » a été refusé : le worker {pid} (ancienne config) tourne encore "
+            "sur cette file. Arrête-le (il disparaît avec « clipper serve » après un arrêt propre, sinon tue "
+            f"le processus {pid}) puis relance « clipper serve »")}
     return {**out, "state": "active", "reason": None}
 
 
@@ -241,7 +281,7 @@ def enqueue(
                 raise WorkerError(f"deja en file d'attente : {video_id} ({action})")
         entries.append(entry)
         _write_queue(path, entries)
-    if action == "run":
+    if action == "run" and not resume:  # une reprise n'est pas une nouvelle video : pas de yt-dlp a chaque retry_at
         _start_thumbnail_fetch(url, config)
     return entry
 
@@ -760,6 +800,7 @@ class Worker:
         file, publications interrompues, migration des anciens styles. Jamais dans le constructeur : un autre
         processus qui construirait un Worker passerait en echec la publication que le worker pilote."""
         self._refuse_second_instance()
+        refused_path(self.config).unlink(missing_ok=True)  # ce worker prend la place : le refus précédent est levé
         self._beat(force=True)
         self._recover_orphans()
         self._recover_prefetch()
