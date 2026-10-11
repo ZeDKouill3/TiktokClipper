@@ -137,11 +137,11 @@ def test_the_calendar_zone_carries_both_the_grid_and_the_agenda_for_the_css_to_c
 
 
 def test_agenda_replaces_the_calendar_grid_under_900_px_in_v3_css():
-    css = _static("v3.css")
-    assert re.search(r"\.v3 \.agenda\s*\{[^}]*display:\s*none", css)
-    media = css[css.index("@media (max-width: 900px)", css.index(".v3 .agenda")):]
+    css = _static("console.css")
+    assert re.search(r"\.agenda\s*\{[^}]*display:\s*none", css)
+    media = css[css.index("@media (max-width: 900px)", css.index(".agenda")):]
     media = media[:media.index("\n}\n")]
-    assert re.search(r"\.v3 \.cal-wrap\s*\{[^}]*display:\s*none", media) and re.search(r"\.v3 \.agenda\s*\{[^}]*display:\s*block", media)
+    assert re.search(r"\.cal-wrap\s*\{[^}]*display:\s*none", media) and re.search(r"\.agenda\s*\{[^}]*display:\s*block", media)
 
 
 # --- Rail « À faire » ----------------------------------------------------------------------------------------
@@ -205,12 +205,12 @@ def test_failed_posts_are_listed_apart_in_the_rail_with_capture_and_retry():
 
 # --- Source : coquille v3, rapprochement, dialogues natifs ----------------------------------------------------
 
-def test_publish_screen_is_marked_v3_and_paints_with_morph_not_inner_html():
+def test_publish_screen_paints_with_morph_not_inner_html():
     js = _static("screens", "publish.js")
     view = js[js.index("function pubView("):js.index("/* ---------- Plan de demain")]
     assert "morph(body, html)" in view and "innerHTML" not in view
     render = js[js.index("Screens.publish = {"):]
-    assert 'classList.add("v3")' in render
+    assert 'classList.add("v3")' not in render
 
 
 def test_new_publication_and_series_use_the_native_dialog_never_the_legacy_panel():
@@ -224,15 +224,12 @@ def test_new_publication_and_series_use_the_native_dialog_never_the_legacy_panel
     assert "pubDialog(" in detail                                   # la fiche d'un post est aussi un dialogue natif
 
 
-def test_publish_blocks_left_style_css_for_v3_css():
-    css = _static("style.css")
-    assert "/* >>> publish */" not in css
-    for selector in (".cal", ".cal-h", ".cal-c", ".post", ".cal-day", ".pub-grid", ".pub-toolbar", ".rep-plan", ".pubf-clips"):
-        assert not re.search(rf"^{re.escape(selector)}\b", css, re.M), selector
-    v3 = _static("v3.css")
-    for selector in (".v3 .cal", ".v3 .cal-post", ".v3 .cal-day", ".v3 .agenda", ".v3 .pub-rail", ".v3 .pubf-clips"):
-        assert selector in v3, selector
+def test_publish_rules_live_in_console_css():
+    assert not (STATIC / "style.css").exists()
+    css = _static("console.css")
+    for selector in (".cal", ".cal-post", ".cal-day", ".agenda", ".pub-rail", ".pubf-clips"):
+        assert selector in css, selector
 
 
 def test_publish_v3_css_never_links_an_external_resource():
-    assert not re.search(r"(?i)https?://|@import|url\(", _static("v3.css"))
+    assert not re.search(r"(?i)https?://|@import|url\(", _static("console.css"))

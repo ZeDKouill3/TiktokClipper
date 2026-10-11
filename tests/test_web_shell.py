@@ -1,4 +1,4 @@
-"""Coquille v3 de la console (TASK-0b013cbf1bdd, ADR-a308, SPEC-7715).
+"""Coquille de la console (TASK-0b013cbf1bdd, ADR-a308, SPEC-7715 ; clôture TASK-60bddde86152).
 
 Aucun test ne touche le réseau ni un navigateur : les fichiers statiques sont lus tels quels,
 la logique pure (thème, toasts, palette, raccourcis, morph) tourne sous node quand il est là.
@@ -21,25 +21,6 @@ NODE = pytest.mark.skipif(shutil.which("node") is None, reason="node absent du P
 
 SCREENS = ("dashboard", "veille", "videos", "review", "clips", "clip", "channels", "publish", "stats",
            "accounts", "settings", "journal")
-# Écrans qui ont (encore) un bloc dans style.css : chaque tâche d'écran retire le sien entre ses délimiteurs.
-# Écrans migrés (U3 dashboard, U5 clips/clip) : leurs règles vivent dans v3.css, plus de bloc legacy.
-# Une tâche d'écran ajoute son nom ici (une ligne par écran, pour limiter les conflits de fusion).
-MIGRATED = (
-    "dashboard",
-    "clips",
-    "clip",
-    "publish",
-    "videos",
-    "review",
-    "channels",
-    "stats",
-    "journal",
-    "accounts",
-    "settings",
-)
-STYLE_BLOCKS = tuple(n for n in ("dashboard", "videos", "review", "clips", "clip", "channels", "publish", "stats", "settings",
-                                 "journal", "shared", "shell") if n not in MIGRATED)
-
 
 def _static(*parts: str) -> str:
     return (STATIC / Path(*parts)).read_text(encoding="utf-8")
@@ -98,7 +79,7 @@ def test_index_keeps_nav_tabbar_screen_sections_and_script_order():
     assert re.search(r'<nav class="nav"[^>]*id="nav"', page)
     assert re.search(r'<nav class="tabbar[^"]*"[^>]*id="tabbar"', page)
     for screen in SCREENS:
-        assert f'<section class="screen v3" id="screen-{screen}"' in page, screen  # tous migrés (U14) : même en-tête partout
+        assert f'<section class="screen" id="screen-{screen}"' in page, screen
     order = ["/static/vendor/idiomorph.min.js", "/static/vendor/basecoat.all.min.js", "/static/icons.js",
              "/static/ui.js", "/static/screens.js", "/static/screens/jury-radar.js", "/static/screens/videos.js",
              "/static/screens/dashboard.js", "/static/screens/review.js", "/static/screens/clips.js",
@@ -109,14 +90,13 @@ def test_index_keeps_nav_tabbar_screen_sections_and_script_order():
              "/static/screens/journal.js", "/static/app.js"]
     positions = [page.index(f'src="{src}"') for src in order]
     assert positions == sorted(positions)
-    # feuilles : couche « legacy » déclarée avant Basecoat (ses @layer la dominent alors), style.css et les feuilles
-    # d'écran importées dans cette couche, v3.css hors couche en dernier
-    sheets = ["<style>@layer properties, theme, base, legacy, components, utilities;</style>", 'href="/static/vendor/basecoat.cdn.min.css"',
-              '@import url("/static/style.css") layer(legacy);',
-              '@import url("/static/screens/veille.css") layer(legacy);', 'href="/static/v3.css"']
+    # feuilles : couche « socle » déclarée avant Basecoat (ses @layer la dominent alors), feuille d'écran importée
+    # dans cette couche, console.css hors couche en dernier ; plus de style.css
+    sheets = ["<style>@layer properties, theme, base, socle, components, utilities;</style>", 'href="/static/vendor/basecoat.cdn.min.css"',
+              '@import url("/static/screens/veille.css") layer(socle);', 'href="/static/console.css"']
     offsets = [page.index(needle) for needle in sheets]
     assert offsets == sorted(offsets)
-    assert 'href="/static/style.css"' not in page  # jamais chargée deux fois (lien + import)
+    assert "style.css" not in page
 
 
 class _Tree(HTMLParser):
@@ -140,33 +120,27 @@ class _Tree(HTMLParser):
                 break
 
 
-def test_shell_pieces_carry_v3_but_never_an_ancestor_of_a_screen():
-    tree = _Tree()
-    tree.feed(_static("index.html"))
-    by_tag = {}
-    for tag, cls, ancestors in tree.found:
-        by_tag.setdefault((tag, cls), ancestors)
-    v3 = lambda cls: "v3" in cls.split()
-    assert any(tag == "aside" and v3(cls) for tag, cls, _ in tree.found), "barre latérale sans v3"
-    assert any(tag == "header" and "topbar" in cls and v3(cls) for tag, cls, _ in tree.found)
-    assert any(tag == "nav" and "tabbar" in cls and v3(cls) for tag, cls, _ in tree.found)
-    for tag, cls, ancestors in tree.found:
-        if tag == "section" and "screen" in cls.split():
-            assert v3(cls), "écran migré sans v3 : en-tête et composants hors gabarit"
-            assert not any(v3(a) for a in ancestors), f"un ancêtre de #{cls} porte v3 : Basecoat restylerait l'écran"
-    # dialogues, toaster et tiroir : sous un conteneur .v3 (un <dialog class="v3"> ne reçoit pas .v3 .dialog)
-    for tag, cls, ancestors in tree.found:
-        if tag == "dialog" or "toaster" in cls.split() or "drawer-panel" in cls.split():
-            assert any(v3(a) for a in ancestors), f"<{tag} class={cls!r}> sans ancêtre .v3"
-    assert any(tag == "aside" and "sidebar" in cls.split() for tag, cls, _ in tree.found) is False, \
-        "basecoat.all.min.js attache son composant à .sidebar (inert sous 768 px) : la barre v3 s'appelle autrement"
-
-
-def test_index_links_the_vendored_files_and_the_v3_sheet_without_external_resource():
+def test_no_element_carries_the_migration_prefix_and_the_layers_live_in_one_container():
     page = _static("index.html")
-    for href in ("/static/vendor/basecoat.cdn.min.css", "/static/v3.css"):
+    tree = _Tree()
+    tree.feed(page)
+    assert not any("v3" in cls.split() for _, cls, _ in tree.found), "le préfixe de migration a disparu"
+    assert any(tag == "aside" and "sidenav" in cls.split() for tag, cls, _ in tree.found)
+    assert any(tag == "header" and "topbar" in cls.split() for tag, cls, _ in tree.found)
+    assert any(tag == "nav" and "tabbar" in cls.split() for tag, cls, _ in tree.found)
+    # dialogues, toaster et tiroir : dans le conteneur #layers
+    layers = page.index('<div id="layers">')
+    for needle in ('id="toaster"', 'id="drawer"', 'id="palette"'):
+        assert page.index(needle) > layers, needle
+    assert any(tag == "aside" and "sidebar" in cls.split() for tag, cls, _ in tree.found) is False, \
+        "basecoat.all.min.js attache son composant à .sidebar (inert sous 768 px) : la barre s'appelle autrement"
+
+
+def test_index_links_the_vendored_files_and_the_console_sheet_without_external_resource():
+    page = _static("index.html")
+    for href in ("/static/vendor/basecoat.cdn.min.css", "/static/console.css"):
         assert f'href="{href}"' in page
-    css = _static("v3.css")
+    css = _static("console.css")
     assert not re.search(r"(?i)https?://|@import|url\(\s*['\"]?//", css)
     assert 'id="toaster"' in page and 'id="palette"' in page and 'id="shortcuts"' in page and 'id="drawer"' in page
     assert 'id="btn-palette"' in page and 'id="btn-rail"' in page
@@ -195,21 +169,22 @@ def test_inline_head_script_applies_light_theme_when_storage_is_empty_and_never_
     for store, theme, dark in (("{}", "light", False), ('{"clipper-theme": "dark"}', "dark", True),
                                ('{"clipper-theme": "bizarre"}', "light", False)):
         out = _node(f"const STORE = {store};\n" + stub + inline
-                    + "\nconsole.log(JSON.stringify([document.documentElement.dataset.theme, classes.has('dark'), document.documentElement.dataset.nav || null]));")
-        assert json.loads(out) == [theme, dark, None], store
+                    + "\nconsole.log(JSON.stringify([document.documentElement.dataset.theme || null, classes.has('dark'), document.documentElement.dataset.nav || null]));")
+        assert json.loads(out) == [None, dark, None], store  # le thème est la classe « dark », plus d'attribut data-theme
     out = _node('const STORE = {"clipper-nav": "rail"};\n' + stub + inline
                 + "\nconsole.log(JSON.stringify(document.documentElement.dataset.nav));")
     assert json.loads(out) == "rail"
 
 
-def test_apply_theme_sets_both_the_dark_class_and_the_legacy_data_theme():
+def test_apply_theme_sets_the_dark_class_and_no_data_theme_attribute():
     app = _static("app.js")
     body = _js_def(app, "applyTheme")
-    assert 'classList.toggle("dark"' in body and "dataset.theme = theme" in body
+    assert 'classList.toggle("dark"' in body and "dataset.theme" not in app
     assert "prefers-color-scheme" not in app and "followSystemTheme" not in app
     assert 'THEME_KEY = "clipper-theme"' in app
-    assert '<html lang="fr" data-theme="light">' in _static("index.html")
-    assert 'name="theme-color" content="#f6f4ef"' in _static("index.html")
+    page = _static("index.html")
+    assert '<html lang="fr">' in page and "data-theme" not in page
+    assert 'name="theme-color" content="#f6f4ef"' in page
 
 
 # --- toasts Basecoat, API toast() conservée -----------------------------------------------------------------
@@ -267,7 +242,7 @@ def test_morph_refuses_to_run_without_idiomorph_and_morphs_inner_html_with_it():
 
 # --- dialogues natifs : confirmDialog et openDialog ---------------------------------------------------------------
 
-def test_confirm_dialog_is_a_native_dialog_opened_in_the_v3_layer():
+def test_confirm_dialog_is_a_native_dialog_opened_in_the_layers_container():
     ui = _static("ui.js")
     confirm = _js_def(ui, "confirmDialog")
     assert "openDialog(" in confirm and "openPanel(" not in confirm
@@ -277,7 +252,7 @@ def test_confirm_dialog_is_a_native_dialog_opened_in_the_v3_layer():
     assert 'className = "dialog"' in opener
     assert 'addEventListener("close"' in opener and "remove()" in opener      # retiré du DOM après fermeture
     assert "e.target === dlg" in opener                                        # clic sur le fond = fermer
-    # l'ancien openPanel reste pour les écrans non migrés et échappe au composant drawer de Basecoat
+    # openPanel (« Nouveau style », alerte réseau) reste et échappe au composant drawer de Basecoat
     legacy = _js_def(ui, "openPanel")
     assert 'setAttribute("role", "dialog")' in legacy and "drawerInitialized" in legacy
 
@@ -360,82 +335,56 @@ def test_palette_is_wired_to_ctrl_k_the_topbar_button_and_renders_by_morph():
     assert "Raccourcis clavier" in page and "Ctrl" in page and 'id="palette-q"' in page
 
 
-# --- v3.css : jetons scopés, mobile, rail ------------------------------------------------------------------------
+# --- console.css : jetons, mobile, rail ---------------------------------------------------------------------------
 
-def test_v3_css_has_touch_targets_mobile_breakpoint_rail_and_scoped_tokens():
-    css = _static("v3.css")
+def test_console_css_has_touch_targets_mobile_breakpoint_rail_and_root_tokens():
+    css = _static("console.css")
     assert "44px" in css and "@media (max-width: 900px)" in css
     assert 'html[data-nav="rail"]' in css
     assert "prefers-reduced-motion" in css
-    # jetons v3 posés sur .v3, jamais sur :root (les :root de v3.css ne portent que les jetons legacy restaurés,
-    # vérifiés par test_basecoat_unlayered_tokens_that_collide_with_style_css_are_restored_by_v3_css)
-    root_blocks = re.findall(r"(?m)^:root[^{]*\{([^}]*)\}", css)
-    for block in root_blocks:
-        for name in ("--background:", "--foreground:", "--primary:", "--sidebar:", "--border:", "--card:"):
-            assert name not in block, name
-    assert re.search(r"(?m)^\.v3\s*\{[^}]*--background:\s*#f6f4ef", css)
-    assert re.search(r"(?m)^\.dark \.v3\s*\{[^}]*--background:\s*#121210", css)
+    # jetons : clair sur :root, sombre sous la classe .dark de <html>
+    assert re.search(r"(?m)^:root\s*\{[^}]*--background:\s*#f6f4ef", css)
+    assert re.search(r"(?m)^\.dark\s*\{[^}]*--background:\s*#121210", css)
     assert "--color-background: var(--background)" in css   # Basecoat lit --color-*
     assert "--primary: #c25f00" in css and "--primary: #ff8a00" in css
     stripped = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
     assert stripped.count("{") == stripped.count("}")
-    # objectif ADR-a308 : la coquille (tout ce qui precede le premier bloc d'ecran) tient en 40 Ko ; le fichier
-    # entier, ecrans migres compris, ne depasse jamais le style.css v2 (124 162 octets) qu'il remplace a terme.
-    shell = re.split(r"/\* >>> (?!legacy-tokens)", css, maxsplit=1)[0]
-    assert len(shell.encode("utf-8")) <= 40 * 1024
-    assert len(css.encode("utf-8")) <= 124_162
+    # budgets : la coquille (tout ce qui précède le premier bloc d'écran, socle compris) tient en 80 Ko, le fichier en 160 Ko
+    shell = re.split(r"/\* >>> ", css, maxsplit=1)[0]
+    assert len(shell.encode("utf-8")) <= 80 * 1024
+    assert len(css.encode("utf-8")) <= 160 * 1024
 
 
-def test_v3_css_styles_the_dialog_and_its_backdrop_under_the_v3_container():
-    css = _static("v3.css")
-    assert ".v3 .dialog > :is(div, form) {" in css
-    assert ".v3 .dialog::backdrop" in css
-    assert ".v3 .toaster" in css and ".drawer-panel" in css and ".palette" in css
+def test_console_css_styles_the_dialog_and_its_backdrop():
+    css = _static("console.css")
+    assert "\n.dialog > :is(div, form) {" in css
+    assert "\n.dialog::backdrop" in css
+    assert ".toaster" in css and ".drawer-panel" in css and ".palette" in css
 
 
-# --- style.css : délimiteurs par écran, coquille retirée ----------------------------------------------------------
+# --- style.css : disparu, ses derniers usages vivent dans le socle de console.css ------------------------------------
 
-def test_style_css_has_balanced_delimiters_for_every_screen_and_lost_its_shell_blocks():
-    css = _static("style.css")
-    opens = re.findall(r"/\* >>> ([a-z-]+) \*/", css)
-    closes = re.findall(r"/\* <<< ([a-z-]+) \*/", css)
-    assert opens and sorted(opens) == sorted(closes)
-    assert set(opens) <= set(STYLE_BLOCKS), set(opens) - set(STYLE_BLOCKS)
-    for name in ("dashboard", "videos", "review", "clips", "clip", "channels", "publish", "stats", "settings", "journal"):
-        if name in MIGRATED:
-            assert name not in opens, f"le bloc {name} est passé dans v3.css"
-        else:
-            assert name in opens, f"aucun bloc /* >>> {name} */"
-    # un délimiteur ouvert est fermé avant le suivant du même nom, et les blocs ne se chevauchent pas
-    depth = None
-    for kind, name in re.findall(r"/\* (>>>|<<<) ([a-z-]+) \*/", css):
-        if kind == ">>>":
-            assert depth is None, f"bloc {depth} encore ouvert quand {name} s'ouvre"
-            depth = name
-        else:
-            assert depth == name, f"fermeture de {name} sans ouverture"
-            depth = None
-    assert depth is None
-    for gone in ("\n.sidebar {", "\n.toasts {", "\n.toast {", "\n.tabbar {", "\n.topbar {", "\n.net-pill {",
-                 "\n.conn-banner {", "\n.nav a {", "\n.brand {", "\n.machine {", "\n.palette {", "\n.popover {"):
-        assert gone not in css, f"{gone.strip()} appartient à la coquille v3 (v3.css)"
-    assert "--topbar: 52px" in css  # hauteur de la barre v3, pour les offsets sticky des écrans
+def test_style_css_is_gone_and_nothing_links_it():
+    assert not (STATIC / "style.css").exists()
+    for path in STATIC.rglob("*"):
+        if path.suffix in (".html", ".js", ".css") and "vendor" not in path.parts:
+            assert "style.css" not in path.read_text(encoding="utf-8"), path.name
+    assert not (STATIC / "grain.svg").exists()  # le grain de body n'existe plus
 
 
-def test_screen_content_rules_are_untouched_in_style_css():
-    """Les écrans non migrés ne changent pas d'un pixel : leurs blocs restent, avec leurs valeurs."""
-    css = _static("style.css")
-    for needle in (".view { flex: 1; padding: 32px; max-width: 1480px;", ".panel { background: var(--surface);",
-                   ".btn {\n  display: inline-flex;", ".modal {\n  position: fixed; z-index: 61;",
-                   ".overlay { position: fixed; inset: 0; z-index: 60;",  # .drawer legacy retiré par U5 : seul Clips l'ouvrait
-                   ".skeleton { border-radius: var(--r);", ".empty { padding: 48px 24px;",
+def test_console_css_has_no_migration_leftover_and_keeps_the_socle_rules_still_used():
+    css = _static("console.css")
+    assert not re.search(r"\bv3\b|data-theme|legacy-tokens", css)
+    assert "--topbar" not in css  # la hauteur de la barre est --top-h
+    for needle in (".view { flex: 1; padding: 32px; max-width: 1480px;", ".panel { background: var(--card);",
+                   ".modal { position: fixed; z-index: 61;", ".overlay { position: fixed; inset: 0; z-index: 60;",
+                   ".skeleton { border-radius: var(--radius);", ".empty { padding: 48px 24px;",
                    ".clip { display: flex; flex-direction: column; gap: 8px; cursor: pointer; }",  # carte de la Veille
-                   ".hashtags { display: flex; flex-wrap: wrap; gap: 6px; }",  # Publication
-                   ".token-view {", ".screen[hidden] { display: none; }", ':root[data-theme="light"] {'):
+                   ".token-view {", ".screen[hidden] { display: none; }"):
         assert needle in css, needle
 
 
-# --- garde : les écrans non migrés ne changent pas d'un pixel (cascade Basecoat / legacy) --------------------------
+# --- cascade : Basecoat en couches, socle entre base et components -------------------------------------------------
 
 def _css_top_level(css: str):
     """Règles de premier niveau d'une feuille : liste de (prélude, corps) ; les @layer gardent leur corps entier."""
@@ -470,61 +419,46 @@ def _decls(body: str) -> dict:
     return {k.strip(): v.strip() for k, v in (d.split(":", 1) for d in body.split(";") if ":" in d)}
 
 
-def test_legacy_layer_sits_between_basecoat_base_and_components():
+def test_socle_layer_sits_between_basecoat_base_and_components():
     """Basecoat (Tailwind v4) est en couches : ses jetons :root/.dark hors couche, theme/base/components en @layer.
-    style.css doit battre theme/base (ses --font-mono, --ease-out portent les mêmes noms) et perdre contre
-    components (`.v3 .btn` dans la coquille) : la couche legacy est déclarée entre les deux, avant toute feuille."""
+    Le socle (restes des anciennes feuilles) doit battre theme/base et perdre contre components : la couche « socle »
+    est déclarée entre les deux, avant toute feuille."""
     page = _static("index.html")
     vendor = _static("vendor", "basecoat.cdn.min.css")
     layers = [p.split(None, 1)[1] for p, body in _css_top_level(vendor) if p.startswith("@layer") and body is not None]
     assert "theme" in layers and "base" in layers and "components" in layers
     stmt = re.search(r"<style>@layer ([a-z, ]+);</style>", page).group(1)
     order = [x.strip() for x in stmt.split(",")]
-    assert order.index("base") < order.index("legacy") < order.index("components")
+    assert order.index("base") < order.index("socle") < order.index("components")
     for name in layers:
         assert name in order, f"couche Basecoat {name} absente de la déclaration d'ordre"
     assert page.index("<style>@layer ") < page.index('href="/static/vendor/basecoat.cdn.min.css"')
-    for sheet in ("/static/style.css", "/static/screens/veille.css"):
-        assert f'@import url("{sheet}") layer(legacy);' in page, sheet
+    assert '@import url("/static/screens/veille.css") layer(socle);' in page
+    assert "@layer socle {" in _static("console.css")
 
 
-def test_basecoat_unlayered_tokens_that_collide_with_style_css_are_restored_by_v3_css():
-    """Les :root / .dark de Basecoat sont hors couche, donc au-dessus de la couche legacy : chaque nom qu'ils
-    partagent avec les :root de style.css est redéclaré hors couche dans v3.css, avec la valeur de style.css."""
+def test_basecoat_unlayered_tokens_are_redeclared_by_console_css_for_both_themes():
+    """Les :root / .dark de Basecoat sont hors couche : console.css, chargée après, redéclare les noms qu'ils portent
+    et que nos jetons partagent (--accent, --muted...), clair sur :root, sombre sous .dark."""
     vendor = _static("vendor", "basecoat.cdn.min.css")
-    basecoat = {}
+    basecoat = set()
     for prelude, body in _css_top_level(vendor):
         if prelude in (":root", ".dark") and body is not None:
-            basecoat.setdefault(prelude, {}).update(_decls(body))
-    assert basecoat[":root"] and basecoat[".dark"]
-    legacy = {}
-    for prelude, body in _css_top_level(re.sub(r"/\*.*?\*/", "", _static("style.css"), flags=re.S)):
-        if prelude.startswith(":root") and body is not None:
-            legacy[prelude] = _decls(body)
-    dark, light = legacy[':root, :root[data-theme="dark"]'], legacy[':root[data-theme="light"]']
-    colliding = sorted((set(basecoat[":root"]) | set(basecoat[".dark"])) & (set(dark) | set(light)))
-    assert colliding == ["--accent", "--muted", "color-scheme"]  # si la liste bouge, v3.css doit suivre
-    v3 = {prelude: _decls(body) for prelude, body in _css_top_level(re.sub(r"/\*.*?\*/", "", _static("v3.css"), flags=re.S))
-          if prelude.startswith(":root") and body}
-    restored_dark, restored_light = v3[':root, :root[data-theme="dark"]'], v3[':root[data-theme="light"]']
-    for name in colliding:
-        assert restored_dark[name] == dark[name], name
-        assert restored_light[name] == light[name], name
-    # et rien d'autre sur :root dans v3.css : les jetons v3 vivent sur .v3
-    assert set(restored_dark) == set(colliding) and set(restored_light) == set(colliding)
-    assert "/* >>> legacy-tokens */" in _static("v3.css") and "/* <<< legacy-tokens */" in _static("v3.css")
+            basecoat |= set(_decls(body))
+    ours = {}
+    for prelude, body in _css_top_level(re.sub(r"/\*.*?\*/", "", _static("console.css"), flags=re.S)):
+        if prelude in (":root", ".dark") and body:
+            ours.setdefault(prelude, {}).update(_decls(body))
+    colliding = {"--accent", "--muted", "--background", "--foreground", "--primary", "--border", "--card"}
+    assert colliding <= basecoat, colliding - basecoat  # si Basecoat renomme ses jetons, ce test le dira
+    for name in colliding | {"color-scheme"}:
+        assert name in ours[":root"] and name in ours[".dark"], name
+    assert ours[":root"]["color-scheme"] == "light" and ours[".dark"]["color-scheme"] == "dark"
+    assert "scroll-behavior: auto" in _static("console.css")  # Basecoat pose « smooth » : les ancres restent immédiates
 
 
-def test_style_css_first_rule_is_the_legacy_token_block():
-    # Un commentaire d'en-tête mal fermé avait avalé ce bloc : la page perdait --font, --r, --topbar...
-    rules = [p for p, body in _css_top_level(re.sub(r"/\*.*?\*/", "", _static("style.css"), flags=re.S)) if body is not None]
-    assert rules[0] == ":root"
-    assert rules[1] == ':root, :root[data-theme="dark"]' and rules[2] == ':root[data-theme="light"]'
-
-
-def test_sidebar_keeps_the_v2_width_while_legacy_screens_remain():
-    css = _static("v3.css")
-    assert "var(--nav-w, 236px)" in css  # largeur v2 : le contenu des écrans non migrés ne bouge pas
+def test_sidebar_is_232_px_wide():
+    assert "var(--nav-w, 232px)" in _static("console.css")
 
 
 # --- heure de Paris --------------------------------------------------------------------------------------------

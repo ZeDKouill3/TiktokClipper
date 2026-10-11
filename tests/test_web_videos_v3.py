@@ -303,7 +303,7 @@ def test_empty_list_offers_the_add_button_that_opens_the_global_dialog():
 
 # --- SPEC-7715 T6 : aucun défilement horizontal de la page à 390 px --------------------------------------------------
 
-V3_CSS = (STATIC / "v3.css").read_text(encoding="utf-8")
+V3_CSS = (STATIC / "console.css").read_text(encoding="utf-8")
 
 
 def _rule(selector: str) -> str:
@@ -315,8 +315,8 @@ def _rule(selector: str) -> str:
 def test_video_sheet_wide_parts_scroll_in_their_own_box_or_wrap_on_a_phone():
     # le bloc mobile des vidéos est le dernier avant le bloc « settings » (U12 ajoute le sien en fin de fichier)
     mobile = V3_CSS[V3_CSS.rindex("@media (max-width: 900px) {", 0, V3_CSS.rindex("/* >>> settings */")):]
-    assert re.search(r"\.v3 \.stepper \{[^}]*overflow-x: auto", mobile)  # 13 étapes : leur propre conteneur défile
-    assert "overflow-x: auto" in _rule(".v3 .strip")
-    assert "overflow-y: auto" in _rule(".v3 .vlog")
-    assert "flex-wrap: wrap" in _rule(".v3 .vstep-panel .section-head, .v3 .vcard .section-head")  # « Relancer depuis cette étape »
-    assert "text-overflow: ellipsis" in _rule(".v3 .vsource")  # l'adresse source ne pousse pas la page
+    assert re.search(r"\.stepper \{[^}]*overflow-x: auto", mobile)  # 13 étapes : leur propre conteneur défile
+    assert "overflow-x: auto" in _rule(".strip")
+    assert "overflow-y: auto" in _rule(".vlog")
+    assert "flex-wrap: wrap" in _rule(".vstep-panel .section-head, .vcard .section-head")  # « Relancer depuis cette étape »
+    assert "text-overflow: ellipsis" in _rule(".vsource")  # l'adresse source ne pousse pas la page

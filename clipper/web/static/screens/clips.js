@@ -1,4 +1,4 @@
-/* Ecran « Clips » v3 (SPEC-7715 E4 / E12 / T10 / T11, ADR-a308, SPEC-74e9 §4.5). Lit GET /api/clips ; la galerie
+/* Ecran « Clips » (SPEC-7715 E4 / E12 / T10 / T11, ADR-a308, SPEC-74e9 §4.5). Lit GET /api/clips ; la galerie
    9:16 par statut ouvre la fiche d'un clip dans le tiroir de la coquille (drawer, ui.js) sans perdre la liste,
    l'adresse suit (#/clips/<video>/<clip>). Rendu par rapprochement du DOM (morph), jamais innerHTML.
    Aucune logique video ici : le texte passe par PATCH /api/clips/.../ (publish.edit_caption), le titre d'ecran
@@ -601,8 +601,6 @@ document.addEventListener("keydown", clipsOnKey);
 
 Screens.clips = {
   render(body) {
-    const section = body.closest(".screen");
-    if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
     const target = clipsHashTarget();
     const wanted = target.clip && clipsUi.hashVideo === null ? target.video : clipsHashVideo();
     // l'adresse a changé : le filtre vidéo la suit (lien depuis une fiche vidéo : tous les statuts) ; un clip dans

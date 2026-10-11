@@ -1,8 +1,11 @@
 """Vendoring de Basecoat et Idiomorph dans clipper/web/static/vendor/ (ADR-a308).
 
-    python tools/vendor_basecoat.py          télécharge les tarballs npm épinglés,
-                                             préfixe le CSS en `.v3`, écrit VERSIONS
-    python tools/vendor_basecoat.py --check  vérifie les sha256 de VERSIONS, hors réseau
+    python tools/vendor_basecoat.py             télécharge les tarballs npm épinglés, écrit le CSS de
+                                                Basecoat tel quel (sélecteurs globaux) et VERSIONS
+    python tools/vendor_basecoat.py --no-prefix idem, explicite : c'est l'état d'arrivée de la migration
+                                                (clôture U14), le préfixe `.v3` a disparu
+    python tools/vendor_basecoat.py --prefix    ancien mode de migration : préfixe le CSS en `.v3`
+    python tools/vendor_basecoat.py --check     vérifie les sha256 de VERSIONS, hors réseau
 
 Le script ne tourne jamais à l'installation ni au lancement : son résultat est commité.
 Une erreur d'intégrité ou un at-rule inconnu lève une exception (ADR-ad2e).
@@ -255,13 +258,13 @@ def _fetch(pin: dict) -> dict[str, bytes]:
     return out
 
 
-def build(directory: Path) -> None:
+def build(directory: Path, prefix: bool = False) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     lines = ["# Vendoring par tools/vendor_basecoat.py (ADR-a308). Ne pas éditer à la main."]
     for pin in PINS:
         lines.append(f"{pin['name']} {pin['version']} {pin['licence']}")
         for dest, content in _fetch(pin).items():
-            if dest == "basecoat.cdn.min.css":
+            if prefix and dest == "basecoat.cdn.min.css":
                 content = prefix_css(content.decode("utf-8")).encode("utf-8")
             (directory / dest).write_bytes(content)
             lines.append(f"sha256 {dest} {_sha256(directory / dest)}")
@@ -271,13 +274,17 @@ def build(directory: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--check", action="store_true", help="vérifie les sha256 de VERSIONS, sans réseau")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--no-prefix", dest="prefix", action="store_false", help="CSS de Basecoat sans préfixe (défaut)")
+    mode.add_argument("--prefix", dest="prefix", action="store_true", help="ancien mode de migration : sélecteurs préfixés `.v3`")
+    parser.set_defaults(prefix=False)
     args = parser.parse_args(argv)
     if args.check:
         problems = check(VENDOR)
         for problem in problems:
             print(problem, file=sys.stderr)
         return 1 if problems else 0
-    build(VENDOR)
+    build(VENDOR, prefix=args.prefix)
     return 0
 
 

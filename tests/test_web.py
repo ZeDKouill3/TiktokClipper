@@ -1170,7 +1170,7 @@ def test_index_has_a_mobile_tab_bar(tmp_path, isolated_cwd):
     tabbar = html[html.index('<nav class="tabbar'):html.index("</nav>", html.index('<nav class="tabbar'))]
     for screen in TAB_SCREENS:
         assert f'href="#/{screen}"' in tabbar, screen
-    css = served(tmp_path, "/static/v3.css")  # coquille v3 (ADR-a308) : la barre d'onglets vit dans v3.css
+    css = served(tmp_path, "/static/console.css")  # coquille v3 (ADR-a308) : la barre d'onglets vit dans v3.css
     assert ".tabbar" in css and "@media (max-width: 900px)" in css
     assert "44px" in css  # zones de toucher (T6)
 
@@ -1264,7 +1264,7 @@ def test_toasts_with_undo_and_confirm_modal(tmp_path, isolated_cwd):
     assert "function confirmDialog(" in js and "showModal()" in js and 'role", "dialog"' in js
     html = served(tmp_path, "/")
     assert 'id="toaster"' in html and 'id="overlay"' in html
-    assert ".toast" in served(tmp_path, "/static/v3.css") and ".modal" in served(tmp_path, "/static/style.css")
+    assert ".toast" in served(tmp_path, "/static/console.css") and ".modal" in served(tmp_path, "/static/console.css")
 
 
 def test_theme_is_light_by_default_with_remembered_toggle(tmp_path, isolated_cwd):
@@ -1275,9 +1275,9 @@ def test_theme_is_light_by_default_with_remembered_toggle(tmp_path, isolated_cwd
     assert 'id="btn-theme"' in html
     assert "prefers-color-scheme" not in html and "prefers-color-scheme" not in js
     assert "localStorage" in html and "localStorage" in js and "clipper-theme" in js
-    assert '<html lang="fr" data-theme="light">' in html and 'classList.toggle("dark"' in html
-    css = served(tmp_path, "/static/style.css")
-    assert ':root[data-theme="light"]' in css and ':root[data-theme="dark"]' in css  # ecrans non migres
+    assert '<html lang="fr">' in html and "data-theme" not in html and 'classList.toggle("dark"' in html
+    css = served(tmp_path, "/static/console.css")
+    assert "data-theme" not in css and "\n.dark {" in css  # le thème est la classe « dark » de <html>
 
 
 def test_token_page_sets_cookie_and_replays_on_401(tmp_path, isolated_cwd):
@@ -1319,7 +1319,7 @@ def test_no_external_resource_in_index_and_css(tmp_path, isolated_cwd):
     parser.feed(html)
     external = [u for u in parser.urls if re.match(r"(?i)(https?:)?//", u)]
     assert external == []
-    for name in ("style.css", "fonts.css"):
+    for name in ("console.css", "fonts.css"):
         css = served(tmp_path, f"/static/{name}")
         assert not re.search(r"(?i)https?://|@import|url\(\s*['\"]?//", css), name
     # les polices sont des fichiers locaux servis, sous licence libre citee
@@ -1405,15 +1405,17 @@ def test_visible_strings_are_french_and_no_real_names(tmp_path, isolated_cwd):
 def test_loading_skeletons_and_empty_states(tmp_path, isolated_cwd):
     html = served(tmp_path, "/")
     assert 'class="skeleton' in html
-    css = served(tmp_path, "/static/style.css")
+    css = served(tmp_path, "/static/console.css")
     assert ".skeleton" in css
     screens = served(tmp_path, "/static/screens.js")
     assert "Ajoute une vidéo" in screens and "Crée un style" in screens
 
 
 def test_static_assets_are_served(tmp_path, isolated_cwd):
-    for name in ("app.js", "ui.js", "icons.js", "screens.js", "style.css", "fonts.css", "logo.svg"):
+    for name in ("app.js", "ui.js", "icons.js", "screens.js", "console.css", "fonts.css", "logo.svg"):
         assert client(tmp_path).get(f"/static/{name}").status_code == 200, name
+    for gone in ("style.css", "v3.css", "grain.svg"):  # clôture de la migration : plus d'ancienne feuille
+        assert client(tmp_path).get(f"/static/{gone}").status_code == 404, gone
     assert not (STATIC / "data.js").exists()
 
 
@@ -1572,15 +1574,12 @@ def test_videos_screen_confirms_before_retry_and_cancel(tmp_path, isolated_cwd):
         assert "confirmDialog(" in before, route
 
 
-def test_videos_screen_css_lives_in_v3_css_and_left_style_css(tmp_path, isolated_cwd):
-    v3 = served(tmp_path, "/static/v3.css")
-    legacy = served(tmp_path, "/static/style.css")
-    assert "/* ---------- Videos (SPEC-7715 E2)" in v3 and ".v3 .stepper" in v3 and ".v3 .vlog" in v3
-    assert "/* ---------- Ecran Videos (TASK-157b) ---------- */" not in legacy and ">>> videos" not in legacy
-    assert ".vscreen" not in legacy and ".vjury" not in legacy and ".jr-retained" not in legacy
+def test_videos_screen_css_lives_in_console_css(tmp_path, isolated_cwd):
+    css = served(tmp_path, "/static/console.css")
+    assert "/* ---------- Videos (SPEC-7715 E2)" in css and ".stepper" in css and ".vlog" in css
+    assert client(tmp_path).get("/static/style.css").status_code == 404  # l'ancienne feuille n'existe plus
 
 
-# E1 : GET /api/dashboard (TASK-aad3, SPEC-c100 E1, T2, T8)
 # --------------------------------------------------------------------------
 
 import sys  # noqa: E402
@@ -2019,7 +2018,7 @@ def test_review_screen_render_button_is_blocked_while_moments_await_a_decision()
     assert "/render" in js
     assert "disabled" in js
     assert "sans décision" in js  # la raison affichee
-    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # écran migré (U7) : sa mise en page vit dans v3.css
+    css = (STATIC / "console.css").read_text(encoding="utf-8")  # écran migré (U7) : sa mise en page vit dans v3.css
     assert ".rv-layout" in css
 # Ecran Clips (TASK-3b9c) : GET /api/clips, approve/reject, PATCH, rerender
 # (publish et worker simules ; l'API ne touche jamais un mp4 ni un sidecar)
@@ -2335,7 +2334,7 @@ def test_clips_screen_is_wired_with_gallery_sidecar_and_actions():
     assert "Screens.clips" in js
     assert "/api/clips" in js
     assert "<video" in js and "controls" in js           # lecteur
-    assert "clip-poster" in js and "aspect" in (STATIC / "v3.css").read_text(encoding="utf-8")  # U5 : v3.css
+    assert "clip-poster" in js and "aspect" in (STATIC / "console.css").read_text(encoding="utf-8")  # U5 : v3.css
     for label in ("Titre d'écran", "Description", "Hashtags", "Contrôle qualité", "Partie"):
         assert label in js, label
     for action in ("/approve", "/reject", "/rerender", "PATCH"):
@@ -2988,7 +2987,7 @@ def test_channel_logo_refuses_non_png_and_missing_file(tmp_path, isolated_cwd):
 def test_channels_screen_is_wired_with_list_form_inheritance_and_toast():
     page = (STATIC / "index.html").read_text(encoding="utf-8")
     js = (STATIC / "screens" / "channels.js").read_text(encoding="utf-8")
-    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U9 : bloc channels passé dans v3.css
+    css = (STATIC / "console.css").read_text(encoding="utf-8")  # U9 : bloc channels passé dans v3.css
 
     assert "/static/screens/channels.js" in page
     assert page.index("/static/screens.js") < page.index("/static/screens/channels.js")
@@ -3096,7 +3095,7 @@ def test_dashboard_vod_section_is_wired_to_confirm_and_ignore():
     page = (STATIC / "index.html").read_text(encoding="utf-8")
     watch_js = (STATIC / "screens" / "watch.js").read_text(encoding="utf-8")
     dash_js = (STATIC / "screens" / "dashboard.js").read_text(encoding="utf-8")
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    css = (STATIC / "console.css").read_text(encoding="utf-8")
 
     assert "/static/screens/watch.js" in page
     assert page.index("/static/screens.js") < page.index("/static/screens/watch.js") < page.index("/static/app.js")
@@ -3572,7 +3571,7 @@ def test_get_publish_corrupt_file_of_a_styleless_video_is_a_500(tmp_path, isolat
 def test_publish_screen_is_wired_with_calendar_queue_and_actions():
     page = (STATIC / "index.html").read_text(encoding="utf-8")
     js = (STATIC / "screens" / "publish.js").read_text(encoding="utf-8")
-    css = (STATIC / "style.css").read_text(encoding="utf-8") + (STATIC / "v3.css").read_text(encoding="utf-8")  # CSS publication : v3.css depuis U6
+    css = (STATIC / "console.css").read_text(encoding="utf-8") + (STATIC / "console.css").read_text(encoding="utf-8")  # CSS publication : v3.css depuis U6
 
     assert "/static/screens/publish.js" in page
     assert page.index("/static/screens.js") < page.index("/static/screens/publish.js") < page.index("/static/app.js")
@@ -3597,21 +3596,21 @@ def test_publish_screen_is_wired_with_calendar_queue_and_actions():
     assert "undo" in js                                                    # toast « Annuler »
     assert "toastError" in js                                              # un conflit 409 s'affiche
     assert "Aucune publication en attente" in js                           # état vide
-    for sel in (".cal", ".cal-c", ".cal-post", "TASK-503d"):
+    for sel in (".cal", ".cal-c", ".cal-post", ".cal-day"):
         assert sel in css, sel
 
 
 def test_publish_calendar_css_scales_day_boxes_and_never_overflows_the_page():
-    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U6 : le CSS publication vit dans v3.css, prefixe .v3
+    css = (STATIC / "console.css").read_text(encoding="utf-8")  # U6 : le CSS publication vit dans v3.css, prefixe .v3
 
     for sel in (".cal-day", ".cal-day.compact", ".cal-day.mini", ".cal-month", ".pub-day-list", ".cal-mini-row", ".cal-month-count"):
         assert sel in css, sel
     assert ".cal-day.dense" not in css                                  # palier retire (TASK-460904227d2f)
     assert ".cal-more" not in css                                       # plus de « +N autres » (TASK-39bbe20b3284)
-    body = css[css.index(".v3 .cal-day {"):css.index(".v3 .cal-day {") + css[css.index(".v3 .cal-day {"):].index("}")]
+    body = css[css.index(".cal-day {"):css.index(".cal-day {") + css[css.index(".cal-day {"):].index("}")]
     assert "overflow-y" not in body and "max-height" not in body        # la case s'agrandit, ni defilement ni coupure
-    assert "max-height" not in css[css.index(".v3 .cal-month .cal-day.small"):].split("\n", 1)[0]
-    assert not re.search(r"\.v3 \.cal-day[^{]*\{[^}]*(overflow-y|max-height)", css)  # ni defilement ni coupure d une case
+    assert "max-height" not in css[css.index(".cal-month .cal-day.small"):].split("\n", 1)[0]
+    assert not re.search(r"\.cal-day[^{]*\{[^}]*(overflow-y|max-height)", css)  # ni defilement ni coupure d une case
 
 
 # --------------------------------------------------------------------------
@@ -3777,7 +3776,7 @@ def test_put_settings_web_changes_ask_for_a_restart_and_do_not_change_the_runnin
 def test_settings_screen_is_wired_with_sections_access_and_comment_warning():
     page = (STATIC / "index.html").read_text(encoding="utf-8")
     js = (STATIC / "screens" / "settings.js").read_text(encoding="utf-8")
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    css = (STATIC / "console.css").read_text(encoding="utf-8")
 
     assert "/static/screens/settings.js" in page
     assert page.index("/static/screens.js") < page.index("/static/screens/settings.js") < page.index("/static/app.js")
@@ -4005,7 +4004,7 @@ def test_put_layout_badge_enabled_must_be_a_boolean(tmp_path, isolated_cwd):
 
 def test_layout_js_has_a_badge_toggle_that_hides_the_zone_and_saves_badge_enabled():
     js = (STATIC / "screens" / "layout.js").read_text(encoding="utf-8")
-    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U9 : bloc channels passé dans v3.css
+    css = (STATIC / "console.css").read_text(encoding="utf-8")  # U9 : bloc channels passé dans v3.css
     assert "Afficher le badge" in js and "data-ly-badge" in js and "badge_enabled" in js
     assert ".ly-zone.off" in css
 
@@ -4180,7 +4179,7 @@ console.log(JSON.stringify([out, lbRects(view, v2, {w: 1920, h: 1080}).title, ba
 def test_layout_editor_screen_is_wired_with_canvas_zones_handles_and_actions():
     page = (STATIC / "index.html").read_text(encoding="utf-8")
     js = (STATIC / "screens" / "layout.js").read_text(encoding="utf-8")
-    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U9 : bloc channels passé dans v3.css
+    css = (STATIC / "console.css").read_text(encoding="utf-8")  # U9 : bloc channels passé dans v3.css
     channels = (STATIC / "screens" / "channels.js").read_text(encoding="utf-8")
 
     assert "/static/screens/layout.js" in page
@@ -4268,7 +4267,7 @@ def test_subtitles_preview_unknown_channel_404_and_bad_draft_422(tmp_path, isola
 
 def test_channels_screen_previews_subtitles_style_with_a_300ms_debounce():
     js = (STATIC / "screens" / "channels.js").read_text(encoding="utf-8")
-    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U9 : bloc channels passé dans v3.css
+    css = (STATIC / "console.css").read_text(encoding="utf-8")  # U9 : bloc channels passé dans v3.css
     shot = (STATIC / "screens" / "chan-subtitles-preview.js")
     page = (STATIC / "index.html").read_text(encoding="utf-8")
     prev = shot.read_text(encoding="utf-8")
@@ -4419,9 +4418,9 @@ def test_stats_invalid_period_is_a_422_with_detail(tmp_path, isolated_cwd, query
 
 
 
-def test_style_css_braces_are_balanced():
+def test_console_css_braces_are_balanced():
     # Une accolade manquante avale tout le CSS qui suit (écrans Surveillance, Statistiques).
-    css = re.sub(r"/\*.*?\*/", "", (STATIC / "style.css").read_text(encoding="utf-8"), flags=re.S)
+    css = re.sub(r"/\*.*?\*/", "", (STATIC / "console.css").read_text(encoding="utf-8"), flags=re.S)
     assert css.count("{") == css.count("}")
 
 
@@ -4690,7 +4689,7 @@ def test_new_channel_button_opens_a_defined_and_visible_modal_panel():
 
     channels = (STATIC / "screens" / "channels.js").read_text(encoding="utf-8")
     ui = (STATIC / "ui.js").read_text(encoding="utf-8")
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    css = (STATIC / "console.css").read_text(encoding="utf-8")
     page = (STATIC / "index.html").read_text(encoding="utf-8")
 
     assert "[data-chan-new]" in channels and "onclick = chOpenNew" in channels
@@ -5562,8 +5561,8 @@ def test_every_thumbnail_reserves_its_size_so_loading_never_shifts_the_layout():
         assert thumbs, name
         for tag in thumbs:
             assert "width=" in tag and "height=" in tag, f"{name} : {tag}"
-    css = _static("style.css") + _static("v3.css")  # .clip-poster vit dans v3.css depuis U5 (ecran Clips migre)
-    for selector in (".job-thumb", ".mini-clip", ".v3 .clip-poster"):
+    css = _static("console.css")  # .job-thumb et .mini-clip : socle ; .clip-poster : bloc de l'écran Clips
+    for selector in (".job-thumb", ".mini-clip", ".clip-poster"):
         rule = re.search(rf"^{re.escape(selector)} \{{[^}}]*\}}|^{re.escape(selector)} \{{\n[^}}]*\}}", css, re.MULTILINE)
         assert rule and "aspect-ratio" in rule.group(0), selector
 
@@ -6955,11 +6954,11 @@ def test_radar_panel_without_debate_has_no_toggle_and_unavailable_is_explicit(ju
 
 
 def test_radar_css_is_themed_and_responsive():
-    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # le radar a suivi l'écran Vidéos dans v3.css (U4)
+    css = (STATIC / "console.css").read_text(encoding="utf-8")  # le radar a suivi l'écran Vidéos dans v3.css (U4)
 
     assert ".jr-retained" in css and ".jr-zero" in css
-    assert css.count("--jr-c0:") == 2                     # défini en clair (.v3) et en sombre (.dark .v3)
-    assert css.index("--jr-c0:", css.index(".dark .v3 {")) > 0
+    assert css.count("--jr-c0:") == 2                     # défini en clair (:root) et en sombre (.dark)
+    assert css.index("--jr-c0:", css.index("\n.dark {")) > 0
     assert "@media (max-width: 900px)" in css[css.index(".vjury"):]  # mobile
 
 
@@ -7219,14 +7218,14 @@ def test_progress_bar_is_indeterminate_and_visible_without_a_fraction():
 
 def test_dashboard_running_card_shows_the_video_title_and_the_bar_has_a_width():
     js = (STATIC / "screens" / "dashboard.js").read_text(encoding="utf-8")
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    css = (STATIC / "console.css").read_text(encoding="utf-8")
     assert "esc(video.title || video.video_id)" in js and "progressBar(pct)" in js
     assert re.search(r"\.job-prog \.bar \{[^}]*width: \d+px", css)            # la colonne « auto » donnait 0 px
     assert ".bar.indeterminate > i" in css and "@keyframes indeterminate" in css
 
 
 def test_thumbnail_boxes_stay_16_9_and_do_not_reuse_the_empty_state_class():
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    css = (STATIC / "console.css").read_text(encoding="utf-8")
     js = (STATIC / "screens.js").read_text(encoding="utf-8")
     assert ".job-thumb.no-img img" in css and ".job-thumb.empty" not in css   # `.empty` est l'état vide : 48 px de marge, vignette carrée
     assert 'classList.add("no-img")' in js and 'classList.add("empty")' not in js
@@ -7527,7 +7526,7 @@ def test_publish_month_box_shows_only_the_day_number_and_the_video_count_linking
 
 def test_publish_week_calendar_has_no_leading_empty_hour_column():
     js = (STATIC / "screens" / "publish.js").read_text(encoding="utf-8")
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    css = (STATIC / "console.css").read_text(encoding="utf-8")
     assert "cal-row-label" not in js and "cal-row-label" not in css        # reste de l'ancienne grille horaire
 
 
@@ -7547,10 +7546,10 @@ def test_publish_legend_dots_use_three_distinct_colors_reused_from_the_calendar_
     assert '<i class="pub-leg info">' in toolbar
     assert '<i class="pub-leg ok">' in toolbar
     assert '<i class="pub-leg bad">' in toolbar
-    css = (STATIC / "v3.css").read_text(encoding="utf-8")
-    assert ".v3 .pub-leg.info { background: var(--info)" in css
-    assert ".v3 .pub-leg.ok { background: var(--ok)" in css
-    assert ".v3 .pub-leg.bad { background: var(--bad)" in css
+    css = (STATIC / "console.css").read_text(encoding="utf-8")
+    assert ".pub-leg.info { background: var(--info)" in css
+    assert ".pub-leg.ok { background: var(--ok)" in css
+    assert ".pub-leg.bad { background: var(--bad)" in css
 
 
 @_NODE
@@ -7686,7 +7685,7 @@ def test_every_panel_screen_keeps_its_content_off_the_edges():
     """Un écran dont [data-body] garde le cadre d'un panneau a une marge intérieure ; sinon le cadre est retiré
     (les panneaux sont alors à l'intérieur) ou ses lignes portent leur propre marge (liste des vidéos)."""
     page = (STATIC / "index.html").read_text(encoding="utf-8")
-    css = "\n".join(p.read_text(encoding="utf-8") for p in [STATIC / "style.css", STATIC / "v3.css", *sorted((STATIC / "screens").glob("*.css"))])  # v3.css : écrans migrés (U5)
+    css = "\n".join(p.read_text(encoding="utf-8") for p in [STATIC / "console.css", *sorted((STATIC / "screens").glob("*.css"))])  # v3.css : écrans migrés (U5)
     own_margin = set()  # Vidéos (v3) retire le cadre : #screen-videos [data-body] { background: none; padding: 0 }
     screens = re.findall(r'<section class="screen(?: v3)?" id="screen-(\w+)".*?<div class="([^"]*)" data-body', page, re.S)
     assert {name for name, _ in screens} == {"dashboard", "veille", "videos", "review", "clips", "clip", "publish", "channels", "stats", "accounts", "settings", "journal"}
@@ -7752,7 +7751,7 @@ def test_the_stats_screen_follows_the_mockup_account_period_scan_tabs_and_video_
 
 
 def test_the_stats_screen_no_longer_has_the_csv_import_but_carries_the_internal_measures():
-    js, page, css = _static("screens", "stats.js"), _static("index.html"), _static("style.css")
+    js, page, css = _static("screens", "stats.js"), _static("index.html"), _static("console.css")
     everything = "".join(p.read_text(encoding="utf-8") for p in sorted(STATIC.rglob("*.js"))) + page
 
     assert "/api/stats/import" not in everything and "data-stats-import" not in everything
@@ -7822,12 +7821,12 @@ def test_stats_addresses_carry_account_tab_and_video():
 
 
 def test_stats_css_carries_the_mockup_layout():
-    css = _static("v3.css")
+    css = _static("console.css")
 
     for selector in (".ctl", ".scan", ".kpi", ".delta", ".chart .ln", ".chart .ln.prev", ".gapband",
                      ".ptable", ".thumb-p", ".figs", ".src-row", ".poster-big", ".video-sheet", ".dlinks", ".sort-m"):
         assert selector in css, selector
-    assert "@media (max-width: 720px)" in css and ".v3 .ptable thead { display: none; }" in css  # liste en cartes sur mobile
+    assert "@media (max-width: 720px)" in css and ".ptable thead { display: none; }" in css  # liste en cartes sur mobile
 
 
 # --------------------------------------------------------------------------
@@ -7900,25 +7899,25 @@ def test_radar_panel_shows_cut_rejected_distinct_from_a_real_retained(tmp_path, 
 
 def test_calendar_card_has_full_title_attribute_and_two_line_clamp():
     js = (STATIC / "screens" / "publish.js").read_text(encoding="utf-8")
-    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U6 : carte du calendrier = .cal-post, CSS dans v3.css
+    css = (STATIC / "console.css").read_text(encoding="utf-8")  # U6 : carte du calendrier = .cal-post, CSS dans v3.css
 
     card = js[js.index("function calPostHtml"):js.index("function pubCalendar")]
     assert 'title="${esc(pubTitle(c))}"' in card               # titre complet en info-bulle sur la carte
     import re
-    rules = re.findall(r"\.v3 \.cal-post \.ttl\s*\{([^}]*)\}", css)
-    assert rules, "règle .v3 .cal-post .ttl absente de v3.css"
+    rules = re.findall(r"(?m)^\.cal-post \.ttl\s*\{([^}]*)\}", css)
+    assert rules, "règle .cal-post .ttl absente de console.css"
     assert "-webkit-line-clamp: 2" in rules[-1] and "overflow-wrap" in rules[-1]
     assert "line-clamp: 2" in rules[-1].replace("-webkit-line-clamp", "")
 
 
 def test_calendar_card_layout_gives_the_title_the_width():
-    css = (STATIC / "v3.css").read_text(encoding="utf-8")
+    css = (STATIC / "console.css").read_text(encoding="utf-8")
     import re
-    post = " ".join(re.findall(r"\.v3 \.cal-post\s*\{([^}]*)\}", css))
+    post = " ".join(re.findall(r"\.cal-post\s*\{([^}]*)\}", css))
     assert "display: grid" in post                             # titre, compte et heure empilés : le titre a toute la largeur
     js = (STATIC / "screens" / "publish.js").read_text(encoding="utf-8")
     assert "mini-clip" not in js[js.index("function calPostHtml"):js.index("function pubCalendar")]  # pas de miniature de 18 px
-    assert re.search(r"\.v3 \.cal-post \.ttl\s*\{[^}]*overflow-wrap: anywhere", css)
+    assert re.search(r"\.cal-post \.ttl\s*\{[^}]*overflow-wrap: anywhere", css)
 
 
 # --------------------------------------------------------------------------
@@ -8914,7 +8913,7 @@ def test_a_request_with_a_query_string_is_journaled_with_it(tmp_path, isolated_c
 
 def test_excluded_paths_are_never_journaled(tmp_path, isolated_cwd, caplog):
     with caplog.at_level(logging.INFO, logger="clipper.web.app"):
-        client(tmp_path).get("/static/style.css")
+        client(tmp_path).get("/static/console.css")
 
     assert [r for r in caplog.records if r.name == "clipper.web.app"] == []
 
@@ -9330,7 +9329,7 @@ def test_topbar_has_a_network_pill_wired_to_the_api_every_60s(tmp_path, isolated
     js = served(tmp_path, "/static/app.js")
     assert "/api/network" in js and "60000" in js and "visibilitychange" in js
     assert "IP hors " in js and "pays inconnu" in js
-    assert ".pill.net" in served(tmp_path, "/static/v3.css")  # coquille v3 : pastille compacte (SPEC-7715 T13)
+    assert ".pill.net" in served(tmp_path, "/static/console.css")  # coquille v3 : pastille compacte (SPEC-7715 T13)
 
 
 def test_settings_screen_has_a_country_choice(tmp_path, isolated_cwd):
@@ -10645,8 +10644,8 @@ def test_clip_sheet_loads_the_accounts_list_to_name_the_account():
 
 
 def test_clip_sheet_row_labels_never_break_inside_a_word():
-    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U5 : la fiche clip est un ecran v3
-    label_rule = css[css.index(".v3 .sheet-row > span:first-child"):]
+    css = (STATIC / "console.css").read_text(encoding="utf-8")  # U5 : la fiche clip est un ecran v3
+    label_rule = css[css.index(".sheet-row > span:first-child"):]
     label_rule = label_rule[:label_rule.index("}")]
 
     assert "overflow-wrap: normal" in label_rule
@@ -10832,12 +10831,12 @@ def test_clip_sheet_shows_sent_to_tiktok_not_published_and_keeps_the_slot():
 
 def test_clip_sheet_grid_panels_can_shrink_so_values_never_overflow_the_panel():
     # Un panneau de grille garde min-width auto par défaut : son contenu le fait déborder du bord droit.
-    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U5 : la fiche clip est un ecran v3
-    panel_rule = css[css.index(".v3 .sheet-grid > *"):]
+    css = (STATIC / "console.css").read_text(encoding="utf-8")  # U5 : la fiche clip est un ecran v3
+    panel_rule = css[css.index(".sheet-grid > *"):]
     panel_rule = panel_rule[:panel_rule.index("}")]
 
     assert "min-width: 0" in panel_rule
-    assert "overflow-wrap: anywhere" in css[css.index(".v3 .sheet-row {"):].split("}")[0]
+    assert "overflow-wrap: anywhere" in css[css.index(".sheet-row {"):].split("}")[0]
 
 
 # --------------------------------------------------------------------------

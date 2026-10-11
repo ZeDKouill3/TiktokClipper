@@ -1,6 +1,6 @@
 /* Briques d'interface partagees : format, icones, rapprochement du DOM (morph), toasts Basecoat avec
-   « Annuler », dialogues natifs (openDialog, confirmDialog), tiroir (drawer), et l'ancien openPanel garde
-   pour les ecrans non migres (ADR-a308 : un ecran retire ses appels en migrant). */
+   « Annuler », dialogues natifs (openDialog, confirmDialog), tiroir (drawer), et openPanel (overlay et panneau en <div> :
+   « Nouveau style », alerte reseau). */
 "use strict";
 
 const $ = (sel, root) => (root || document).querySelector(sel);
@@ -96,8 +96,7 @@ function toastError(title, err) {
 }
 
 /* ---------- Dialogues natifs (<dialog>, SPEC-7715 T10) ----------
-   openDialog(html, opts) cree un <dialog class="dialog"> dans #layers (le conteneur .v3 : `.v3 .dialog` est un
-   selecteur descendant), l'ouvre en modal et le retire du DOM a la fermeture. Fermeture : Echap (natif), clic sur
+   openDialog(html, opts) cree un <dialog class="dialog"> dans #layers, l'ouvre en modal et le retire du DOM a la fermeture. Fermeture : Echap (natif), clic sur
    le fond, tout bouton [data-dismiss], form method="dialog". `html` = header / section / footer (markup Basecoat) ;
    un `html` qui est lui-meme un <form> devient le cadre du dialogue (ses header / section / footer gardent leur mise en page). */
 function openDialog(html, opts) {
@@ -175,9 +174,8 @@ const drawer = {
   isOpen() { return $("#drawer").classList.contains("show"); },
 };
 
-/* ---------- Ancien chemin : overlay et panneau en <div> (ecrans non migres) ----------
-   Garde tel quel le temps de la migration : le contenu injecte vient des ecrans (clips, publication, styles,
-   comptes) et reste style par style.css. Chaque ecran remplace ses appels par openDialog / drawer en migrant. */
+/* ---------- Overlay et panneau en <div> (« Nouveau style », alerte reseau) ----------
+   Le contenu injecte vient de l'appelant ; les regles .overlay / .modal sont dans le socle de console.css. */
 let closeCurrent = null;
 function showOverlay(onClose) {
   const ov = $("#overlay");

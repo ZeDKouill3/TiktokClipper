@@ -57,23 +57,21 @@ def test_delete_lives_in_the_ellipsis_menu_not_in_the_toolbar():
     assert "confirmDialog" in js and "confirm=true" in js    # la confirmation reste
 
 
-def test_channels_is_a_v3_screen_and_its_css_left_style_css():
+def test_channels_has_no_migration_class_and_its_css_lives_in_console_css():
     js = _static("screens", "channels.js")
-    assert 'section.classList.add("v3")' in js
-    # l'éditeur d'agencement enveloppe Screens.channels.render : sans la classe, ses règles `.v3 .ly-*` ne s'appliquent pas
-    assert 'section.classList.add("v3")' in _static("screens", "layout.js")
-    legacy, v3 = _static("style.css"), _static("v3.css")
-    assert "/* >>> channels */" not in legacy and "/* >>> channels */" in v3 and "/* <<< channels */" in v3
+    assert 'classList.add("v3")' not in js and 'classList.add("v3")' not in _static("screens", "layout.js")
+    console = _static("console.css")
+    assert not (STATIC / "style.css").exists()
+    assert "/* >>> channels */" in console and "/* <<< channels */" in console
     for selector in (".chan-sec", ".chan-fields", ".chan-field.inherited", ".chan-preview", ".ly-grid", ".ly-zone.off",
                      ".lb-z-video", ".ch-card", ".chan-model", ".vmenu[hidden]"):
-        assert f".v3 {selector}" in v3, selector
-        assert selector + " {" not in legacy and selector + "," not in legacy, selector
+        assert selector in console, selector
 
 
 def test_channels_block_is_a_closed_block_of_v3_css_and_stays_in_budget():
     # les ecrans migres apres U9 ajoutent leur bloc a la suite : on exige un bloc ferme, pas la derniere place
-    v3 = _static("v3.css")
-    assert len(v3.encode("utf-8")) <= 124_162
+    v3 = _static("console.css")
+    assert len(v3.encode("utf-8")) <= 163_840
     assert v3.rindex("/* >>> channels */") > v3.rindex("/* <<< dashboard */")
     start = v3.rindex("/* >>> channels */")
     end = v3.index("/* <<< channels */", start)

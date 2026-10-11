@@ -178,7 +178,7 @@ function pubPostState(c, now = Date.now()) {
   return cls === "bad" ? "failed" : cls === "ok" ? "published" : "scheduled";
 }
 
-/* Carte d'une publication dans le calendrier (maquette v3 : heure, titre sur 2 lignes, compte · service). `extra`
+/* Carte d'une publication dans le calendrier (maquette : heure, titre sur 2 lignes, compte · service). `extra`
    s'ajoute après l'heure (pastille de statut en vue Jour). */
 function calPostHtml(c, extra, now = Date.now()) {
   // Une programmation « à vérifier » (post peut-être déjà sur TikTok, publication-I1) ne se replanifie pas en la glissant.
@@ -385,7 +385,7 @@ function pubCalendarZone(d) {
   return `<section>${hint}${pubCalendar(d)}${agendaHtml(pubAgendaDays(d))}</section>`;
 }
 
-/* Agencement v3 (SPEC-7715 E6) : le calendrier d'abord (barre d'outils puis grille), le rail « À faire » à droite
+/* Agencement (SPEC-7715 E6) : le calendrier d'abord (barre d'outils puis grille), le rail « À faire » à droite
    (plan de demain, en attente, en échec, refusés, supprimés) ; sous 1100 px le rail passe sous le calendrier. */
 function pubLayoutHtml(d, postsHtml) {
   return `<div class="pub-layout"><div class="pub-main">${pubToolbar(d)}${pubCalendarZone(d)}</div>
@@ -1751,8 +1751,6 @@ function pubWire(body) {
 
 Screens.publish = {
   render(body) {
-    const section = body.closest(".screen");
-    if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
     if (!pubPosts.data && !pubPosts.loading) pubPostsLoad();
     else if (Date.now() - pubPosts.at > PUB_STALE_MS) pubPostsLoad();
     if (!pubRep.busy && Date.now() - pubRep.at > PUB_STALE_MS) repLoad();

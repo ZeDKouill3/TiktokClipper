@@ -1,7 +1,8 @@
 """Socle Basecoat + Idiomorph vendored (ADR-a308, SPEC-7715, TASK-5b54d0a590bb).
 
 Aucun test ne touche le réseau : le téléchargement n'est jamais appelé ici,
-on vérifie les fichiers commités (sha256 de VERSIONS) et le préfixage `.v3`.
+on vérifie les fichiers commités (sha256 de VERSIONS), le préfixage `.v3` (mode de migration `--prefix`)
+et le mode d'arrivée `--no-prefix` (sélecteurs globaux, clôture U14).
 """
 
 from __future__ import annotations
@@ -83,12 +84,36 @@ def test_nested_rule_inside_a_style_block_is_refused():
 
 # --- fichiers commités ---------------------------------------------------
 
-def test_every_vendored_selector_starts_with_v3_or_is_whitelisted():
+def test_vendored_selectors_are_global_after_the_closure_of_the_migration():
     css = (VENDOR / "basecoat.cdn.min.css").read_text(encoding="utf-8")
     selectors = vb.style_selectors(css)
     assert selectors, "aucun sélecteur lu : le parseur ne voit rien"
-    bad = [s for s in selectors if not (s.startswith(".v3 ") or s in vb.WHITELIST)]
-    assert bad == []
+    assert [s for s in selectors if s.startswith(".v3")] == []
+    assert ".btn" in selectors and any(s.startswith(".dialog") for s in selectors)
+
+
+def _fake_fetch(pin):
+    if pin["name"] == "basecoat-css":
+        return {"basecoat.cdn.min.css": b".btn{color:red}", "basecoat.all.min.js": b"//js", "LICENSE-basecoat.md": b"mit"}
+    return {"idiomorph.min.js": b"//m", "LICENSE-idiomorph.txt": b"0bsd"}
+
+
+def test_build_writes_basecoat_css_unprefixed_by_default_and_prefixed_on_demand(tmp_path, monkeypatch):
+    monkeypatch.setattr(vb, "_fetch", _fake_fetch)
+    vb.build(tmp_path / "plain")
+    assert (tmp_path / "plain" / "basecoat.cdn.min.css").read_text(encoding="utf-8") == ".btn{color:red}"
+    vb.build(tmp_path / "pre", prefix=True)
+    assert (tmp_path / "pre" / "basecoat.cdn.min.css").read_text(encoding="utf-8") == ".v3 .btn{color:red}"
+    assert vb.check(tmp_path / "plain") == []
+
+
+def test_main_no_prefix_flag_builds_without_prefix_and_prefix_flag_with_it(monkeypatch):
+    calls = []
+    monkeypatch.setattr(vb, "build", lambda directory, prefix=False: calls.append(prefix))
+    assert vb.main(["--no-prefix"]) == 0 and vb.main([]) == 0 and vb.main(["--prefix"]) == 0
+    assert calls == [False, False, True]
+    with pytest.raises(SystemExit):
+        vb.main(["--prefix", "--no-prefix"])
 
 
 def test_vendored_css_has_no_external_fetch():

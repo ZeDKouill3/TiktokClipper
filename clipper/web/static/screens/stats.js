@@ -459,7 +459,7 @@ function statsVideoSheet(account) {
   const tab = STATS_VIDEO_TABS.some(([id]) => id === statsUi.vtab) ? statsUi.vtab : "overview";
   const content = { overview: statsVideoOverviewTab, viewers: statsVideoViewersTab, engagement: statsVideoEngagementTab }[tab](v);
   return `${back}<div class="video-sheet" data-stats-sheet>
-    <div><div class="poster-big" style="${v.processing ? "background:var(--surface-3)" : statsPoster(v.post_id)}"><span>${esc((v.caption || "").split("#")[0].trim() || v.post_id)}</span></div>
+    <div><div class="poster-big" style="${v.processing ? "background:var(--muted)" : statsPoster(v.post_id)}"><span>${esc((v.caption || "").split("#")[0].trim() || v.post_id)}</span></div>
       <h2 style="font-size:17px;margin-top:16px">${esc(v.caption || "(sans légende)")}</h2>
       <div class="muted" style="font-size:13px;margin-top:8px">Publié le ${esc(statsPostedAt(v.posted_at, v.posted_at_text))} · <span class="chip plain ${v.visibility === "public" ? "ok" : ""}">${esc(vis)}</span> ${statsRestrictedChip(v)}</div>
       ${v.fyf_eligible === false ? `<div class="reason" data-stats-fyf-notice>${icon("triangle-alert", "i-sm")}<span><b>TikTok ne recommande pas cette vidéo dans le fil Pour toi.</b> ${esc(v.fyf_notice || "")}</span></div>` : ""}
@@ -718,14 +718,14 @@ Screens.stats = {
     statsUi.lastRender = Date.now();
     if (!statsUi.accounts || statsUi.key !== statsKey() || Date.now() - statsUi.at > STATS_STALE_MS) statsLoad();
     if (!statsUi.accounts) {
-      morph(body, `<div class="v3 s3">${statsUi.error
+      morph(body, `<div class="s3">${statsUi.error
         ? emptyState("circle-alert", "Chargement impossible", String(statsUi.error.message || statsUi.error))
         : `<div class="skeleton sk-line"></div><div class="skeleton sk-card"></div><div class="skeleton sk-card"></div>`}</div>`);
       return;
     }
     const account = statsAccount();
     if (!account) {
-      morph(body, `<div class="v3 s3">${emptyState("users", "Aucun compte TikTok", "Ajoute un compte dans l'écran Comptes : les statistiques sont relevées compte par compte.", `<a class="btn" data-variant="outline" href="#/accounts">${icon("users")}Aller à Comptes</a>`)}</div>`);
+      morph(body, `<div class="s3">${emptyState("users", "Aucun compte TikTok", "Ajoute un compte dans l'écran Comptes : les statistiques sont relevées compte par compte.", `<a class="btn" data-variant="outline" href="#/accounts">${icon("users")}Aller à Comptes</a>`)}</div>`);
       return;
     }
     const route = statsRoute();
@@ -736,7 +736,7 @@ Screens.stats = {
       pane = statsTabs(account, route.tab, count) + (route.tab === "videos" ? statsVideosList(account) : statsOverview(account));
     }
     const sheet = route.tab === "videos" && route.post;
-    morph(body, `<div class="v3 s3">${statsUi.error ? `<p class="reason bad">Actualisation impossible : ${esc(statsUi.error.message || statsUi.error)}</p>` : ""}${statsControls(account)}${pane}${sheet ? "" : statsMeasuresSection() + statsLearningSection()}</div>`);
+    morph(body, `<div class="s3">${statsUi.error ? `<p class="reason bad">Actualisation impossible : ${esc(statsUi.error.message || statsUi.error)}</p>` : ""}${statsControls(account)}${pane}${sheet ? "" : statsMeasuresSection() + statsLearningSection()}</div>`);
     statsWire(body, account);
   },
 };

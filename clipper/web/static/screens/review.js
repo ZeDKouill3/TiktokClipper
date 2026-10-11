@@ -1,4 +1,4 @@
-/* Ecran « Revue des moments » (SPEC-c100 E3, v3 : ADR-a308, SPEC-7715). Charge apres screens.js dont
+/* Ecran « Revue des moments » (SPEC-c100 E3, ADR-a308, SPEC-7715). Charge apres screens.js dont
    il remplace l'entree Screens.review. Lit GET /api/videos/{id}/moments, envoie
    chaque decision a POST /api/videos/{id}/moments/{mid}/decide et lance le rendu
    par POST /api/videos/{id}/render (file du worker, jamais dans le processus HTTP).
@@ -401,8 +401,6 @@ document.addEventListener("keydown", (e) => {
 /* ---------- Ecran ---------- */
 Screens.review = {
   render(body, store) {
-    const section = body.closest(".screen");
-    if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
     const candidates = (store.videos || []).filter((v) => v.status === "awaiting_review");
     const id = rvHashVideo() || (candidates.find((v) => v.video_id === rv.videoId) || candidates[0] || {}).video_id || null;
     rv.body = null;

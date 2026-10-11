@@ -1,4 +1,4 @@
-/* Ecran « Comptes » (SPEC-6fa4 R6, v3 : ADR-a308, SPEC-7715 E10). Pense-bete local des comptes (TikTok, YouTube,
+/* Ecran « Comptes » (SPEC-6fa4 R6, ADR-a308, SPEC-7715 E10). Pense-bete local des comptes (TikTok, YouTube,
    e-mail...) : la liste vient de GET /api/accounts et ne porte JAMAIS de mot de passe (has_password seulement). Un mot
    de passe n'est demandé à GET /api/accounts/<id>/password qu'au clic (Copier ou Afficher) ; il n'est ni mémorisé dans
    le navigateur (aucun stockage local), ni gardé après son masquage (30 s). Le générateur est côté serveur
@@ -529,8 +529,6 @@ function accNotice() {
 
 Screens.accounts = {
   render(body) {
-    const section = body.closest(".screen");
-    if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
     if (accIsRemote()) {
       morph(body, accNotice());
       return;

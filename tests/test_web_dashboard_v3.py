@@ -360,19 +360,16 @@ def _blocks(css: str, name: str) -> list[str]:
     return re.findall(rf"/\* >>> {name} \*/(.*?)/\* <<< {name} \*/", css, flags=re.S)
 
 
-def test_the_dashboard_blocks_left_style_css_and_live_in_v3_css_under_the_v3_prefix():
-    legacy = (STATIC / "style.css").read_text(encoding="utf-8")
-    v3 = (STATIC / "v3.css").read_text(encoding="utf-8")
-
-    assert "/* >>> dashboard */" not in legacy and "/* <<< dashboard */" not in legacy
-    assert ".dash .job" not in legacy and ".watch-vod" not in legacy
-    blocks = _blocks(v3, "dashboard")
+def test_the_dashboard_block_lives_in_console_css_with_its_own_d3_classes():
+    assert not (STATIC / "style.css").exists()
+    css = (STATIC / "console.css").read_text(encoding="utf-8")
+    blocks = _blocks(css, "dashboard")
     assert len(blocks) == 1 and blocks[0].strip()
     rules = re.sub(r"/\*.*?\*/", "", blocks[0], flags=re.S)
     selectors = [s.strip() for s in re.findall(r"(?:^|\})\s*([^{}@]+?)\s*\{", rules)]
-    assert selectors and all(part.strip().startswith(".v3") for s in selectors for part in s.split(",")), selectors
+    assert selectors and all(part.strip().startswith(".d3") for s in selectors for part in s.split(",")), selectors
     assert "@media (max-width: 900px)" in blocks[0] and "44px" in blocks[0]      # mobile : cibles de 44 px, une colonne
-    assert len(v3.encode("utf-8")) <= 124_162  # budget de v3.css : voir test_web_shell (coquille <= 40 Ko)
+    assert len(css.encode("utf-8")) <= 163_840  # budget de console.css : voir test_web_shell
 
 
 def test_the_dashboard_markup_uses_no_legacy_screen_class_names():
