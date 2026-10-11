@@ -299,3 +299,23 @@ def test_empty_list_offers_the_add_button_that_opens_the_global_dialog():
     html = json.loads(_node(script))
 
     assert "data-add>" in html and "Ajouter une vidéo" in html and "data-add-form" not in html
+
+
+# --- SPEC-7715 T6 : aucun défilement horizontal de la page à 390 px --------------------------------------------------
+
+V3_CSS = (STATIC / "v3.css").read_text(encoding="utf-8")
+
+
+def _rule(selector: str) -> str:
+    match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", V3_CSS)
+    assert match, selector
+    return match.group(1)
+
+
+def test_video_sheet_wide_parts_scroll_in_their_own_box_or_wrap_on_a_phone():
+    mobile = V3_CSS[V3_CSS.rindex("@media (max-width: 900px) {"):]
+    assert re.search(r"\.v3 \.stepper \{[^}]*overflow-x: auto", mobile)  # 13 étapes : leur propre conteneur défile
+    assert "overflow-x: auto" in _rule(".v3 .strip")
+    assert "overflow-y: auto" in _rule(".v3 .vlog")
+    assert "flex-wrap: wrap" in _rule(".v3 .vstep-panel .section-head, .v3 .vcard .section-head")  # « Relancer depuis cette étape »
+    assert "text-overflow: ellipsis" in _rule(".v3 .vsource")  # l'adresse source ne pousse pas la page
