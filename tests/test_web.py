@@ -2979,7 +2979,7 @@ def test_channel_logo_refuses_non_png_and_missing_file(tmp_path, isolated_cwd):
 def test_channels_screen_is_wired_with_list_form_inheritance_and_toast():
     page = (STATIC / "index.html").read_text(encoding="utf-8")
     js = (STATIC / "screens" / "channels.js").read_text(encoding="utf-8")
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U9 : bloc channels passé dans v3.css
 
     assert "/static/screens/channels.js" in page
     assert page.index("/static/screens.js") < page.index("/static/screens/channels.js")
@@ -3996,7 +3996,7 @@ def test_put_layout_badge_enabled_must_be_a_boolean(tmp_path, isolated_cwd):
 
 def test_layout_js_has_a_badge_toggle_that_hides_the_zone_and_saves_badge_enabled():
     js = (STATIC / "screens" / "layout.js").read_text(encoding="utf-8")
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U9 : bloc channels passé dans v3.css
     assert "Afficher le badge" in js and "data-ly-badge" in js and "badge_enabled" in js
     assert ".ly-zone.off" in css
 
@@ -4171,7 +4171,7 @@ console.log(JSON.stringify([out, lbRects(view, v2, {w: 1920, h: 1080}).title, ba
 def test_layout_editor_screen_is_wired_with_canvas_zones_handles_and_actions():
     page = (STATIC / "index.html").read_text(encoding="utf-8")
     js = (STATIC / "screens" / "layout.js").read_text(encoding="utf-8")
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U9 : bloc channels passé dans v3.css
     channels = (STATIC / "screens" / "channels.js").read_text(encoding="utf-8")
 
     assert "/static/screens/layout.js" in page
@@ -4259,7 +4259,7 @@ def test_subtitles_preview_unknown_channel_404_and_bad_draft_422(tmp_path, isola
 
 def test_channels_screen_previews_subtitles_style_with_a_300ms_debounce():
     js = (STATIC / "screens" / "channels.js").read_text(encoding="utf-8")
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U9 : bloc channels passé dans v3.css
     shot = (STATIC / "screens" / "chan-subtitles-preview.js")
     page = (STATIC / "index.html").read_text(encoding="utf-8")
     prev = shot.read_text(encoding="utf-8")
@@ -7290,7 +7290,7 @@ def test_channel_card_has_direct_actions_and_channel_fields_are_editable_without
 @_NODE
 def test_a_channel_field_is_rendered_enabled_without_redefine_while_other_sections_stay_inherited():
     detail = {"raw": {}, "effective": {"channel": {"mode": "review", "display_name": "x"}, "render": {"crf": 18}}}
-    out = _run_js([("screens/channels.js", ["chIsDirect", "chSame", "chKind", "chField", "chControl", "chRubricEditor",
+    out = _run_js([("screens/channels.js", ["FIELD_LABELS", "chIsDirect", "chSame", "chKind", "chField", "chControl", "chRubricEditor",
                                            "chRubricLabel"])], f"""(() => {{
       const ed = {{ draft: {{ channel: {{}}, render: {{}} }}, detail: {json.dumps(detail)} }};
       globalThis.CHAN_DAYS = []; globalThis.CHAN_MODES = [['review', 'review'], ['auto', 'auto']]; globalThis.CHAN_RUBRICS = [];
