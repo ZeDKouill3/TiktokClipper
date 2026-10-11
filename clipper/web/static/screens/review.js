@@ -1,20 +1,25 @@
-/* Ecran « Revue des moments » (SPEC-c100 E3, T4). Charge apres screens.js dont
+/* Ecran « Revue des moments » (SPEC-c100 E3, v3 : ADR-a308, SPEC-7715). Charge apres screens.js dont
    il remplace l'entree Screens.review. Lit GET /api/videos/{id}/moments, envoie
    chaque decision a POST /api/videos/{id}/moments/{mid}/decide et lance le rendu
    par POST /api/videos/{id}/render (file du worker, jamais dans le processus HTTP).
    Les donnees introuvables arrivent du serveur en null avec <champ>_error :
-   affichees telles quelles, jamais remplacees par une valeur de secours. */
+   affichees telles quelles, jamais remplacees par une valeur de secours.
+   Le DOM est calcule d'un bloc depuis l'etat `rv` (rvView) puis rapproche par morph() : le lecteur, le focus
+   et le defilement survivent a chaque evenement (SSE, temps de lecture, poignee glissee). */
 "use strict";
 
 const RV_MIN_GAP = 1;      // secondes minimum entre le debut et la fin d'un moment
 const RV_CONTEXT = 30;     // secondes de contexte de chaque cote dans la timeline zoomee
 const RV_DECISION_LABELS = { accepted: "accepté", rejected: "refusé", adjusted: "ajusté" };
-const RV_DECISION_CHIP = { accepted: "done", rejected: "failed", adjusted: "review" };
+const RV_DECISION_CHIP = { accepted: "ok", rejected: "bad", adjusted: "info" };
+const RV_UPCOMING = ["pending", "queued", "running"];
 
 const rv = {
   videoId: null, moments: null, error: null, loading: false,
   cur: 0, draft: null, window: null, body: null, busy: false,
+  t: null, playing: false, editing: false, dragging: false,
 };
+const rvWired = new WeakSet();
 
 const rvRound = (t) => Math.round(t * 10) / 10;
 const rvClock = (t) => {
@@ -62,6 +67,7 @@ function rvResetDraft() {
   rv.draft = b ? { start: b.start, end: b.end } : null;
   const dur = m ? m.source_duration : null;
   rv.window = b && dur ? { a: Math.max(0, b.start - RV_CONTEXT), b: Math.min(dur, b.end + RV_CONTEXT) } : null;
+  rv.t = b ? b.start : null;
 }
 
 /* ---------- Decisions (toast « Annuler » : renvoie la decision precedente) ---------- */
@@ -85,6 +91,7 @@ async function rvDecide(kind) {
   const previous = m.decision;   // decision a renvoyer si l'utilisateur annule
   const index = rv.cur;
   rv.busy = true;
+  renderCurrent();
   try {
     await rvSend(m, payload);
     await Promise.all([rvLoad(true), reloadVideo(rv.videoId)]);
@@ -93,6 +100,7 @@ async function rvDecide(kind) {
     return;
   } finally {
     rv.busy = false;
+    renderCurrent();
   }
   const label = { accepted: "Moment accepté", rejected: "Moment refusé", adjusted: "Bornes ajustées" }[kind];
   toast({
@@ -101,7 +109,6 @@ async function rvDecide(kind) {
   });
   const next = rv.moments.findIndex((x, i) => i > index && !x.decision);
   rvGo(next >= 0 ? next : rv.moments.findIndex((x) => !x.decision) >= 0 ? rv.moments.findIndex((x) => !x.decision) : index);
-  renderCurrent();
 }
 
 /* Annuler : renvoie la decision precedente du moment. Sans decision anterieure,
@@ -110,7 +117,6 @@ async function rvUndo(moment, index, previous) {
   const payload = rvPayloadOf(previous);
   if (!payload) {
     rvGo(index);
-    renderCurrent();
     toast({ kind: "info", title: "Aucune décision antérieure", body: "La décision reste enregistrée : choisis-en une autre pour la remplacer.", ms: 5200 });
     return;
   }
@@ -118,7 +124,6 @@ async function rvUndo(moment, index, previous) {
     await rvSend(moment, payload);
     await Promise.all([rvLoad(true), reloadVideo(rv.videoId)]);
     rvGo(index);
-    renderCurrent();
     toast({ kind: "ok", title: "Décision restaurée", body: RV_DECISION_LABELS[previous.decision], ms: 2600 });
   } catch (err) { toastError("Annulation impossible", err); }
 }
@@ -128,7 +133,7 @@ function rvVideoState() {
   return (store.videos || []).find((v) => v.video_id === rv.videoId) || null;
 }
 
-/* Raison affichee tant que des moments attendent une decision ; null si le rendu est possible. */
+/* Raison affichee tant que le rendu est impossible ; null si le rendu peut etre lance. */
 function rvBlockedReason() {
   const v = rvVideoState();
   if (!v) return "État de la vidéo introuvable : le rendu ne peut pas être lancé.";
@@ -150,111 +155,137 @@ async function rvRender() {
   } catch (err) { toastError("Rendu impossible", err); }
 }
 
-/* ---------- Construction de l'ecran ---------- */
-function rvHeader(candidates) {
+/* ---------- Vues (HTML pur calcule depuis l'etat) ---------- */
+
+/* Etat vide : cite le mode « review » et liste les videos candidates (celles qui y arriveront). */
+function rvEmptyView(videos, message) {
+  const upcoming = (videos || []).filter((v) => RV_UPCOMING.includes(v.status));
+  const text = message || "Mode « review » : après l'étape « moments », chaque vidéo attend ici ta décision sur ses moments. En mode « auto », le jury décide seul et rien n'arrive dans cet écran.";
+  const rows = upcoming.map((v) => `<tr>
+      <td><a class="t" href="#/videos/${encodeURIComponent(v.video_id)}">${esc(v.title || v.video_id)}</a>${v.title && v.title !== v.video_id ? `<div class="s mono">${esc(v.video_id)}</div>` : ""}</td>
+      <td data-l="Statut">${statusChip(v.status)}</td></tr>`).join("");
+  const list = upcoming.length
+    ? `<section class="rv-candidates"><div class="section-head"><h2>Vidéos candidates</h2><span class="n">${upcoming.length}</span></div>
+        <p class="muted">Ces vidéos sont en cours de traitement : celles dont le mode est « review » arriveront ici.</p>
+        <div class="table-container"><table class="table"><colgroup><col style="width:70%"><col style="width:30%"></colgroup>
+        <thead><tr><th>Vidéo</th><th>Statut</th></tr></thead><tbody>${rows}</tbody></table></div></section>`
+    : `<p class="muted rv-none">Aucune vidéo en cours de traitement : ajoute une vidéo pour qu'elle arrive ici.</p>`;
+  return `${emptyState("sparkles", "Aucun moment à valider", text)}${list}`;
+}
+
+function rvToolbar(candidates) {
   const options = candidates.map((v) => `<option value="${esc(v.video_id)}"${v.video_id === rv.videoId ? " selected" : ""}>${esc(v.video_id)}</option>`).join("");
-  return `<div class="rv-bar">
+  const reason = rvBlockedReason();
+  const decided = rv.moments.filter((x) => x.decision).length;
+  return `<div class="toolbar rv-bar">
     <label class="rv-pick"><span class="muted">Vidéo</span><select class="input" id="rv-video" aria-label="Vidéo à relire">${options}</select></label>
+    <span class="muted rv-progress">${decided} / ${rv.moments.length} décidés</span>
     <span class="grow"></span>
-    <div class="rv-gate"><button type="button" class="btn btn-primary" id="rv-render">${icon("film")}Lancer le rendu</button>
-      <p class="reason" id="rv-reason" hidden></p></div>
+    <div class="rv-gate"><button type="button" class="btn" id="rv-render"${reason || rv.busy ? ` disabled aria-describedby="rv-reason"` : ""}>${icon("film", "i-sm")}Lancer le rendu</button>
+      ${reason ? `<p class="reason warn" id="rv-reason">${esc(reason)}</p>` : ""}</div>
   </div>`;
 }
 
-function rvLayout(candidates) {
-  const m = rvMoment();
-  return `${rvHeader(candidates)}
-  <div class="review-layout" data-rv-video="${esc(rv.videoId)}">
-    <aside><div class="section-title">${icon("sparkles")}Proposés par le jury<span class="more">${rv.moments.length}</span></div>
-      <div class="m-list" id="rv-list"></div></aside>
-    <section class="stack" style="gap:16px">
-      <div class="player" id="rv-player">
-        <video id="rv-media" src="${esc(m.preview_url)}" preload="metadata" playsinline></video>
-        <div class="p-badge"><span class="pill-dark" id="rv-score"></span></div>
-        <div class="p-ctrl"><button type="button" class="icon-btn" id="rv-play" aria-label="Lecture">${icon("play")}</button>
-          <span class="p-time" id="rv-time"></span></div>
-      </div>
-      <div class="panel panel-pad">
-        <div class="tl" id="rv-tl"></div>
-        <div class="bounds" id="rv-bounds">
-          <label class="b">Début (s) <input class="input rv-num" type="number" data-field="start" step="0.1" min="0" inputmode="decimal"></label>
-          <label class="b">Fin (s) <input class="input rv-num" type="number" data-field="end" step="0.1" min="0" inputmode="decimal"></label>
-          <span class="b">Durée <b id="rv-dur"></b></span>
-          <span class="grow"></span>
-          <button type="button" class="btn btn-xs btn-ghost" id="rv-reset">${icon("rotate-ccw", "i-xs")}Bornes d'origine</button>
-        </div>
-      </div>
-      <div class="decide">
-        <button type="button" class="btn btn-ok" id="rv-accept">${icon("check")}Accepter<kbd>A</kbd></button>
-        <button type="button" class="btn btn-bad" id="rv-reject">${icon("x")}Refuser<kbd>R</kbd></button>
-        <button type="button" class="btn" id="rv-adjust">${icon("sliders-horizontal")}Ajuster</button>
-      </div>
-      <div class="shortcuts" id="rv-shortcuts">
-        <span><kbd>A</kbd> accepter</span><span><kbd>R</kbd> refuser</span>
-        <span><kbd>J</kbd> suivant</span><span><kbd>K</kbd> précédent</span>
-        <span><kbd>Espace</kbd> lecture / pause</span>
-      </div>
-      <div class="panel panel-pad"><div class="section-title">${icon("captions")}Transcription</div><div class="transcript" id="rv-transcript"></div></div>
-    </section>
-    <aside class="jury-col"><div class="panel panel-pad" id="rv-jury"></div></aside>
-  </div>`;
+function rvMomentRow(x, i) {
+  const name = rvDecisionName(x), b = rvBounds(x);
+  const chip = name ? `<span class="chip ${RV_DECISION_CHIP[name]}">${esc(RV_DECISION_LABELS[name])}</span>` : "";
+  return `<button type="button" class="rv-item ${i === rv.cur ? "on" : ""} ${esc(name || "")}" data-moment="${i}"${i === rv.cur ? ` aria-current="true"` : ""}>
+    <span class="rv-score ${x.score >= 80 ? "hi" : x.score >= 70 ? "mid" : ""}">${x.score == null ? "–" : fr(x.score)}</span>
+    <span class="rv-item-body"><span class="rv-hook">${esc(x.hook_text || `Moment ${x.id}`)}</span>
+      <span class="rv-meta"><span class="mono">${esc(rvClock(b.start))}</span><span>${fr(b.end - b.start)} s</span>${x.confidence != null ? `<span title="Confiance du jury">confiance ${fr(x.confidence)} %</span>` : ""}${x.parts_total > 1 ? `<span>${x.parts_total} parties</span>` : ""}${chip}</span></span>
+  </button>`;
 }
 
-function rvPaintList(body) {
-  $("#rv-list", body).innerHTML = rv.moments.map((x, i) => {
-    const name = rvDecisionName(x), b = rvBounds(x);
-    const chip = name ? `<span class="chip ${RV_DECISION_CHIP[name]}">${esc(RV_DECISION_LABELS[name])}</span>` : "";
-    return `<button type="button" class="m-item ${i === rv.cur ? "on" : ""} ${esc(name || "")}" data-moment="${i}">
-      <span class="score ${x.score >= 80 ? "hi" : x.score >= 70 ? "mid" : ""}">${x.score == null ? "–" : fr(x.score)}</span>
-      <span style="min-width:0"><span class="m-hook" style="display:block">${esc(x.hook_text || `Moment ${x.id}`)}</span>
-        <span class="m-meta"><span class="mono">${esc(rvClock(b.start))}</span><span>${fr(b.end - b.start)} s</span>${x.confidence != null ? `<span title="Confiance du jury">confiance ${fr(x.confidence)} %</span>` : ""}${x.parts_total > 1 ? `<span>${x.parts_total} parties</span>` : ""}${chip}</span></span>
-    </button>`;
-  }).join("");
-  $$("[data-moment]", body).forEach((b) => (b.onclick = () => { rvGo(+b.dataset.moment); rvPaintMoment(body); }));
-}
-
-function rvPaintTimeline(body) {
-  const m = rvMoment(), dur = rvDuration(), tl = $("#rv-tl", body);
-  if (!dur) {
-    tl.innerHTML = `<p class="reason bad">${esc(m.source_duration_error || "source_duration : donnée absente de la réponse.")}</p>`;
-    return;
-  }
-  const w = rv.window, span = w.b - w.a;
+function rvTimeline(m) {
+  const dur = rvDuration();
+  if (!dur) return `<p class="reason bad">${esc(m.source_duration_error || "source_duration : donnée absente de la réponse.")}</p>`;
+  const w = rv.window, span = w.b - w.a, d = rv.draft;
   const markers = rv.moments.map((x, i) => {
     const b = rvBounds(x);
     return `<span class="mk ${i === rv.cur ? "on" : ""} ${esc(rvDecisionName(x) || "")}" data-moment="${i}" title="${esc(x.hook_text || "")}" style="left:${(b.start / dur) * 100}%;width:${((b.end - b.start) / dur) * 100}%"></span>`;
   }).join("");
   const ticks = [0, 1, 2, 3, 4].map((k) => `<span>${esc(rvClock(w.a + (span * k) / 4))}</span>`).join("");
-  tl.innerHTML = `<div class="row" style="margin-bottom:8px;font-size:12px"><span class="muted">Vidéo entière · ${esc(rvClock(dur))}</span></div>
+  const t = rvTime();
+  return `<div class="rv-tl-head muted">Vidéo entière · ${esc(rvClock(dur))}</div>
     <div class="tl-overview" id="rv-ov">${markers}</div>
     <div class="tl-zoom" id="rv-zoom">
-      <div class="sel-range" id="rv-sel"><span class="grip l" data-handle="start" role="slider" aria-label="Début du moment" tabindex="0"></span><span class="grip r" data-handle="end" role="slider" aria-label="Fin du moment" tabindex="0"></span></div>
-      <div class="playhead" id="rv-ph"></div><div class="tl-ticks">${ticks}</div></div>`;
-  $$("#rv-ov [data-moment]", tl).forEach((k) => (k.onclick = () => { rvGo(+k.dataset.moment); rvPaintMoment(body); }));
-  $$("[data-handle]", tl).forEach((g) => g.addEventListener("pointerdown", (e) => rvDrag(e, g, body)));
+      <div class="sel-range${rv.dragging ? " dragging" : ""}" id="rv-sel" style="left:${((d.start - w.a) / span) * 100}%;width:${((d.end - d.start) / span) * 100}%"><span class="grip l" id="rv-grip-start" data-handle="start" role="slider" aria-label="Début du moment" aria-valuenow="${d.start}" tabindex="0"></span><span class="grip r" id="rv-grip-end" data-handle="end" role="slider" aria-label="Fin du moment" aria-valuenow="${d.end}" tabindex="0"></span></div>
+      <div class="playhead" id="rv-ph" style="left:${((t - w.a) / span) * 100}%"></div><div class="tl-ticks">${ticks}</div></div>`;
 }
 
-/* Poignee glissee : met a jour le brouillon, les champs numeriques et le lecteur. */
-function rvDrag(e, grip, body) {
-  e.preventDefault();
-  const which = grip.dataset.handle, zoom = $("#rv-zoom", body), sel = $("#rv-sel", body);
-  grip.setPointerCapture(e.pointerId);
-  sel.classList.add("dragging");
-  const move = (ev) => {
-    const r = zoom.getBoundingClientRect(), w = rv.window;
-    rvSetBound(which, rvRound(w.a + ((ev.clientX - r.left) / r.width) * (w.b - w.a)));
-    rvPaintBounds(body);
-    rvSeek(body, rv.draft[which]);
-  };
-  const up = () => {
-    grip.removeEventListener("pointermove", move);
-    grip.removeEventListener("pointerup", up);
-    grip.removeEventListener("pointercancel", up);
-    sel.classList.remove("dragging");
-  };
-  grip.addEventListener("pointermove", move);
-  grip.addEventListener("pointerup", up);
-  grip.addEventListener("pointercancel", up);
+/* Instant affiche : la lecture, bornee au brouillon. */
+function rvTime() {
+  const d = rv.draft;
+  return Math.max(d.start, Math.min(d.end, rv.t == null ? d.start : rv.t));
+}
+
+function rvLayout() {
+  const m = rvMoment(), d = rv.draft, dirty = rvDirty(), t = rvTime();
+  const dur = rvDuration();
+  const jury = `<div class="rv-jury-head"><div><div class="section-title">Justification du jury</div><div class="muted">moment #${m.id}${m.parts_total > 1 ? ` · ${m.parts_total} parties` : ""}</div></div>
+      <div class="rv-big">${m.score == null ? "–" : fr(m.score)}<small>/100</small></div></div>
+    ${m.justification ? `<p class="rv-why">${esc(m.justification)}</p>` : `<p class="reason bad">justification : aucune donnée pour ce moment.</p>`}
+    <div class="rv-label">Confiance du jury</div>
+    <div id="rv-confidence">${juryConfidenceHtml(m.confidence, m.judge_confidences)}</div>
+    ${m.hook_text ? `<div class="rv-label">Accroche proposée</div><p>${esc(m.hook_text)}</p>` : ""}`;
+  return `<div class="rv-layout" data-rv-video="${esc(rv.videoId)}">
+    <aside class="rv-side"><div class="section-head"><h2>Proposés par le jury</h2><span class="n">${rv.moments.length}</span></div>
+      <div class="rv-list" id="rv-list">${rv.moments.map(rvMomentRow).join("")}</div></aside>
+    <section class="rv-main">
+      <div class="rv-player" id="rv-player">
+        <video id="rv-media" src="${esc(m.preview_url)}" preload="metadata" playsinline></video>
+        <div class="p-badge"><span class="rv-pill" id="rv-score">${m.score == null ? "sans score" : `score ${fr(m.score)}`}</span></div>
+        <div class="p-ctrl"><button type="button" class="btn-icon rv-play" id="rv-play" aria-label="${rv.playing ? "Pause" : "Lecture"}">${icon(rv.playing ? "pause" : "play")}</button>
+          <span class="p-time" id="rv-time">${esc(rvClock(t))} · ${fr(t - d.start)} / ${fr(d.end - d.start)} s</span></div>
+      </div>
+      <div class="decide">
+        <button type="button" class="btn rv-ok" id="rv-accept"${rv.busy ? " disabled" : ""}>${icon("check", "i-sm")}Accepter<kbd class="kbd">A</kbd></button>
+        <button type="button" class="btn rv-bad" id="rv-reject"${rv.busy ? " disabled" : ""}>${icon("x", "i-sm")}Refuser<kbd class="kbd">R</kbd></button>
+        <button type="button" class="btn" data-variant="outline" id="rv-adjust"${dirty && !rv.busy ? "" : " disabled"}>${icon("sliders-horizontal", "i-sm")}Ajuster</button>
+      </div>
+      <div class="rv-card">
+        <div class="tl" id="rv-tl">${rvTimeline(m)}</div>
+        <div class="bounds" id="rv-bounds">
+          <label class="b">Début (s) <input class="input rv-num" type="number" data-field="start" step="0.1" min="0"${dur ? ` max="${dur}"` : ""} inputmode="decimal" value="${d.start}"></label>
+          <label class="b">Fin (s) <input class="input rv-num" type="number" data-field="end" step="0.1" min="0"${dur ? ` max="${dur}"` : ""} inputmode="decimal" value="${d.end}"></label>
+          <span class="b">Durée <b id="rv-dur">${fr(d.end - d.start, 1)} s</b></span>
+          <span class="grow"></span>
+          <button type="button" class="btn" data-variant="ghost" data-size="sm" id="rv-reset"${dirty ? "" : " disabled"}>${icon("rotate-ccw", "i-xs")}Bornes d'origine</button>
+        </div>
+      </div>
+      <div class="shortcuts" id="rv-shortcuts">
+        <span><kbd class="kbd">A</kbd> accepter</span><span><kbd class="kbd">R</kbd> refuser</span>
+        <span><kbd class="kbd">J</kbd> suivant</span><span><kbd class="kbd">K</kbd> précédent</span>
+        <span><kbd class="kbd">Espace</kbd> lecture / pause</span>
+      </div>
+      <div class="rv-card"><div class="section-head"><h2>Transcription</h2></div><div class="transcript" id="rv-transcript">${m.transcript
+        ? `<p>${esc(m.transcript)}</p>`
+        : `<p class="reason bad">${esc(m.transcript_error || "transcript : donnée absente de la réponse.")}</p>`}</div></div>
+    </section>
+    <aside class="rv-card rv-jury" id="rv-jury">${jury}</aside>
+  </div>`;
+}
+
+function rvView(candidates) {
+  return `${rvToolbar(candidates)}${rvLayout()}`;
+}
+
+/* ---------- Interactions ---------- */
+
+/* Navigation entre moments (J / K, liste, reperes de la timeline). */
+function rvGo(i) {
+  if (!rv.moments || !rv.moments.length) return;
+  rv.cur = (i + rv.moments.length) % rv.moments.length;
+  rvResetDraft();
+  const media = rv.body && $("#rv-media", rv.body);
+  if (media && media.readyState > 0) media.currentTime = rv.draft.start;
+  renderCurrent();
+}
+
+function rvSeek(t) {
+  const media = rv.body && $("#rv-media", rv.body);
+  rv.t = t;
+  if (media && media.readyState > 0) media.currentTime = t;
 }
 
 /* Fixe une borne du brouillon dans [0, duree de la source] avec un ecart minimal. */
@@ -265,82 +296,48 @@ function rvSetBound(which, value) {
   else d.end = rvRound(Math.min(max, Math.max(value, d.start + RV_MIN_GAP)));
 }
 
-function rvPaintBounds(body) {
-  const d = rv.draft, w = rv.window, dirty = rvDirty();
-  $$("[data-field]", body).forEach((f) => {
-    if (document.activeElement !== f) f.value = d[f.dataset.field];
-    if (rvDuration()) f.max = rvDuration();
-  });
-  $("#rv-dur", body).textContent = `${fr(d.end - d.start, 1)} s`;
-  $("#rv-adjust", body).disabled = !dirty;
-  $("#rv-reset", body).disabled = !dirty;
-  const sel = $("#rv-sel", body);
-  if (sel && w) {
-    const span = w.b - w.a;
-    sel.style.left = `${((d.start - w.a) / span) * 100}%`;
-    sel.style.width = `${((d.end - d.start) / span) * 100}%`;
-  }
+/* Poignee glissee : met a jour le brouillon (les champs, la selection et le lecteur suivent au rendu). */
+function rvDrag(e, grip) {
+  e.preventDefault();
+  const which = grip.dataset.handle;
+  grip.setPointerCapture(e.pointerId);
+  rv.dragging = true;
+  const move = (ev) => {
+    const r = $("#rv-zoom", rv.body).getBoundingClientRect(), w = rv.window;
+    rvSetBound(which, rvRound(w.a + ((ev.clientX - r.left) / r.width) * (w.b - w.a)));
+    rvSeek(rv.draft[which]);
+    renderCurrent();
+  };
+  const up = () => {
+    grip.removeEventListener("pointermove", move);
+    grip.removeEventListener("pointerup", up);
+    grip.removeEventListener("pointercancel", up);
+    rv.dragging = false;
+    renderCurrent();
+  };
+  grip.addEventListener("pointermove", move);
+  grip.addEventListener("pointerup", up);
+  grip.addEventListener("pointercancel", up);
 }
 
-function rvSeek(body, t) {
-  const media = $("#rv-media", body);
-  if (media && media.readyState > 0) media.currentTime = t;
-}
-
-function rvPaintMoment(body) {
-  const m = rvMoment(), d = rv.draft;
-  rvPaintList(body);
-  rvPaintTimeline(body);
-  rvPaintBounds(body);
-  $("#rv-score", body).textContent = m.score == null ? "sans score" : `score ${fr(m.score)}`;
-  $("#rv-transcript", body).innerHTML = m.transcript
-    ? `<p>${esc(m.transcript)}</p>`
-    : `<p class="reason bad">${esc(m.transcript_error || "transcript : donnée absente de la réponse.")}</p>`;
-  $("#rv-jury", body).innerHTML = `<div class="row" style="margin-bottom:16px;align-items:flex-end">
-      <div><div class="section-title" style="margin:0">Justification du jury</div><div class="muted" style="font-size:12px">moment #${m.id}${m.parts_total > 1 ? ` · ${m.parts_total} parties` : ""}</div></div>
-      <span class="grow"></span><div class="big-num" style="font-size:44px">${m.score == null ? "–" : fr(m.score)}<small>/100</small></div></div>
-    ${m.justification ? `<p class="judge-why" style="font-size:14px;color:var(--text-2)">${esc(m.justification)}</p>` : `<p class="reason bad">justification : aucune donnée pour ce moment.</p>`}
-    <div class="field-label" style="margin:16px 0 4px">Confiance du jury</div>
-    <div id="rv-confidence">${juryConfidenceHtml(m.confidence, m.judge_confidences)}</div>
-    ${m.hook_text ? `<div class="field-label" style="margin:16px 0 4px">Accroche proposée</div><p>${esc(m.hook_text)}</p>` : ""}`;
-  const media = $("#rv-media", body);
-  const start = () => { media.currentTime = d.start; };
-  if (media.readyState > 0) start(); else media.addEventListener("loadedmetadata", start, { once: true });
-  rvPaintTime(body);
-}
-
-/* Navigation entre moments (J / K, liste, repères de la timeline). */
-function rvGo(i) {
-  if (!rv.moments || !rv.moments.length) return;
-  rv.cur = (i + rv.moments.length) % rv.moments.length;
-  rvResetDraft();
-  if (rv.body) rvPaintMoment(rv.body);
-}
-
-function rvPaintTime(body) {
-  const media = $("#rv-media", body), d = rv.draft;
-  if (!media || !d) return;
-  const t = Math.max(d.start, Math.min(d.end, media.currentTime || d.start));
-  $("#rv-time", body).textContent = `${rvClock(t)} · ${fr(t - d.start)} / ${fr(d.end - d.start)} s`;
-  const w = rv.window, ph = $("#rv-ph", body);
-  if (ph && w) ph.style.left = `${((t - w.a) / (w.b - w.a)) * 100}%`;
-}
-
-/* Lecteur cale sur le moment : jamais hors de [debut, fin] du brouillon. */
+/* Lecteur cale sur le moment : jamais hors de [debut, fin] du brouillon. Le <video> survit aux morphs :
+   ses ecouteurs ne sont poses qu'une fois. */
 function rvWirePlayer(body) {
-  const media = $("#rv-media", body), play = $("#rv-play", body);
+  const media = $("#rv-media", body);
+  if (!media || rvWired.has(media)) return;   // pas d'attribut data-* : le morph le retirerait
+  rvWired.add(media);
+  media.addEventListener("loadedmetadata", () => { if (rv.draft) media.currentTime = rv.draft.start; });
   media.addEventListener("timeupdate", () => {
     const d = rv.draft;
     if (!d) return;
     if (media.currentTime >= d.end) { media.pause(); media.currentTime = d.start; }
     else if (media.currentTime < d.start - 0.3) media.currentTime = d.start;
-    rvPaintTime(body);
+    rv.t = media.currentTime;
+    renderCurrent();
   });
-  media.addEventListener("play", () => { play.innerHTML = icon("pause"); });
-  media.addEventListener("pause", () => { play.innerHTML = icon("play"); });
+  media.addEventListener("play", () => { rv.playing = true; renderCurrent(); });
+  media.addEventListener("pause", () => { rv.playing = false; renderCurrent(); });
   media.addEventListener("error", () => toast({ kind: "bad", title: "Lecture impossible", body: `La vidéo source de ${rv.videoId} n'a pas pu être chargée.`, ms: 7000 }));
-  play.onclick = () => rvTogglePlay(body);
-  $("#rv-player", body).addEventListener("click", (e) => { if (!e.target.closest(".p-ctrl")) rvTogglePlay(body); });
 }
 
 function rvTogglePlay(body) {
@@ -351,19 +348,33 @@ function rvTogglePlay(body) {
   media.play().catch((err) => toastError("Lecture impossible", err));
 }
 
-function rvWireControls(body) {
-  $$("[data-field]", body).forEach((f) => (f.onchange = () => {
-    const which = f.dataset.field, value = parseFloat(f.value);
-    if (Number.isNaN(value) || value < 0) {
-      toast({ kind: "bad", title: "Borne invalide", body: "Saisis un nombre de secondes positif.", ms: 4000 });
-    } else {
-      rvSetBound(which, rvRound(value));
-      rvSeek(body, rv.draft[which]);
-    }
-    f.value = rv.draft[which];
-    rvPaintBounds(body);
-  }));
-  $("#rv-reset", body).onclick = () => { rvResetDraft(); rvPaintMoment(body); };
+/* Accepter : avec des bornes modifiees, la decision est « ajustée » (bornes gardees dans review.json). */
+const rvAccept = () => rvDecide(rvDirty() ? "adjusted" : "accepted");
+
+/* Gestionnaires poses apres chaque morph (les noeuds neufs n'ont pas encore les leurs). */
+function rvWire(body) {
+  rvWirePlayer(body);
+  $$("[data-moment]", body).forEach((b) => (b.onclick = () => rvGo(+b.dataset.moment)));
+  $$("[data-handle]", body).forEach((g) => (g.onpointerdown = (e) => rvDrag(e, g)));
+  $$("[data-field]", body).forEach((f) => {
+    f.oninput = () => { rv.editing = true; };
+    f.onblur = () => { rv.editing = false; };
+    f.onchange = () => {
+      const which = f.dataset.field, value = parseFloat(f.value);
+      rv.editing = false;
+      if (Number.isNaN(value) || value < 0) {
+        toast({ kind: "bad", title: "Borne invalide", body: "Saisis un nombre de secondes positif.", ms: 4000 });
+      } else {
+        rvSetBound(which, rvRound(value));
+        rvSeek(rv.draft[which]);
+      }
+      f.value = rv.draft[which];
+      renderCurrent();
+    };
+  });
+  $("#rv-play", body).onclick = () => rvTogglePlay(body);
+  $("#rv-player", body).onclick = (e) => { if (!e.target.closest(".p-ctrl")) rvTogglePlay(body); };
+  $("#rv-reset", body).onclick = () => { rvResetDraft(); renderCurrent(); };
   $("#rv-accept", body).onclick = () => rvAccept();
   $("#rv-reject", body).onclick = () => rvDecide("rejected");
   $("#rv-adjust", body).onclick = () => rvDecide("adjusted");
@@ -371,23 +382,12 @@ function rvWireControls(body) {
   $("#rv-video", body).onchange = (e) => { location.hash = `#/review/${encodeURIComponent(e.target.value)}`; };
 }
 
-/* Accepter : avec des bornes modifiees, la decision est « ajustée » (bornes gardees dans review.json). */
-const rvAccept = () => rvDecide(rvDirty() ? "adjusted" : "accepted");
-
-/* Bouton « lancer le rendu » : inactif tant que des moments attendent, raison affichee. */
-function rvPaintGate(body) {
-  const reason = rvBlockedReason(), btn = $("#rv-render", body), box = $("#rv-reason", body);
-  btn.disabled = Boolean(reason);
-  box.hidden = !reason;
-  box.textContent = reason || "";
-}
-
 /* ---------- Raccourcis clavier : A R J K espace ---------- */
 document.addEventListener("keydown", (e) => {
   if (currentScreen !== "review" || !rv.moments || !rv.body) return;
-  if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector(".modal.show")) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector("dialog[open]") || document.querySelector(".modal.show")) return;
   const target = e.target;
-  if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+  if (target && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)) return;
   const key = e.key.toLowerCase();
   if (key === "a") rvAccept();
   else if (key === "r") rvDecide("rejected");
@@ -401,20 +401,24 @@ document.addEventListener("keydown", (e) => {
 /* ---------- Ecran ---------- */
 Screens.review = {
   render(body, store) {
+    const section = body.closest(".screen");
+    if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
     const candidates = (store.videos || []).filter((v) => v.status === "awaiting_review");
     const id = rvHashVideo() || (candidates.find((v) => v.video_id === rv.videoId) || candidates[0] || {}).video_id || null;
+    rv.body = null;
     if (!id) {
-      rv.videoId = null; rv.moments = null; rv.body = null;
-      body.innerHTML = emptyState("sparkles", "Aucun moment à valider", "Ajoute une vidéo : ses moments à valider apparaîtront ici.");
+      rv.videoId = null; rv.moments = null;
+      morph(body, rvEmptyView(store.videos));
       return;
     }
     if (id !== rv.videoId) {
-      rv.videoId = id; rv.moments = null; rv.error = null; rv.body = null; rv.loading = false;
-      body.innerHTML = `<div class="skeleton skeleton-line"></div><div class="skeleton skeleton-card"></div>`;
+      rv.videoId = id; rv.moments = null; rv.error = null; rv.loading = false; rv.playing = false;
+      morph(body, `<div class="skeleton skeleton-line"></div><div class="skeleton skeleton-card"></div>`);
     }
     if (rv.error) {
-      rv.body = null;
-      body.innerHTML = emptyState("circle-alert", "Moments indisponibles", String(rv.error.message || rv.error));
+      morph(body, `<div class="alert" data-variant="destructive" role="alert">${icon("circle-alert")}<h2>Moments indisponibles</h2><section>${esc(String(rv.error.message || rv.error))}
+        <div><button type="button" class="btn" data-variant="outline" data-size="sm" id="rv-retry">${icon("rotate-ccw", "i-xs")}Réessayer</button></div></section></div>`);
+      $("#rv-retry", body).onclick = () => { rv.error = null; rv.moments = null; renderCurrent(); };
       return;
     }
     if (rv.moments === null) {
@@ -422,22 +426,12 @@ Screens.review = {
       return;
     }
     if (!rv.moments.length) {
-      rv.body = null;
-      body.innerHTML = emptyState("sparkles", "Aucun moment proposé", `Le jury n'a retenu aucun moment pour ${id}.`);
+      morph(body, rvEmptyView(store.videos, `Le jury n'a retenu aucun moment pour ${id}.`));
       return;
     }
-    // Les evenements SSE re-rendent l'ecran : on ne reconstruit pas le lecteur pour autant.
-    if (rv.body !== body || !$(".review-layout", body) || body.dataset.rvVideo !== id) {
-      body.dataset.rvVideo = id;
-      rv.body = body;
-      body.innerHTML = rvLayout(candidates.length ? candidates : [{ video_id: id }]);
-      hydrateIcons(body);
-      rvWirePlayer(body);
-      rvWireControls(body);
-      rvPaintMoment(body);
-    } else {
-      rvPaintList(body);
-    }
-    rvPaintGate(body);
+    rv.body = body;
+    if (rv.editing) return;   // une borne en cours de saisie ne doit pas etre ecrasee par un evenement SSE
+    morph(body, rvView(candidates.length ? candidates : [{ video_id: id }]));
+    rvWire(body);
   },
 };
