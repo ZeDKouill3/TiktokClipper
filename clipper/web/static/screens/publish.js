@@ -167,16 +167,27 @@ document.addEventListener("clipper:event", () => {
 
 /* ---------- Rendu ---------- */
 
-function pubPost(c, extra) {
+/* État d'une carte du calendrier (couleur) : publié, échec, ou programmé (tout le reste : approuvé, planifié,
+   programmé sur la plateforme pas encore en ligne, en attente du compte). Lu depuis le statut déjà calculé par
+   l'API (pubStatusOf), jamais recalculé ici. */
+function pubPostState(c) {
+  if (c.publish_status === "approved") return "scheduled";
+  const cls = pubStatusOf(c).cls;
+  return cls === "bad" ? "failed" : cls === "ok" ? "published" : "scheduled";
+}
+
+/* Carte d'une publication dans le calendrier (maquette v3 : heure, titre sur 2 lignes, compte · service). `extra`
+   s'ajoute après l'heure (pastille de statut en vue Jour). */
+function calPostHtml(c, extra) {
   // Une programmation « à vérifier » (post peut-être déjà sur TikTok, publication-I1) ne se replanifie pas en la glissant.
   const draggable = (c.publish_status === "approved" || c.publish_status === "scheduled" || c.publish_status === "failed") && !c.missing && !c.to_verify;
-  const icoName = c.publish_status === "published" ? "circle-check" : c.publish_status === "failed" ? "circle-alert" : "";
-  return `<div class="post ${esc(c.publish_status)}${c.missing ? " missing" : ""}" data-post="${esc(pubKey(c))}" draggable="${draggable}" tabindex="0" role="button" aria-label="Ouvrir le clip ${esc(pubTitle(c))}" title="${esc(pubTitle(c))}">
-    <div class="mini-clip">${c.video_url ? `<img loading="lazy" decoding="async" width="36" height="64" src="${esc(c.thumbnail_url)}" alt="" tabindex="-1">` : ""}</div>
-    <span class="pt">${esc(c.missing ? `Clip introuvable (${c.clip_id})` : pubTitle(c))}</span>
-    ${c.account ? `<span class="pub-acct${c.waiting_reason ? " waiting" : ""}" data-post-account title="${esc(c.waiting_reason || `Compte : ${pubAccountLabel(c.account)}`)}">${esc(pubAccountLabel(c.account))}</span>` : ""}
-    ${c.missing ? "" : `<span class="pub-service" data-post-service>${esc(pubServiceName(c))}</span>`}
-    ${extra || ""}${icoName ? icon(icoName, "i-xs") : ""}</div>`;
+  const at = c.slot_at_paris || c.published_at_paris || "";
+  const state = pubPostState(c);
+  const parts = c.parts_total > 1 ? `<span class="muted">· ${esc(c.part)}/${esc(c.parts_total)}</span>` : "";
+  return `<div class="cal-post ${state}${c.missing ? " missing" : ""}" data-post="${esc(pubKey(c))}" draggable="${draggable}" tabindex="0" role="button" aria-label="Ouvrir le clip ${esc(pubTitle(c))}, ${esc(pubStatusOf(c).label)}" title="${esc(pubTitle(c))}">
+    <div class="when"><span class="dot"></span>${esc(at ? pubTime(at) : "sans heure")}${parts}${extra || ""}</div>
+    <div class="ttl">${esc(c.missing ? `Clip introuvable (${c.clip_id})` : pubTitle(c))}</div>
+    <div class="acc">${c.account ? `<span class="pub-acct${c.waiting_reason ? " waiting" : ""}" data-post-account title="${esc(c.waiting_reason || `Compte : ${pubAccountLabel(c.account)}`)}">${esc(pubAccountLabel(c.account))}</span>` : ""}${c.account && !c.missing ? " · " : ""}${c.missing ? "" : `<span class="pub-service" data-post-service>${esc(pubServiceName(c))}</span>`}</div></div>`;
 }
 
 /* Calendrier (TASK-ad4d) : Jour / Semaine / Mois. Le serveur regroupe déjà les publications par jour
@@ -225,28 +236,46 @@ function pubMonthBoxHtml(d, ymd) {
   </div>`;
 }
 
+/* Bouton « + » d'un jour à venir (aujourd'hui compris) : ouvre « Nouvelle publication » à cette date. */
+const pubNewAtButton = (ymd) => (ymd >= pubToday()
+  ? `<button type="button" class="cal-free" data-new-at="${esc(ymd)}" aria-label="Nouvelle publication le ${esc(pubFmt(ymd, { weekday: "long", day: "numeric", month: "long" }))}">${icon("plus", "i-sm")}</button>` : "");
+
 function pubDayBoxHtml(d, ymd) {
   const items = pubDayItems(d, ymd);
   const count = items.filter((it) => !it.__free).length;
   const tier = pubBoxClass(count);
   const body = items.map((it) => (it.__free ? pubFreeSlot(it)
     : tier === "mini" ? pubMiniRow(it)
-    : pubPost(it, `<span class="pub-day-time">${esc(pubTime(it.slot_at_paris || it.published_at_paris))}</span>`))).join("");
-  const cls = [tier, ymd === pubToday() ? "today" : ""].filter(Boolean).join(" ");
+    : calPostHtml(it))).join("");
+  const cls = [tier, ymd === pubToday() ? "today" : ymd < pubToday() ? "past" : ""].filter(Boolean).join(" ");
   return `<div class="cal-day${cls ? ` ${cls}` : ""}" data-date="${esc(ymd)}">
-    <div class="cal-day-h"><span class="n">${esc(pubFmt(ymd, { day: "numeric" }))}</span>${count ? `<span class="cal-day-count">${count}</span>` : ""}</div>
-    <div class="cal-day-body">${body}</div>
+    <div class="cal-day-body">${body}</div>${pubNewAtButton(ymd)}
   </div>`;
 }
 
 /* Semaine : une case par jour (toutes ses publications, mises à l'échelle avec leur nombre) plutôt qu'une
    case par heure (TASK-ad4d, remplace la grille horaire de TASK-5c00). Pas de colonne d'heure (TASK-460904227d2f,
-   reste de l'ancienne grille horaire) : sept colonnes, une par jour. */
+   reste de l'ancienne grille horaire) : sept colonnes, une par jour. Chaque jour : numéro, jour, compte de posts
+   dans l'en-tête, puis la case en dessous (même grille de 7 colonnes). */
 function pubCalendarWeek(d) {
   const days = Array.from({ length: 7 }, (_, i) => pubShift(d.week_start, i));
-  const head = days.map((ymd) => `<div class="cal-h${ymd === pubToday() ? " today" : ""}"><div class="d">${esc(pubFmt(ymd, { weekday: "short" }))}</div><div class="n">${esc(pubFmt(ymd, { day: "numeric" }))}</div></div>`).join("");
+  const count = (ymd) => { const box = (d.days || []).find((x) => x.date === ymd); return box ? box.posts.length : 0; };
+  const head = days.map((ymd) => `<div class="cal-h${ymd === pubToday() ? " today" : ""}"><b class="n">${esc(pubFmt(ymd, { day: "numeric" }))}</b><span class="d">${esc(pubFmt(ymd, { weekday: "short" }))}</span>${count(ymd) ? `<span class="cal-day-count">${count(ymd)}</span>` : ""}</div>`).join("");
   const body = days.map((ymd) => pubDayBoxHtml(d, ymd)).join("");
   return `<div class="cal-wrap"><div class="cal cal-boxes" id="pub-cal">${head}${body}</div></div>`;
+}
+
+/* Agenda (mobile, SPEC-7715 T6) : le calendrier en liste par jour, sous 900 px à la place de la grille (le CSS
+   choisit). Mêmes données, mêmes `data-post` (le tap ouvre la fiche) ; un jour sans publication le dit. */
+function agendaHtml(days) {
+  if (!days || !days.length) return "";
+  const row = (p) => `<div class="agenda-row" data-post="${esc(pubKey(p))}" tabindex="0" role="button" aria-label="Ouvrir le clip ${esc(pubTitle(p))}">
+      <span class="mono">${esc(pubTime(p.slot_at_paris || p.published_at_paris || "") || "sans heure")}</span>
+      <div class="grow"><div class="row-title">${esc(pubTitle(p))}</div><div class="row-sub">${esc(p.account ? pubAccountLabel(p.account) : "")}${p.account ? " · " : ""}${esc(pubServiceName(p))}</div></div>
+      ${pubChip(p)}</div>`;
+  return `<div class="agenda">${days.map((day) => `<section data-agenda-day="${esc(day.date)}">
+      <div class="section-head"><h2>${esc(pubFmt(day.date, { weekday: "long", day: "numeric", month: "long" }))}</h2><span class="n">${day.posts.length}</span></div>
+      ${day.posts.length ? `<div class="agenda-rows">${day.posts.map(row).join("")}</div>` : `<p class="inline-empty">Rien ce jour.</p>`}</section>`).join("")}</div>`;
 }
 
 /* Mois : grille classique (lundi en tête), pas de cible de dépôt (le serveur ne renvoie aucun créneau pour
@@ -268,11 +297,18 @@ function pubCalendarMonth(d) {
 function pubCalendarDay(d) {
   const ymd = d.range_start;
   const items = pubDayItems(d, ymd);
-  if (!items.length) return `<p class="reason">Aucune publication ce jour.</p>`;
+  if (!items.length) return `<p class="reason">Aucune publication ce jour.</p><div class="pub-day-list" id="pub-cal">${pubNewAtButton(ymd)}</div>`;
   const row = (it) => it.__free
     ? pubFreeSlot(it, `<span class="pub-day-time">${esc(pubTime(it.slot_at_paris))}</span><span class="muted">Créneau libre</span>`)
-    : pubPost(it, `<span class="pub-day-time">${esc(pubTime(it.slot_at_paris || it.published_at_paris))}</span>${pubChip(it)}`);
-  return `<div class="pub-day-list" id="pub-cal">${items.map(row).join("")}</div>`;
+    : calPostHtml(it, pubChip(it));
+  return `<div class="pub-day-list" id="pub-cal">${items.map(row).join("")}${pubNewAtButton(ymd)}</div>`;
+}
+
+/* Jours de l'agenda mobile : la semaine ou le mois affiché ; en Jour la liste l'est déjà ; en Mois seuls les jours
+   avec des publications (30 lignes « Rien ce jour » ne sont pas un agenda). */
+function pubAgendaDays(d) {
+  if (d.range === "day") return [];
+  return d.range === "month" ? (d.days || []).filter((day) => day.posts.length) : (d.days || []);
 }
 
 function pubCalendar(d) {
@@ -318,41 +354,47 @@ function pubToolbar(d) {
   return `<div class="toolbar pub-toolbar">
     <select class="input" id="pub-account" aria-label="Compte de publication"><option value="">Tous les comptes</option>${pubAccounts(d).map((a) => `<option value="${esc(a.id)}"${a.id === pubUi.account ? " selected" : ""}>${esc(pubAccountText(a))}</option>`).join("")}</select>
     <div class="seg" role="group" aria-label="Vue du calendrier">${PUB_RANGE_OPTS.map(([k, label]) => `<button type="button" class="${k === pubUi.range ? "on" : ""}" data-range="${k}" aria-pressed="${k === pubUi.range}">${label}</button>`).join("")}</div>
-    <div class="row" style="gap:4px"><button type="button" class="icon-btn" data-week="-1" aria-label="${esc(labels.prev)}"${d ? "" : " disabled"}>${icon("chevron-left")}</button>
-      <h2 style="font-size:16px;min-width:11ch;text-align:center">${esc(pubRangeLabel(d))}</h2>
-      <button type="button" class="icon-btn" data-week="1" aria-label="${esc(labels.next)}"${d ? "" : " disabled"}>${icon("chevron-right")}</button>
-      <button type="button" class="btn btn-xs btn-ghost" data-week="0">${esc(labels.today)}</button></div>
+    <div class="pub-nav"><button type="button" class="btn" data-variant="ghost" data-size="icon-sm" data-week="-1" aria-label="${esc(labels.prev)}"${d ? "" : " disabled"}>${icon("chevron-left")}</button>
+      <b class="pub-range">${esc(pubRangeLabel(d))}</b>
+      <button type="button" class="btn" data-variant="ghost" data-size="icon-sm" data-week="1" aria-label="${esc(labels.next)}"${d ? "" : " disabled"}>${icon("chevron-right")}</button>
+      <button type="button" class="btn" data-variant="ghost" data-size="sm" data-week="0">${esc(labels.today)}</button></div>
+    <span class="grow"></span>
+    <button type="button" class="btn" data-variant="outline" data-size="sm" data-pub-series>${icon("calendar-days", "i-sm")}Programmer une série</button>
+    <button type="button" class="btn" data-size="sm" data-pub-new>${icon("send", "i-sm")}Nouvelle publication</button>
+  </div>
+  <div class="toolbar pub-subbar">
+    <div class="legend"><span><i class="pub-leg info"></i>planifié / programmé</span><span><i class="pub-leg ok"></i>publié</span><span><i class="pub-leg bad"></i>échec</span></div>
+    <button type="button" class="btn" data-variant="ghost" data-size="icon-sm" data-pub-help aria-label="Aide : publier" title="${esc(PUB_HELP)}">${icon("info", "i-sm")}</button>
     <span class="grow"></span>
     <span class="pub-account-style">${style}</span>
-    <div class="legend"><span><i class="pub-leg info"></i>planifié / programmé</span><span><i class="pub-leg ok"></i>publié</span><span><i class="pub-leg bad"></i>échec</span></div>
   </div>`;
 }
 
-const PUB_HELP = `<div class="banner">${icon("info", "i-lg")}<p><b>Publier :</b> « Nouvelle publication » choisit un clip, un compte, puis Maintenant ou une date ; le worker publie sur TikTok (Chrome visible). Un arrêt (captcha, connexion expirée...) met la publication en échec avec une capture : « Réessayer » la relance. Le sélecteur en haut choisit le compte TikTok (ou tous les comptes). Les créneaux du style lié au compte sont facultatifs : ils servent à planifier un clip approuvé en le glissant sur le calendrier.</p></div>`;
+/* Aide de l'écran : une infobulle sur le bouton « i » de la barre (plus de bandeau permanent, SPEC-7715 E6). */
+const PUB_HELP = "Nouvelle publication choisit un clip, un compte, puis Maintenant ou une date ; le worker publie (Chrome visible). Un arrêt (captcha, connexion expirée...) met la publication en échec avec une capture : « Réessayer » la relance. Le sélecteur choisit le compte (ou tous les comptes). Les créneaux du style lié au compte sont facultatifs : ils servent à planifier un clip approuvé en le glissant sur le calendrier.";
 
 /* Zone principale : le calendrier de la semaine, toujours affiché (TASK-5c00), même sans compte choisi ni
    créneaux réguliers. Le message « aucun creneau » n'y apparait qu'une fois, en indication au-dessus du calendrier
    (jamais à sa place : la semaine garde ses publications passées et à venir). */
 function pubCalendarZone(d) {
   if (pubUi.error) return `<p class="reason bad">Chargement impossible : ${esc(pubUi.error.message || pubUi.error)}</p>`;
-  if (!d) return `<div class="skeleton skeleton-line"></div><div class="skeleton skeleton-card"></div>`;
+  if (!d) return `<div class="skeleton sk-line"></div><div class="skeleton sk-card"></div>`;
   const hint = d.reason ? `<p class="reason" data-no-slot>${esc(d.reason)} (facultatif : « Nouvelle publication » publie sans créneau.)</p>` : "";
-  return `<section>${hint}${pubCalendar(d)}</section>`;
+  return `<section>${hint}${pubCalendar(d)}${agendaHtml(pubAgendaDays(d))}</section>`;
 }
 
-/* Agencement de la maquette : a gauche « Nouvelle publication » et la liste unique « En attente » (TASK-5c00,
-   validés sans date + publications en cours/échecs) ; a droite le calendrier de la semaine (toujours affiché,
-   passé et futur : créneaux réguliers, programmations hors créneau, publiés et échecs). */
+/* Agencement v3 (SPEC-7715 E6) : le calendrier d'abord (barre d'outils puis grille), le rail « À faire » à droite
+   (plan de demain, en attente, en échec, refusés, supprimés) ; sous 1100 px le rail passe sous le calendrier. */
 function pubLayoutHtml(d, postsHtml) {
-  const main = `${pubToolbar(d)}${pubCalendarZone(d)}`;
-  return `<div class="pub-pad">${PUB_HELP}<div class="grid g-side pub-grid" style="align-items:start"><div class="stack pub-side">${postsHtml}</div><div class="stack pub-main">${main}</div></div></div>`;
+  return `<div class="pub-layout"><div class="pub-main">${pubToolbar(d)}${pubCalendarZone(d)}</div>
+    <aside class="pub-rail" data-pub-rail aria-label="À faire"><div class="section-head"><h2>À faire</h2></div>${postsHtml}</aside></div>`;
 }
 
 function pubView(body) {
   const html = pubLayoutHtml(pubUi.data, repHtml() + pubPostsSection());
   if (pubUi.html === html && body.childElementCount) return false; // rien de change : on garde les vignettes et le survol
   pubUi.html = html;
-  body.innerHTML = html;
+  morph(body, html); // rapprochement du DOM (ADR-a308) : focus, défilement et vignettes survivent à un événement SSE
   return true;
 }
 
@@ -448,8 +490,20 @@ function repStateChip(d) {
   return `<span class="chip pending">aucun plan</span>`;
 }
 
-function repSection(body) {
-  return `<section id="pub-plan" class="rep-plan"><div class="section-title">${icon("calendar-days")}Plan de demain</div>${body}</section>`;
+function repSection(body, chip) {
+  return `<section id="pub-plan" class="rep-plan"><div class="section-head"><h3>Plan de demain</h3>${chip || ""}</div>
+    <div class="card" data-size="sm"><section>${body}</section></div></section>`;
+}
+
+/* Pourquoi « Valider le plan » est grisé (SPEC-7715 R : un bouton grisé dit toujours pourquoi) ; "" s'il est actif. */
+function repValidateReason(d, accepted) {
+  if (pubRep.busy) return "Une opération sur le plan est en cours.";
+  if (d.status === "validated") return "Plan déjà validé : rien à valider.";
+  if (d.status === "error") return "Le calcul est en erreur : recalcule le plan d'abord.";
+  if (d.status === "absent") return "Aucun plan à valider : calcule-le d'abord.";
+  if (!(d.accounts || []).some((a) => a.lines.length)) return "Le plan est vide : aucune ligne à valider.";
+  if (!accepted) return "Toutes les lignes sont refusées : aucune publication à créer.";
+  return "";
 }
 
 function repHtml() {
@@ -457,23 +511,24 @@ function repHtml() {
   if (!d) {
     return repSection(pubRep.error ? `<p class="reason bad">Chargement impossible : ${esc(pubRep.error.message || pubRep.error)}</p>` : `<div class="skeleton skeleton-line"></div>`);
   }
-  const head = `<div class="row wrap" style="gap:8px;align-items:center"><span class="muted">${esc(d.day ? pubFmt(d.day, { weekday: "long", day: "numeric", month: "long" }) : "")}</span>${repStateChip(d)}</div>`;
+  const head = `<p class="muted rep-day">${esc(d.day ? pubFmt(d.day, { weekday: "long", day: "numeric", month: "long" }) : "")}</p>`;
   if (d.enabled === false) {
-    return repSection(`${head}<p class="muted" style="font-size:13px">La répartition automatique est désactivée (<code>[repartition] enabled = false</code>) : aucun plan n'est calculé.</p>`);
+    return repSection(`${head}<p class="muted">La répartition automatique est désactivée (<code>[repartition] enabled = false</code>) : aucun plan n'est calculé.</p>`, repStateChip(d));
   }
   const accounts = d.accounts || [];
   const proposed = d.status === "proposed";
   const accepted = proposed && accounts.some((a) => a.lines.some((l) => !l.refusal));
   const computed = d.computed_at ? `<p class="li-sub muted">calculé le ${esc(pubWhen(d.computed_at))}${d.computed_by === "web" ? " (à la demande)" : ""}</p>` : "";
   const failure = d.status === "error" ? `<p class="reason bad">Calcul en erreur : ${esc((d.error && d.error.message) || "erreur inconnue")}</p>` : "";
-  const absent = d.status === "absent" ? `<p class="muted" style="font-size:13px">Aucun plan calculé pour ce jour : « Calculer » le prépare tout de suite (le worker le fait chaque soir).</p>` : "";
+  const absent = d.status === "absent" ? `<p class="muted">Aucun plan calculé pour ce jour : « Calculer » le prépare tout de suite (le worker le fait chaque soir), puis tu le valides : rien ne part sans validation.</p>` : "";
   const last = d.last_error ? `<p class="reason bad">Dernière validation refusée : ${esc(d.last_error)}</p>` : "";
   const canCompute = !pubRep.busy && d.status !== "validated";
-  const buttons = `<div class="row wrap" style="gap:8px;margin:8px 0">
-    <button type="button" class="btn btn-xs" data-rep-compute ${canCompute ? "" : "disabled"}>${pubRep.busy === "compute" ? "Calcul en cours…" : (d.status === "absent" ? "Calculer" : "Recalculer")}</button>
-    <button type="button" class="btn btn-xs btn-primary" data-rep-validate ${!pubRep.busy && accepted ? "" : "disabled"}>${pubRep.busy === "validate" ? "Validation en cours…" : "Valider le plan"}</button></div>`;
+  const validateReason = repValidateReason(d, accepted);
+  const buttons = `<div class="rep-buttons">
+    <button type="button" class="btn" data-variant="outline" data-size="sm" data-rep-compute ${canCompute ? "" : "disabled"}>${pubRep.busy === "compute" ? "Calcul en cours…" : `${icon("wand-sparkles", "i-sm")}${d.status === "absent" ? "Calculer" : "Recalculer"}`}</button>
+    <button type="button" class="btn" data-size="sm" data-rep-validate${validateReason ? ` disabled title="${esc(validateReason)}"` : ""}>${pubRep.busy === "validate" ? "Validation en cours…" : "Valider le plan"}</button></div>`;
   const notes = (d.notes || []).map((n) => `<p class="li-sub muted">${esc(n)}</p>`).join("");
-  return repSection(`${head}${computed}${failure}${absent}${last}${buttons}${accounts.map((a) => repAccountHtml(d, a, proposed)).join("")}${notes}`);
+  return repSection(`${head}${computed}${failure}${absent}${last}${buttons}${accounts.map((a) => repAccountHtml(d, a, proposed)).join("")}${notes}`, repStateChip(d));
 }
 
 /* Une requête à la fois : pendant qu'elle court, les boutons sont désactivés et libellés « en cours ». */
@@ -550,37 +605,43 @@ function pubPostRow(p) {
   const mode = p.publish_mode === "scheduled" ? "programmée" : "maintenant";
   const when = p.tiktok_publish_at ? `en ligne le ${pubWhen(p.tiktok_publish_at)}` : (p.slot_at ? `${mode} · ${pubWhen(p.slot_at)}` : "");
   const detail = [when, p.account ? pubAccountLabel(p.account) : "", p.channel || "sans style"].filter(Boolean).join(" · ");
-  return `<div class="list-item pub-post-row" data-pub-row="${esc(pubKey(p))}">
+  return `<div class="pub-row" data-pub-row="${esc(pubKey(p))}">
     <div class="mini-clip">${p.thumbnail_url ? `<img loading="lazy" decoding="async" width="36" height="64" src="${esc(p.thumbnail_url)}" alt="">` : ""}</div>
-    <div class="li-main grow"><div class="li-title">${esc(pubTitle(p))}</div>
-      <div class="li-sub muted">${esc(detail)}</div>
-      ${pubNeedsMoment(p) ? `<div class="li-sub warn" data-needs-moment>choisis Maintenant ou une date (Modifier)</div>` : ""}
-      ${p.waiting_reason ? `<div class="li-sub warn" data-waiting-reason>${esc(p.waiting_reason)}</div>` : ""}
-      ${p.publish_error ? `<div class="li-sub bad">Échec : ${esc(p.publish_error)}</div>` : ""}
-      ${p.postponed_reason ? `<div class="li-sub muted">${esc(p.postponed_reason)}</div>` : ""}
+    <div class="pub-row-main"><div class="row-title">${esc(pubTitle(p))}</div>
+      <div class="row-sub muted">${esc(detail)}</div>
+      ${pubNeedsMoment(p) ? `<div class="row-sub warn" data-needs-moment>choisis Maintenant ou une date (Modifier)</div>` : ""}
+      ${p.waiting_reason ? `<div class="row-sub warn" data-waiting-reason>${esc(p.waiting_reason)}</div>` : ""}
+      ${p.publish_error ? `<div class="row-sub bad">Échec : ${esc(p.publish_error)}</div>` : ""}
+      ${p.postponed_reason ? `<div class="row-sub muted">${esc(p.postponed_reason)}</div>` : ""}
       ${p.capture_url ? `<a href="${esc(p.capture_url)}" target="_blank" rel="noopener">voir la capture d'écran</a>` : ""}</div>
     ${pubChip(p)}
-    <div class="row wrap" style="gap:6px">
-      ${pubNeedsMoment(p) ? `<button type="button" class="btn btn-xs btn-primary" data-publish-now="${esc(pubKey(p))}">Publier maintenant</button>` : ""}
-      ${p.publish_status === "failed" ? `<button type="button" class="btn btn-xs btn-primary" data-pub-retry>Réessayer</button>` : ""}
-      ${p.editable ? `<button type="button" class="btn btn-xs" data-pub-edit>Modifier</button><button type="button" class="btn btn-xs btn-ghost" data-pub-cancel>Annuler</button>` : ""}
+    <div class="pub-row-actions">
+      ${pubNeedsMoment(p) ? `<button type="button" class="btn" data-size="sm" data-publish-now="${esc(pubKey(p))}">Publier maintenant</button>` : ""}
+      ${p.publish_status === "failed" ? `<button type="button" class="btn" data-size="sm" data-pub-retry>Réessayer</button>` : ""}
+      ${p.editable ? `<button type="button" class="btn" data-variant="outline" data-size="sm" data-pub-edit>Modifier</button><button type="button" class="btn" data-variant="ghost" data-size="sm" data-pub-cancel>Annuler</button>` : ""}
     </div></div>`;
 }
 
-/* Liste unique « En attente » (TASK-5c00, SPEC-1ed3) : les clips validés sans date et les publications en
-   cours ou en échec ne sont listés qu'une fois ici (la section « À publier » faisait doublon avec celle-ci :
-   un clip validé sans date y apparaissait aussi, cf. `pubNeedsMoment`, avec son propre « Publier maintenant »). */
+/* Section du rail « À faire » : titre + compte, puis une carte (corps vide : état vide de la section). */
+function pubRailSection(id, title, count, body) {
+  return `<section${id ? ` id="${id}"` : ""}><div class="section-head"><h3>${title}</h3><span class="n">${count}</span></div>
+    <div class="card" data-size="sm"><section>${body}</section></div></section>`;
+}
+
+/* Rail « À faire » (SPEC-7715 E6) : « En attente » (clips validés sans date, publications en cours) ; « En échec »
+   à part, avec la raison, la capture et Réessayer ; puis les refusés et les supprimés de la plateforme. Un clip
+   n'est listé qu'une fois (TASK-5c00, SPEC-1ed3). Les boutons « Nouvelle publication » et « Programmer une série »
+   sont dans la barre du calendrier. */
 function pubPostsSection() {
-  const rows = pubPosts.data ? pubPosts.data.publications.filter((p) => pubIsOngoing(p) && (!pubUi.account || p.account === pubUi.account)) : [];
-  // Boutons sur leur propre ligne : dans le titre, ils debordaient sur la colonne de droite (colonne etroite).
-  const head = `<div class="section-title">${icon("inbox")}En attente <span class="more">${rows.length || ""}</span></div>
-    <div class="row wrap" style="gap:8px;margin-bottom:10px">
-    <button type="button" class="btn btn-primary btn-xs grow" data-pub-new>${icon("plus", "i-xs")}Nouvelle publication</button>
-    <button type="button" class="btn btn-xs grow" data-pub-series>${icon("calendar-days", "i-xs")}Programmer une série</button></div>`;
-  if (pubPosts.error) return `<section>${head}<p class="reason bad">Chargement impossible : ${esc(pubPosts.error.message || pubPosts.error)}</p></section>`;
-  if (!pubPosts.data) return `<section>${head}<div class="skeleton skeleton-line"></div></section>`;
-  return `<section>${head}${rows.length ? `<div class="panel" id="pub-posts">${rows.map(pubPostRow).join("")}</div>`
-    : `<p class="muted" style="font-size:13px">Aucune publication en attente : « Nouvelle publication » choisit un clip, le compte, maintenant ou à une date. Les publications terminées sont dans le calendrier.</p>`}</section>${pubRefusedSection()}${pubRemovedSection()}`;
+  if (pubPosts.error) return pubRailSection("", "En attente", "", `<p class="reason bad">Chargement impossible : ${esc(pubPosts.error.message || pubPosts.error)}</p>`);
+  if (!pubPosts.data) return pubRailSection("", "En attente", "", `<div class="skeleton sk-line"></div>`);
+  const rows = pubPosts.data.publications.filter((p) => pubIsOngoing(p) && (!pubUi.account || p.account === pubUi.account));
+  const waiting = rows.filter((p) => p.publish_status !== "failed"), failed = rows.filter((p) => p.publish_status === "failed");
+  const list = (items) => `<div class="pub-rows" id="pub-posts">${items.map(pubPostRow).join("")}</div>`;
+  const pending = pubRailSection("", "En attente", waiting.length, waiting.length ? list(waiting)
+    : `<p class="inline-empty">Aucune publication en attente : « Nouvelle publication » choisit un clip, le compte, maintenant ou à une date. Les publications terminées sont dans le calendrier.</p>`);
+  const broken = failed.length ? pubRailSection("pub-failed", "En échec", failed.length, list(failed)) : "";
+  return `${pending}${broken}${pubRefusedSection()}${pubRemovedSection()}`;
 }
 
 /* Clips refusés par TikTok à la vérification de contenu (TASK-7f582251f6c5) : retirés des clips disponibles, listés
@@ -588,11 +649,10 @@ function pubPostsSection() {
 function pubRefusedSection() {
   const rows = pubPosts.data ? (pubPosts.data.refused_by_platform || []).filter((p) => !pubUi.account || p.account === pubUi.account) : [];
   if (!rows.length) return "";
-  const row = (p) => `<div class="list-item"><div class="li-main"><div class="li-title">${esc(pubTitle(p))}</div>
-      <div class="li-sub bad">Refusé par TikTok : ${esc(p.error || "problème signalé à la vérification de contenu")}</div>
+  const row = (p) => `<div class="pub-row"><div class="pub-row-main"><div class="row-title">${esc(pubTitle(p))}</div>
+      <div class="row-sub bad">Refusé par TikTok : ${esc(p.error || "problème signalé à la vérification de contenu")}</div>
       ${p.capture_url ? `<a href="${esc(p.capture_url)}" target="_blank" rel="noopener">voir la capture d'écran</a>` : ""}</div></div>`;
-  return `<section id="pub-refused"><div class="section-title">${icon("circle-x")}Refusés par TikTok <span class="more">${rows.length}</span></div>
-    <div class="panel">${rows.map(row).join("")}</div></section>`;
+  return pubRailSection("pub-refused", "Refusés par TikTok", rows.length, `<div class="pub-rows">${rows.map(row).join("")}</div>`);
 }
 
 /* Posts supprimés à la main de la plateforme (TASK-5a7b750462c4) : sortis de la file, du calendrier et des
@@ -600,10 +660,9 @@ function pubRefusedSection() {
 function pubRemovedSection() {
   const rows = pubPosts.data ? (pubPosts.data.removed_from_platform || []).filter((p) => !pubUi.account || p.account === pubUi.account) : [];
   if (!rows.length) return "";
-  const row = (p) => `<div class="list-item"><div class="li-main"><div class="li-title">${esc(pubTitle(p))}</div>
-      <div class="li-sub muted">Supprimé de la plateforme${p.removed_at ? ` le ${esc(pubWhen(p.removed_at))}` : ""}${p.removed_reason ? ` : ${esc(p.removed_reason)}` : ""}</div></div></div>`;
-  return `<section id="pub-removed"><div class="section-title">${icon("trash-2")}Supprimés de la plateforme <span class="more">${rows.length}</span></div>
-    <div class="panel">${rows.map(row).join("")}</div></section>`;
+  const row = (p) => `<div class="pub-row"><div class="pub-row-main"><div class="row-title">${esc(pubTitle(p))}</div>
+      <div class="row-sub muted">Supprimé de la plateforme${p.removed_at ? ` le ${esc(pubWhen(p.removed_at))}` : ""}${p.removed_reason ? ` : ${esc(p.removed_reason)}` : ""}</div></div></div>`;
+  return pubRailSection("pub-removed", "Supprimés de la plateforme", rows.length, `<div class="pub-rows">${rows.map(row).join("")}</div>`);
 }
 
 async function pubPostCancel(p) {
@@ -809,7 +868,11 @@ async function pubFormSubmit(f, d) {
 }
 
 /* ouvre le formulaire ; `preset` { video_id, clip_id } prerempli depuis l'ecran Clips ; `edit` : une publication a modifier */
-async function pubOpenForm(preset, edit) {
+/* Heure proposée quand on clique « + » sur un jour : l'heure pleine d'après (+1 h de marge) aujourd'hui, midi
+   (heure de Paris) un autre jour ; le champ reste visible et modifiable. */
+const pubDayDefaultAt = (ymd) => (ymd === pubToday() ? pubSeriesDefaultStart() : `${ymd}T12:00`);
+
+async function pubOpenForm(preset, edit, opts) {
   let clips, data;
   try {
     [clips, data] = await Promise.all([api("/api/clips"), api("/api/publications")]);
@@ -821,8 +884,8 @@ async function pubOpenForm(preset, edit) {
     ytOptions: Object.assign({}, data.defaults.youtube.options, edit && edit.service === "youtube" ? edit.post_options : {}),
     ytTitle: edit && edit.service === "youtube" && edit.post_options && edit.post_options.title ? edit.post_options.title : (base ? (base.screen_title || "") : ""),
     ytMinMinutes: data.defaults.youtube.schedule_min_minutes, ytMaxDays: data.defaults.youtube.schedule_max_days,
-    mode: edit && edit.publish_mode === "scheduled" ? "scheduled" : "immediate",
-    at: edit && edit.publish_mode === "scheduled" && edit.slot_at ? pubLocalInput(edit.slot_at) : "",
+    mode: (edit && edit.publish_mode === "scheduled") || (opts && opts.day) ? "scheduled" : "immediate",
+    at: edit && edit.publish_mode === "scheduled" && edit.slot_at ? pubLocalInput(edit.slot_at) : (opts && opts.day ? pubDayDefaultAt(opts.day) : ""),
     caption: base ? (base.description || "") : "", tags: base ? (base.hashtags || []).join(" ") : "",
     minMinutes: data.defaults.schedule_min_minutes, maxDays: data.defaults.schedule_max_days,
     intervalH: 4, afterAt: null,
@@ -1516,26 +1579,35 @@ const pubCells = (root) => $$(".cal-c[data-slot-at]", root);
 const pubClearDrop = (root) => $$(".cal-c.drop", root).forEach((x) => x.classList.remove("drop"));
 const pubDroppable = (cell) => cell && !cell.classList.contains("past");
 
+/* Le rapprochement du DOM (morph) garde les noeuds d'un rendu à l'autre : un écouteur ajouté à chaque rendu
+   s'empilerait (un dépôt déclencherait N déplacements). pubOn remplace l'écouteur précédent du même type. */
+function pubOn(el, type, fn, opts) {
+  const known = el.__pubListeners || (el.__pubListeners = {});
+  if (known[type]) el.removeEventListener(type, known[type].fn, known[type].opts);
+  known[type] = { fn, opts };
+  el.addEventListener(type, fn, opts);
+}
+
 function pubWireMouse(body) {
-  $$(".post[draggable='true']", body).forEach((el) => {
-    el.addEventListener("dragstart", (e) => {
+  $$(".cal-post[draggable='true']", body).forEach((el) => {
+    pubOn(el, "dragstart", (e) => {
       if (pubUi.touching) { e.preventDefault(); return; }
       pubUi.dragKey = el.dataset.post;
       el.classList.add("dragging");
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", el.dataset.post);
     });
-    el.addEventListener("dragend", () => { el.classList.remove("dragging"); pubUi.dragKey = null; pubClearDrop(body); });
+    pubOn(el, "dragend", () => { el.classList.remove("dragging"); pubUi.dragKey = null; pubClearDrop(body); });
   });
   pubCells(body).forEach((cell) => {
-    cell.addEventListener("dragover", (e) => {
+    pubOn(cell, "dragover", (e) => {
       if (!pubUi.dragKey || !pubDroppable(cell)) return;
       e.preventDefault();
       pubClearDrop(body);
       cell.classList.add("drop");
     });
-    cell.addEventListener("dragleave", (e) => { if (!cell.contains(e.relatedTarget)) cell.classList.remove("drop"); });
-    cell.addEventListener("drop", (e) => {
+    pubOn(cell, "dragleave", (e) => { if (!cell.contains(e.relatedTarget)) cell.classList.remove("drop"); });
+    pubOn(cell, "drop", (e) => {
       e.preventDefault();
       const key = pubUi.dragKey || e.dataTransfer.getData("text/plain");
       pubUi.dragKey = null;
@@ -1546,7 +1618,7 @@ function pubWireMouse(body) {
 }
 
 function pubWireTouch(body) {
-  $$(".post[draggable='true']", body).forEach((el) => {
+  $$(".cal-post[draggable='true']", body).forEach((el) => {
     let timer = null, ghost = null, origin = null, over = null;
     const stop = () => {
       clearTimeout(timer); timer = null;
@@ -1558,7 +1630,7 @@ function pubWireTouch(body) {
       setTimeout(() => { pubUi.touching = false; }, 400);
     };
     const place = (t) => { ghost.style.left = `${t.clientX}px`; ghost.style.top = `${t.clientY}px`; };
-    el.addEventListener("touchstart", (e) => {
+    pubOn(el, "touchstart", (e) => {
       if (e.touches.length !== 1) return;
       const t = e.touches[0];
       origin = { x: t.clientX, y: t.clientY };
@@ -1568,13 +1640,13 @@ function pubWireTouch(body) {
         pubUi.dragKey = el.dataset.post;
         el.classList.add("dragging");
         ghost = el.cloneNode(true);
-        ghost.classList.add("post-ghost");
+        ghost.classList.add("cal-post-ghost");
         document.body.appendChild(ghost);
         place(t);
         if (navigator.vibrate) navigator.vibrate(15);
       }, PUB_HOLD_MS);
     }, { passive: true });
-    el.addEventListener("touchmove", (e) => {
+    pubOn(el, "touchmove", (e) => {
       const t = e.touches[0];
       if (timer) { if (Math.hypot(t.clientX - origin.x, t.clientY - origin.y) > PUB_SLOP_PX) { clearTimeout(timer); timer = null; } return; }
       if (!ghost) return;
@@ -1586,15 +1658,15 @@ function pubWireTouch(body) {
       pubClearDrop(body);
       if (over) over.classList.add("drop");
     }, { passive: false });
-    el.addEventListener("touchend", (e) => {
+    pubOn(el, "touchend", (e) => {
       if (!ghost) { clearTimeout(timer); timer = null; return; }
       e.preventDefault();
       const target = over, key = pubUi.dragKey;
       stop();
       if (target) pubDropOn(target, key);
     });
-    el.addEventListener("touchcancel", stop);
-    el.addEventListener("contextmenu", (e) => { if (ghost || pubUi.touching) e.preventDefault(); });
+    pubOn(el, "touchcancel", stop);
+    pubOn(el, "contextmenu", (e) => { if (ghost || pubUi.touching) e.preventDefault(); });
   });
 }
 
@@ -1653,10 +1725,12 @@ function pubWire(body) {
     el.onclick = open;
     el.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
   });
+  // « + » d'un jour : « Nouvelle publication » programmée à cette date (le champ date reste modifiable).
+  $$("[data-new-at]", body).forEach((b) => (b.onclick = () => pubOpenForm(null, null, { day: b.dataset.newAt })));
   pubWireMouse(body);
   pubWireTouch(body);
   if (pubUi.landed) {
-    const landed = $(`.cal-c [data-post="${pubUi.landed}"]`, body);
+    const landed = $(`[data-post="${pubUi.landed}"]`, body);
     if (landed) landed.classList.add("landed");
     pubUi.landed = null;
   }
@@ -1664,6 +1738,8 @@ function pubWire(body) {
 
 Screens.publish = {
   render(body) {
+    const section = body.closest(".screen");
+    if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
     if (!pubPosts.data && !pubPosts.loading) pubPostsLoad();
     else if (Date.now() - pubPosts.at > PUB_STALE_MS) pubPostsLoad();
     if (!pubRep.busy && Date.now() - pubRep.at > PUB_STALE_MS) repLoad();
