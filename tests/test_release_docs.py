@@ -188,18 +188,18 @@ def test_release_notes_have_the_expected_structure():
 @pytest.mark.skipif(not HAS_NOTES, reason=NO_NOTES_REASON)
 def test_release_notes_cover_the_upgrade_steps():
     text = _read(NOTES)
-    for needle in ("uv pip install", "config.toml", "[parts]", "rubric_path", "stats_interval_h",
-                   "réseau non résidentiel", "cookies", "captcha"):
+    for needle in ("uv pip install", "config.toml", "[repartition]", "lead_in_seconds", "default_channel",
+                   "réseau non résidentiel", "cookies", "captcha", "Installer.bat"):
         assert needle in text, f"manque dans les notes : {needle}"
 
 
 @pytest.mark.skipif(not HAS_NOTES, reason=NO_NOTES_REASON)
-def test_release_notes_upgrade_section_names_the_removed_parts_key_and_the_stats_default():
+def test_release_notes_upgrade_section_names_the_new_settings():
     text = _read(NOTES)
     upgrade = re.search(r"^## Mettre à jour depuis la .*?$(.*?)(?=^## )", text, re.S | re.M)
     assert upgrade, "section « Mettre à jour » absente"
     body = upgrade.group(1)
-    assert "[parts]" in body and "rubric_path" in body and "stats_interval_h" in body
+    assert "[repartition]" in body and "lead_in_seconds" in body and "default_channel" in body
 
 
 @pytest.mark.skipif(not HAS_NOTES, reason=NO_NOTES_REASON)
@@ -208,11 +208,6 @@ def test_release_notes_list_artifacts_of_the_current_version():
     assert f"clipper-{VERSION}-py3-none-any.whl" in text
     assert f"clipper-{VERSION}.tar.gz" in text
     assert f"/blob/{TAG}/" in text
-
-
-@pytest.mark.skipif(not HAS_NOTES, reason=NO_NOTES_REASON)
-def test_release_notes_use_a_neutral_channel_example():
-    assert "ma_chaine" in _read(NOTES)
 
 
 def test_0_2_0_release_notes_are_kept_with_their_themes():
@@ -280,13 +275,13 @@ def test_readme_portable_zip_points_to_the_release_with_the_current_version():
 def test_versions_row_for_the_current_version_names_the_release_headline():
     lines = _read(VERSIONS).splitlines()
     row = next(line for line in lines if line.startswith(f"| {TAG} "))
-    assert "Veille" in row
+    assert "Console v3" in row
 
 
 REQUIRED_CHANGELOG_TERMS = (
-    f"Clipper-portable-{VERSION}.zip", "Installer.bat", "mise à jour", "Veille", "Fiche par clip",
-    "Préchargement du téléchargement", "prefetch_download", "concurrent_fragments", "extract_batch",
-    "facecam_clip_face_margin", "click_timeout_s", "zero_view_alert_hours", "[action]", "twitch_access_workers",
+    f"Clipper-portable-{VERSION}.zip", "Installer.bat", "mise à jour", "Console v3", "Plan de demain",
+    "[repartition]", "lead_in_seconds", "default_channel", "moderation_risk_terms", "retention_min_n",
+    "Audit complet du 10/10", "docs/releases/v0.7.0.md",
 )
 
 
@@ -294,7 +289,3 @@ REQUIRED_CHANGELOG_TERMS = (
 def test_changelog_current_version_covers_the_release_changes(term):
     body = _changelog_section(_read(CHANGELOG), rf"\[{ESC_VERSION}\]")
     assert term in body, f"{term!r} absent de la section [{VERSION}]"
-
-
-def test_changelog_current_version_has_no_separate_release_notes_file():
-    assert not NOTES.exists(), f"{NOTES.name} : le changelog suffit pour {TAG}"
