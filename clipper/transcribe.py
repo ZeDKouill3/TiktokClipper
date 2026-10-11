@@ -70,20 +70,18 @@ appels.
 
 from __future__ import annotations
 
+import functools
 import gc
 import hashlib
 import json
 import logging
-import os
 import shutil
 import subprocess
-import sys
 import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +89,8 @@ from clipper import llm
 from clipper.gpu import get_device
 
 CONFIG_DEFAULTS: dict[str, object] = {
+    # Binaire ffmpeg de l'extraction audio (nom dans le PATH ou chemin complet).
+    "ffmpeg_bin": "ffmpeg",
     # Taille du modele faster-whisper (tiny, base, small, medium, large-v3...).
     "model": "small",
     # Langue forcee ("fr", "en"...) ; absente = detection automatique.
@@ -161,17 +161,17 @@ class TranscribeError(Exception):
     """Entree manquante, ffmpeg en echec ou correction inapplicable."""
 
 
-def extract_audio(video_path: str | Path, audio_path: str | Path) -> None:
+def extract_audio(video_path: str | Path, audio_path: str | Path, ffmpeg_bin: str = "ffmpeg") -> None:
     """Extrait la piste audio de la video en wav PCM 16 kHz mono."""
     cmd = [
-        "ffmpeg", "-y", "-loglevel", "error", "-i", str(video_path),
+        ffmpeg_bin, "-y", "-loglevel", "error", "-i", str(video_path),
         "-vn", "-af", "aresample=async=1:first_pts=0",
         "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(audio_path),
     ]
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
     except FileNotFoundError as exc:
-        raise TranscribeError("ffmpeg introuvable dans le PATH") from exc
+        raise TranscribeError(f"ffmpeg introuvable ({ffmpeg_bin})") from exc
     except subprocess.CalledProcessError as exc:
         raise TranscribeError(f"ffmpeg a echoue sur {video_path} : {exc.stderr.strip()}") from exc
 
@@ -186,43 +186,6 @@ def _batched_pipeline(model: Any) -> Any:
     from faster_whisper import BatchedInferencePipeline
 
     return BatchedInferencePipeline(model)
-
-
-def _cuda_dll_dirs() -> list[Path]:
-    """Dossiers bin des paquets pip nvidia (nvidia-cublas-cu12,
-    nvidia-cudnn-cu12...) installes dans l'environnement courant, absents si
-    ces paquets ne sont pas installes."""
-    spec = find_spec("nvidia")
-    if spec is None or not spec.submodule_search_locations:
-        return []
-    dirs = []
-    for base in spec.submodule_search_locations:
-        for bin_dir in Path(base).glob("*/bin"):
-            if bin_dir.is_dir():
-                dirs.append(bin_dir)
-    return dirs
-
-
-def _make_cuda_dlls_discoverable() -> None:
-    """Sous Windows, CTranslate2 (utilise par faster-whisper) resout cuBLAS
-    et cuDNN via le PATH du processus, pas via os.add_dll_directory (mesure :
-    TASK-f6c8, add_dll_directory seul laisse 'cublas64_12.dll is not found or
-    cannot be loaded'). Sans reglage manuel du PATH par l'utilisateur, il
-    faut donc y prefixer les dossiers bin des paquets pip nvidia avant de
-    charger le modele. Si ces paquets sont absents, le PATH n'est pas touche
-    et l'echec de CTranslate2 remonte normalement (ADR-ad2e : pas de repli
-    silencieux)."""
-    if sys.platform != "win32":
-        return
-    dirs = [str(d) for d in _cuda_dll_dirs()]
-    if not dirs:
-        return
-    current = os.environ.get("PATH", "")
-    existing = current.split(os.pathsep) if current else []
-    missing = [d for d in dirs if d not in existing]
-    if not missing:
-        return
-    os.environ["PATH"] = os.pathsep.join(missing + existing)
 
 
 def _settings(config: Any) -> dict[str, Any]:
@@ -387,8 +350,7 @@ def _run_whisper(
         "vad_filter": settings["vad_filter"],
         "language": settings["language"],
     }
-    if device.type == "cuda":
-        _make_cuda_dlls_discoverable()
+    runner = None
     model = model_factory(settings["model"], device.type, device.compute_type)
     try:
         prompt_vocab = _whisper_vocab(model, vocab, int(settings["vocab_max_tokens"]))
@@ -414,7 +376,7 @@ def _run_whisper(
             "duration": info.duration,
         }
     finally:
-        raw_segments = model = None
+        raw_segments = runner = model = None
         _free_memory()
     return segments, header
 
@@ -754,7 +716,7 @@ def transcribe(
     config: Any = None,
     force: bool = False,
     model_factory: Callable[[str, str, str], Any] = _whisper_model,
-    audio_extractor: Callable[[Path, Path], None] = extract_audio,
+    audio_extractor: Callable[[Path, Path], None] | None = None,
     pipeline_factory: Callable[[Any], Any] = _batched_pipeline,
 ) -> Path:
     """Transcrit workspace/<video_id>/<video_id>.mp4 dans transcript.json et
@@ -794,6 +756,8 @@ def transcribe(
         vocab = _ask_vocab(meta, config) if settings["vocab"] else []
 
         audio = video_dir / "transcribe_audio.wav"
+        if audio_extractor is None:
+            audio_extractor = functools.partial(extract_audio, ffmpeg_bin=str(settings["ffmpeg_bin"]))
         try:
             audio_extractor(video, audio)
             segments, header = _run_whisper(video_id, model_factory, audio, settings, vocab, pipeline_factory)

@@ -1354,73 +1354,19 @@ def _fake_find_spec(nvidia_dir):
     return find_spec
 
 
-def test_cuda_dll_dirs_are_prefixed_on_path_before_loading_model_on_windows(
-    tmp_path, video_dir, monkeypatch, fake_nvidia_bin_dirs
-):
+def test_the_cuda_dll_rule_lives_in_clipper_gpu_only():
+    """media-M3 : la copie de la regle CUDA de transcribe.py etait morte (get_device()
+    appelle deja clipper.gpu.ensure_cuda_dlls_on_path) ; une seule regle, dans clipper.gpu."""
     import clipper.transcribe as t
 
-    nvidia_dir, bin_dirs = fake_nvidia_bin_dirs
-    monkeypatch.setattr(t.sys, "platform", "win32")
-    # ";" (pas le ":" reel de l'hote) : sur Windows os.pathsep est ";", or
-    # "C:\Windows\System32" contient deja un ":" (lettre de lecteur) que ":"
-    # couperait a tort.
-    monkeypatch.setattr(t.os, "pathsep", ";")
+    assert not hasattr(t, "_make_cuda_dlls_discoverable")
+    assert not hasattr(t, "_cuda_dll_dirs")
+
+
+def test_the_cuda_device_is_passed_as_is_to_the_model(tmp_path, video_dir, monkeypatch):
+    import clipper.transcribe as t
+
     monkeypatch.setattr(t, "get_device", lambda: Device(type="cuda", compute_type="float16"))
-    monkeypatch.setattr(t, "find_spec", _fake_find_spec(nvidia_dir))
-    monkeypatch.setenv("PATH", r"C:\Windows\System32")
-
-    with llm.use_backend(FakeBackend([VOCAB, NO_FIX])):
-        run(tmp_path, ModelFactory())
-
-    path_parts = os.environ["PATH"].split(os.pathsep)
-    assert str(bin_dirs[0]) in path_parts
-    assert str(bin_dirs[1]) in path_parts
-    assert path_parts.index(str(bin_dirs[0])) < path_parts.index(r"C:\Windows\System32")
-
-
-def test_cuda_dll_dirs_untouched_when_device_is_cpu(
-    tmp_path, video_dir, monkeypatch, fake_nvidia_bin_dirs, cpu
-):
-    import clipper.transcribe as t
-
-    nvidia_dir, bin_dirs = fake_nvidia_bin_dirs
-    monkeypatch.setattr(t.sys, "platform", "win32")
-    monkeypatch.setattr(t, "find_spec", _fake_find_spec(nvidia_dir))
-    monkeypatch.setenv("PATH", r"C:\Windows\System32")
-
-    with llm.use_backend(FakeBackend([VOCAB, NO_FIX])):
-        run(tmp_path, ModelFactory())
-
-    assert os.environ["PATH"] == r"C:\Windows\System32"
-
-
-def test_cuda_dll_dirs_untouched_on_non_windows_platform(
-    tmp_path, video_dir, monkeypatch, fake_nvidia_bin_dirs
-):
-    import clipper.transcribe as t
-
-    nvidia_dir, bin_dirs = fake_nvidia_bin_dirs
-    monkeypatch.setattr(t.sys, "platform", "linux")
-    monkeypatch.setattr(t, "get_device", lambda: Device(type="cuda", compute_type="float16"))
-    monkeypatch.setattr(t, "find_spec", _fake_find_spec(nvidia_dir))
-    monkeypatch.setenv("PATH", "/usr/bin")
-
-    with llm.use_backend(FakeBackend([VOCAB, NO_FIX])):
-        run(tmp_path, ModelFactory())
-
-    assert os.environ["PATH"] == "/usr/bin"
-
-
-def test_missing_nvidia_packages_leaves_path_and_device_untouched(
-    tmp_path, video_dir, monkeypatch
-):
-    """Paquets nvidia absents (find_spec renvoie None) : pas de repli
-    silencieux vers le CPU, le device cuda est toujours transmis tel quel."""
-    import clipper.transcribe as t
-
-    monkeypatch.setattr(t.sys, "platform", "win32")
-    monkeypatch.setattr(t, "get_device", lambda: Device(type="cuda", compute_type="float16"))
-    monkeypatch.setattr(t, "find_spec", lambda name: None)
     monkeypatch.setenv("PATH", r"C:\Windows\System32")
 
     factory = ModelFactory()
@@ -1430,6 +1376,64 @@ def test_missing_nvidia_packages_leaves_path_and_device_untouched(
     assert os.environ["PATH"] == r"C:\Windows\System32"
     assert factory.built == [("small", "cuda", "float16")]
 
+
+def test_ffmpeg_binary_is_a_transcribe_setting(monkeypatch):
+    """media-M4 : le binaire ffmpeg vient d'un reglage, comme download et audio."""
+    import clipper.transcribe as t
+
+    assert t.CONFIG_DEFAULTS["ffmpeg_bin"] == "ffmpeg"
+    seen = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append(cmd)
+
+    monkeypatch.setattr(t.subprocess, "run", fake_run)
+    t.extract_audio("v.mp4", "a.wav", ffmpeg_bin="mon-ffmpeg")
+
+    assert seen[0][0] == "mon-ffmpeg"
+
+
+def test_the_default_extractor_uses_the_configured_ffmpeg_binary(tmp_path, video_dir, cpu, monkeypatch):
+    import clipper.transcribe as t
+
+    seen = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append(cmd[0])
+        raise FileNotFoundError(cmd[0])
+
+    monkeypatch.setattr(t.subprocess, "run", fake_run)
+    config = make_config(tmp_path, ffmpeg_bin="mon-ffmpeg", vocab=False)
+
+    with pytest.raises(t.TranscribeError, match="mon-ffmpeg"):
+        t.transcribe(VIDEO_ID, tmp_path / "workspace", config=config, model_factory=ModelFactory())
+
+    assert seen == ["mon-ffmpeg"]
+
+
+def test_the_batched_runner_is_released_before_the_memory_is_freed(tmp_path, video_dir, cpu, monkeypatch):
+    """media-M4 : _free_memory() ne peut rien rendre tant que le runner (BatchedInferencePipeline)
+    est encore reference par _run_whisper."""
+    import clipper.transcribe as t
+
+    refs = []
+
+    def pipeline_factory(model):
+        pipe = FakePipeline(model)
+        refs.append(weakref.ref(pipe))
+        return pipe
+
+    alive_at_free = []
+
+    def spy_free():
+        gc.collect()
+        alive_at_free.append(refs[0]() is not None)
+
+    monkeypatch.setattr(t, "_free_memory", spy_free)
+    with llm.use_backend(FakeBackend([VOCAB, NO_FIX])):
+        run(tmp_path, ModelFactory(), pipeline_factory=pipeline_factory)
+
+    assert alive_at_free == [False]
 
 # --------------------------------------------------------------------------
 # C10 : integration optionnelle avec le vrai faster-whisper, modele tiny

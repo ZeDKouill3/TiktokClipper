@@ -235,6 +235,6 @@ Liste régénérée depuis `ank find --type adr --status accepted` et `ank find 
 ## Orchestration (session orchestrateur)
 
 Avant d'orchestrer des workers, lire `research/BONNES-PRATIQUES.md`
-(local, ignoré par git : `E:\ClaudeRandom\TiktokParseUpload\research\BONNES-PRATIQUES.md`) :
+(local, ignoré par git ; le même chemin relatif depuis la racine du dépôt principal, pas depuis un worktree) :
 délégation aux workers herdr (sonnet par défaut), quota Max, RAM du PC,
 rangement, tests réels. Un worker dans `.worktrees/` n'a pas besoin de ce fichier.

@@ -384,9 +384,11 @@ def _load_partial(path: Path) -> dict[int, dict[str, Any]]:
     return {int(k): v for k, v in (data.get("batches") or {}).items()}
 
 
-def _describe(frames: list[dict[str, Any]], video_dir: Path, s: dict[str, Any], config: Any) -> dict[str, dict[str, Any]]:
-    """Description de chaque image, par ``path`` : un lot (une planche) par appel,
-    reprise par action_partial.json, dossier des planches supprime en fin."""
+def _describe(frames: list[dict[str, Any]], video_dir: Path, s: dict[str, Any], config: Any,
+) -> tuple[dict[str, dict[str, Any]], int]:
+    """Description de chaque image, par ``path``, et nombre d'appels LLM reellement faits :
+    un lot (une planche) par appel, reprise par action_partial.json (un lot repris n'est pas
+    un appel), dossier des planches supprime en fin."""
     batch_size = int(s["batch_size"])
     batches = [frames[first : first + batch_size] for first in range(0, len(frames), batch_size)]
     partial_path = video_dir / "action_partial.json"
@@ -453,7 +455,7 @@ def _describe(frames: list[dict[str, Any]], video_dir: Path, s: dict[str, Any], 
                 leftover.unlink()
             montage_dir.rmdir()
 
-    return {item["path"]: item for batch_result in results for item in (batch_result or [])}
+    return {item["path"]: item for batch_result in results for item in (batch_result or [])}, len(pending)
 
 
 # --------------------------------------------------------------------------
@@ -507,8 +509,7 @@ def run(
 
     if not kept:
         log.info("%s : aucun passage d'action (score >= %s)", video_id, settings["min_score"])
-    descriptions = _describe(ordered, video_dir, settings, config) if ordered else {}
-    llm_calls = math.ceil(len(ordered) / int(settings["batch_size"])) if ordered else 0
+    descriptions, llm_calls = _describe(ordered, video_dir, settings, config) if ordered else ({}, 0)
 
     passages = []
     for n, passage in enumerate(kept):

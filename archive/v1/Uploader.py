@@ -25,8 +25,8 @@ GEMINI_API_KEYS = [
 # --- CONFIGURATION FICHIERS ---
 CHROME_DATA = r"E:\Tiktok\Chrome_Automation_Data"
 ACCOUNTS = {
-    "LeClipperFou": "Profile 4",
-    "LeClipperFR": "Profile 2",
+    "CompteA": "Profile 4",
+    "CompteB": "Profile 2",
     "MotivationQuotes": "Profile 3",
     "CatFail": "Profile 5",
     "TwitchClippeur": "Profile 6"
