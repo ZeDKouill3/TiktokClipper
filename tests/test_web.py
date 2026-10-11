@@ -10824,6 +10824,9 @@ def _rep_read(tmp_path, day: str) -> dict:
 def _rep_client(tmp_path, ready=(READY, SPARE), *, repartition=None, **tiktok_settings) -> TestClient:
     _publish_setup(tmp_path, slots=False)
     _accounts_state(tmp_path, ready=ready)
+    if repartition:  # la validation relit [repartition] dans config.toml : la config en mémoire et le fichier concordent
+        with (tmp_path / "config.toml").open("a", encoding="utf-8") as f:
+            f.write("[repartition]\n" + "".join(f"{k} = {json.dumps(v)}\n" for k, v in repartition.items()))
     config = Config(mode="review", workspace_dir=tmp_path / "workspace", output_dir=tmp_path / "output",
                     _sections={"tiktok": {"max_posts_per_day": 10, "min_gap_minutes": 0, **tiktok_settings},
                                **({"repartition": repartition} if repartition else {})})
@@ -11947,3 +11950,61 @@ def test_lot_d_llm_cost_by_day_uses_paris_days(tmp_path, isolated_cwd):
         {"recorded_at": "2026-10-09T22:30:00+00:00", "usage": "moments", "cost_usd": 0.5}) + chr(10), encoding="utf-8")
     cost = web_app._stats_llm_cost(make_config(tmp_path), None, None)
     assert cost["by_day"] == {"2026-10-10": 0.5}
+
+
+# --- TASK-44413f3c0669 (revue des fusions du 11/10, I3 et I4)
+
+def test_repartition_validate_replays_excluded_sources_edited_in_config_toml_after_startup(tmp_path, isolated_cwd):
+    day = _rep_day()
+    _rep_two_accounts(tmp_path, day)
+    c = _rep_client(tmp_path)  # l'app démarre sans exclusion
+    (tmp_path / "config.toml").write_text('[repartition]\nexcluded_sources = ["ma_chaine"]\n', encoding="utf-8")
+
+    resp = c.post(f"/api/repartition/{day}/validate")
+
+    assert resp.status_code == 409, resp.text
+    assert "excluded_source" in resp.json()["detail"] and resp.json()["created"] == []
+
+
+def test_repartition_validate_sees_an_exclusion_removed_from_config_toml_after_startup(tmp_path, isolated_cwd):
+    day = _rep_day()
+    _rep_two_accounts(tmp_path, day)
+    c = _rep_client(tmp_path, repartition={"excluded_sources": ["ma_chaine"]})
+    (tmp_path / "config.toml").write_text('[repartition]\nexcluded_sources = []\n', encoding="utf-8")
+
+    resp = c.post(f"/api/repartition/{day}/validate")
+
+    assert resp.status_code != 409 or "excluded_source" not in resp.text, resp.text
+
+
+def test_sse_hub_survives_a_scan_that_raises_once(tmp_path, isolated_cwd, monkeypatch, caplog):
+    import asyncio
+    config = Config(mode="review", workspace_dir=tmp_path / "workspace", output_dir=tmp_path / "output",
+                    _sections={"web": {"sse_poll_interval_s": 0.05}})
+    real = web_app._scan_watched_mtimes
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise FileNotFoundError("dossier disparu pendant le scan")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(web_app, "_scan_watched_mtimes", flaky)
+
+    async def _run() -> str:
+        stream = web_app._event_stream(config).__aiter__()
+        first = asyncio.create_task(stream.__anext__())
+        await asyncio.sleep(0.3)  # le 2e scan lève, les suivants passent
+        (tmp_path / "state").mkdir(exist_ok=True)
+        (tmp_path / "state" / "queue.json").write_text("[]", encoding="utf-8")
+        try:
+            return await asyncio.wait_for(first, timeout=2.0)
+        finally:
+            await stream.aclose()
+
+    with caplog.at_level("ERROR"):
+        chunk = asyncio.run(_run())
+
+    assert json.loads(chunk[len("data: "):])["kind"] == "queue"
+    assert "dossier disparu pendant le scan" in caplog.text  # l'erreur est visible dans le journal

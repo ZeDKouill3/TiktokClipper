@@ -8,6 +8,7 @@ processus ; le traitement passe toujours par la file (clipper.worker)."""
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import ipaddress
 import json
@@ -816,7 +817,12 @@ class _SseHub:
             self.ready.set()
         while True:
             await asyncio.sleep(self.interval)
-            for p, kind, id_, mtime in await self._scan():
+            try:
+                scanned = await self._scan()
+            except Exception:  # un dossier d'état disparu pendant le parcours : tour sauté, le hub ne meurt pas
+                logger.exception("scan SSE en échec : tour ignoré, prochain tour dans %ss", self.interval)
+                continue
+            for p, kind, id_, mtime in scanned:
                 previous = self.mtimes.get(p)
                 if previous is None or mtime > previous:
                     self.mtimes[p] = mtime
@@ -3386,6 +3392,20 @@ def create_app(config: Config | None = None) -> FastAPI:
         except OSError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    def _rep_config() -> Config:
+        """``config`` avec la table ``[repartition]`` relue sur le disque : ``excluded_sources`` se règle à la main
+        dans config.toml et ``serve`` ne relit pas ce fichier, alors que le worker, lui, le relit (plan et validation
+        verraient sinon deux listes). Un fichier illisible ou invalide refuse, jamais de repli sur la liste figée."""
+        path = Path(_BASE_CONFIG)
+        if not path.is_file():
+            return config
+        try:
+            fresh = load_config(path)
+        except (ConfigError, OSError) as exc:
+            raise HTTPException(status_code=422, detail=f"{_BASE_CONFIG} illisible ou invalide : {exc}") from exc
+        sections = {**config._sections, "repartition": dict(fresh._sections.get("repartition", {}))}
+        return dataclasses.replace(config, _sections=sections)
+
     def _rep_day(day: str | None) -> str:
         if day is None:  # demain, en heure de Paris
             return (datetime.now(_PARIS) + timedelta(days=1)).date().isoformat()
@@ -3453,8 +3473,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         choisissables par ce compte pour remplacer une ligne, sous chaque compte (``pool_size`` = le nombre de R7)."""
         base: dict[str, Any] = {"day": day, "status": "absent", "accounts": []} if plan is None else dict(plan)
         base.update(enabled=config.section("repartition")["enabled"], pool_size=None if plan is None else plan.get("pool"))
-        settings = _rep_call(repartition_mod.read_settings, config)
-        world = repartition_mod.World(config)
+        rep_config = _rep_config()
+        settings = _rep_call(repartition_mod.read_settings, rep_config)
+        world = repartition_mod.World(rep_config)
         accounts_out = []
         made = {(m["account"], m["video_id"], m["clip_id"]) for m in base.get("created") or []}
         entries = [] if base["status"] == "validated" else _rep_call(
@@ -3511,7 +3532,8 @@ def create_app(config: Config | None = None) -> FastAPI:
     def put_repartition(day: str, body: RepartitionPutBody) -> dict[str, Any]:
         day = _rep_day(day)
         path = _rep_call(repartition_mod.plan_path, day, config)
-        settings = _rep_call(repartition_mod.read_settings, config)
+        rep_config = _rep_config()
+        settings = _rep_call(repartition_mod.read_settings, rep_config)
         with channel_mod.file_lock(path):
             plan = _rep_editable(day, "il n'est plus modifiable")
             by_id = {account["account"]: account for account in plan["accounts"]}
@@ -3531,7 +3553,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                         raise HTTPException(status_code=422, detail=f"clip présent deux fois dans le plan : "
                                             f"{line.video_id}/{line.clip_id}")
                     taken.add((line.video_id, line.clip_id))
-            world = repartition_mod.World(config)
+            world = repartition_mod.World(_rep_config())
             entries = _rep_call(publish_mod.all_entries, state_dir=_publish_dir(config), presets_dir=_PRESETS_DIR)
             for account in body.accounts:
                 for line in account.lines:
@@ -3568,7 +3590,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             created = list(plan.get("created") or [])
             done = {(made["account"], made["video_id"], made["clip_id"]) for made in created}
             failure: dict[str, Any] | None = None
-            world = repartition_mod.World(config)
+            world = repartition_mod.World(_rep_config())
             entries = _rep_call(publish_mod.all_entries, state_dir=_publish_dir(config), presets_dir=_PRESETS_DIR)
             for account in plan["accounts"]:
                 lines = [line for line in account["lines"]
