@@ -1301,6 +1301,14 @@ def coarse_noise(rng, low, high, height, width, cell=16):
 
 
 def write_keyframes(video_dir, faces, *, scenes=((0.0, 100.0),), width=W, height=H):
+    """Copie en cache (voir _copy_cached_fixture) de _write_keyframes_uncached."""
+    _copy_cached_fixture(
+        video_dir, ("keyframes", tuple(faces), tuple(scenes), width, height),
+        lambda source: _write_keyframes_uncached(source, faces, scenes=scenes, width=width, height=height),
+    )
+
+
+def _write_keyframes_uncached(video_dir, faces, *, scenes, width, height):
     """scenes.json avec une image cle par entree de ``faces`` : (temps, boite
     du visage ou None). Images synthetiques noires, visage en blanc."""
     frames_dir = video_dir / "frames"
@@ -1658,14 +1666,14 @@ def test_face_too_small_even_in_corner_vignettes_keeps_the_reason(tmp_path, vide
 def test_detector_calls_are_bounded_by_the_period_step_and_the_board_size(tmp_path, video_dir):
     # 120 images cles (10 s d'ecart), une image echantillonnee tous les 120 s :
     # 10 appels pour reperer les periodes, puis 5 par image candidate (24).
-    write_timeline(video_dir, every(10.0, 120, "game"))
+    write_timeline(video_dir, every(10.0, 120, "game"), shrink=2)
     path, factory = detect(tmp_path, facecam_period_step=120.0)
     assert factory.detectors[0].frames == 10 + 24 * 5
     assert len(load(path)["keyframes"]) == 120  # toutes les images cles restent listees
 
 
 def test_board_frame_count_is_configurable(tmp_path, video_dir):
-    write_timeline(video_dir, every(10.0, 120, "game"))
+    write_timeline(video_dir, every(10.0, 120, "game"), shrink=2)
     path, factory = detect(tmp_path, facecam_board_frames=4)
     assert factory.detectors[0].frames == 20 + 24 * 5  # la planche n'en montre que 4
     board = cv2.imread(str(video_dir / period0(path)["board"]))
@@ -1704,7 +1712,19 @@ STREAM_FACE = (
 )
 
 
-def write_stream_clip_fixture(video_dir, clip_specs, *, panel=STREAM_PANEL, face=STREAM_FACE, seed=0):
+def write_stream_clip_fixture(video_dir, clip_specs, *, panel=STREAM_PANEL, face=STREAM_FACE, seed=0, shrink=1):
+    """Copie en cache (voir _copy_cached_fixture) de _write_stream_clip_fixture_uncached.
+    ``shrink`` > 1 : images reduites de ce facteur, ``panel`` et ``face`` etant
+    alors donnes deja reduits (HALF_PANEL / HALF_FACE pour shrink=2)."""
+    _copy_cached_fixture(
+        video_dir, ("stream-clip", seed, shrink, tuple(panel), tuple(face), tuple(tuple(spec) for spec in clip_specs)),
+        lambda source: _write_stream_clip_fixture_uncached(
+            source, clip_specs, panel=panel, face=face, seed=seed, shrink=shrink
+        ),
+    )
+
+
+def _write_stream_clip_fixture_uncached(video_dir, clip_specs, *, panel, face, seed, shrink):
     """Images cles synthetiques : un segment de localisation (100 premieres
     secondes, hors de tout clip teste ici ; visage stable dans ``panel``,
     bords nets et constants -- meme esprit que ``write_panel_keyframes``)
@@ -1726,7 +1746,7 @@ def write_stream_clip_fixture(video_dir, clip_specs, *, panel=STREAM_PANEL, face
 
     def write_frame(t, patch, face_box):
         nonlocal index
-        image = coarse_noise(rng, 0, 40, H, W)
+        image = coarse_noise(rng, 0, 40, H // shrink, W // shrink, cell=16 // shrink)
         image[py0:py1, px0:px1] = patch
         if face_box is not None:
             x0, y0, x1, y1 = face_box
@@ -1738,7 +1758,7 @@ def write_stream_clip_fixture(video_dir, clip_specs, *, panel=STREAM_PANEL, face
         return image[py0:py1, px0:px1].copy()
 
     for t, box in pattern(20, 20, box=face, t0=100.5):
-        write_frame(t, 90, box)
+        write_frame(t, 90, box)  # face deja a l'echelle de ``shrink``
 
     prev_patch = None
     for t, mode in clip_specs:
@@ -1747,7 +1767,7 @@ def write_stream_clip_fixture(video_dir, clip_specs, *, panel=STREAM_PANEL, face
         elif mode == "frozen" and prev_patch is not None:
             patch = prev_patch
         else:
-            patch = coarse_noise(rng, 60, 121, py1 - py0, px1 - px0, cell=6)
+            patch = coarse_noise(rng, 60, 121, py1 - py0, px1 - px0, cell=6 // shrink)
         prev_patch = write_frame(t, patch, None)
 
     (video_dir / "scenes.json").write_text(
@@ -1777,7 +1797,9 @@ def test_clip_with_a_live_but_faceless_facecam_stays_stream(tmp_path, video_dir)
 
 
 def test_clip_with_a_black_facecam_stays_letterbox_with_a_logged_reason(tmp_path, video_dir, caplog):
-    write_stream_clip_fixture(video_dir, [(0.5 + k, "black") for k in range(20)])
+    write_stream_clip_fixture(
+        video_dir, [(0.5 + k, "black") for k in range(20)], panel=HALF_PANEL, face=HALF_FACE, shrink=2
+    )
     with caplog.at_level("INFO", logger="clipper.reframe"):
         out, _ = run_stream(tmp_path)
 
@@ -1792,7 +1814,7 @@ def test_clip_with_a_frozen_facecam_stays_letterbox(tmp_path, video_dir):
     # ecran de pause / BRB : contenu clair (pas noir) mais fige des la
     # deuxieme image cle -- ne satisfait pas le critere "vivant".
     specs = [(0.5, "live")] + [(1.5 + k, "frozen") for k in range(19)]
-    write_stream_clip_fixture(video_dir, specs)
+    write_stream_clip_fixture(video_dir, specs, panel=HALF_PANEL, face=HALF_FACE, shrink=2)
     out, _ = run_stream(tmp_path)
 
     data = load(out)
@@ -2111,20 +2133,28 @@ _TIMELINE_CACHE: dict = {}
 _TIMELINE_CACHE_DIR: Path | None = None
 
 
-def write_timeline(video_dir, specs, *, seed=0):
+def write_timeline(video_dir, specs, *, seed=0, shrink=1):
     """Copie dans ``video_dir`` la timeline de ``specs`` (voir
     _write_timeline_uncached), fabriquee une seule fois par processus. Le
     cache ne sert que de source de copies : aucun test ne lit ni n'ecrit
     dedans, donc un test ne peut pas corrompre la timeline d'un autre."""
+    _copy_cached_fixture(
+        video_dir, (seed, shrink, tuple(tuple(spec) for spec in specs)),
+        lambda source: _write_timeline_uncached(source, specs, seed=seed, shrink=shrink),
+    )
+
+
+def _copy_cached_fixture(video_dir, key, build):
+    """Copie dans ``video_dir`` frames/ et scenes.json produits par
+    ``build(dossier)``, appele une seule fois par processus et par ``key``."""
     global _TIMELINE_CACHE_DIR
-    key = (seed, tuple(tuple(spec) for spec in specs))
     if key not in _TIMELINE_CACHE:
         if _TIMELINE_CACHE_DIR is None:
             _TIMELINE_CACHE_DIR = Path(tempfile.mkdtemp(prefix="timeline-cache-"))
             atexit.register(shutil.rmtree, _TIMELINE_CACHE_DIR, ignore_errors=True)
         source = _TIMELINE_CACHE_DIR / str(len(_TIMELINE_CACHE))
         source.mkdir()
-        _write_timeline_uncached(source, specs, seed=seed)
+        build(source)
         _TIMELINE_CACHE[key] = source
     source = _TIMELINE_CACHE[key]
     frames_dir = video_dir / "frames"
@@ -2134,35 +2164,41 @@ def write_timeline(video_dir, specs, *, seed=0):
     shutil.copyfile(source / "scenes.json", video_dir / "scenes.json")
 
 
-def _write_timeline_uncached(video_dir, specs, *, seed=0):
+def _write_timeline_uncached(video_dir, specs, *, seed=0, shrink=1):
     """scenes.json + images cles synthetiques. ``specs`` : liste de (temps,
     mode) ; mode : "chat" (grand visage blanc plein ecran), "game" (jeu
     bruite + panneau STREAM_PANEL avec un visage), "game2" (idem avec
     PANEL2), "live" (panneau STREAM_PANEL sans visage, contenu qui change),
     "static" (panneau STREAM_PANEL fixe, jamais en mouvement), "plain"
-    (jeu bruite sans rien)."""
+    (jeu bruite sans rien). ``shrink`` > 1 divise par ce facteur la taille des
+    images et toutes les boites (les tests qui n'ont pas besoin du 1080p).
+    """
     rng = np.random.default_rng(seed)
     frames_dir = video_dir / "frames"
     frames_dir.mkdir(exist_ok=True)
     frames = []
-    static_patch = coarse_noise(rng, 60, 121, 384, 540, cell=6)
+    def sh(box):
+        return tuple(v // shrink for v in box)
+
+    cell = 16 // shrink
+    static_patch = coarse_noise(rng, 60, 121, 384 // shrink, 540 // shrink, cell=6 // shrink)
     for k, (t, mode) in enumerate(specs):
-        image = coarse_noise(rng, 0, 40, H, W)
+        image = coarse_noise(rng, 0, 40, H // shrink, W // shrink, cell=cell)
         dx = (k % 3) - 1
         if mode == "chat":
-            x0, y0, x1, y1 = CHAT_FACE
+            x0, y0, x1, y1 = sh(CHAT_FACE)
             image[y0:y1, x0:x1] = 255
         elif mode in ("game", "game2"):
             panel, face = (STREAM_PANEL, STREAM_FACE) if mode == "game" else (PANEL2, FACE2)
-            px0, py0, px1, py1 = panel
+            px0, py0, px1, py1 = sh(panel)
             image[py0:py1, px0:px1] = 90
-            fx0, fy0, fx1, fy1 = face
+            fx0, fy0, fx1, fy1 = sh(face)
             image[fy0 - dx:fy1 - dx, fx0 + dx:fx1 + dx] = 255
         elif mode == "live":
-            px0, py0, px1, py1 = STREAM_PANEL
-            image[py0:py1, px0:px1] = coarse_noise(rng, 60, 121, py1 - py0, px1 - px0, cell=6)
+            px0, py0, px1, py1 = sh(STREAM_PANEL)
+            image[py0:py1, px0:px1] = coarse_noise(rng, 60, 121, py1 - py0, px1 - px0, cell=6 // shrink)
         elif mode == "static":
-            px0, py0, px1, py1 = STREAM_PANEL
+            px0, py0, px1, py1 = sh(STREAM_PANEL)
             image[py0:py1, px0:px1] = static_patch
         name = f"scene0000_{k:03d}.png"
         (frames_dir / name).write_bytes(encode_png(image))
@@ -2195,7 +2231,7 @@ def run_detect(tmp_path, responses, *, force=False, **reframe):
 
 
 def test_just_chatting_then_game_gives_two_periods_cut_at_the_first_game_keyframe(tmp_path, video_dir):
-    write_timeline(video_dir, [(10.0 * k, "chat" if k < 60 else "game") for k in range(120)])
+    write_timeline(video_dir, [(10.0 * k, "chat" if k < 60 else "game") for k in range(120)], shrink=2)
     path, fake = run_detect(tmp_path, [webcam_answer(1)])
 
     periods = load(path)["periods"]
@@ -2211,7 +2247,7 @@ def test_a_transition_that_is_not_clean_gives_a_single_period(tmp_path, video_di
     # du jeu, puis un grand visage au milieu du stream : pas un Just Chatting
     # suivi du jeu, la majorite des images de la planche decide
     specs = [(10.0 * k, "chat" if 60 <= k < 90 else "game") for k in range(120)]
-    write_timeline(video_dir, specs)
+    write_timeline(video_dir, specs, shrink=2)
     path, fake = run_detect(tmp_path, [webcam_answer(1)])
 
     periods = load(path)["periods"]
@@ -2224,20 +2260,20 @@ def test_a_transition_that_is_not_clean_gives_a_single_period(tmp_path, video_di
 def test_a_big_face_coming_back_later_in_the_game_stays_in_the_second_period(tmp_path, video_dir):
     # Just Chatting au debut, jeu, puis une pause face camera plus tard : 2 periodes seulement
     specs = [(10.0 * k, "chat" if k < 30 or 80 <= k < 100 else "game") for k in range(120)]
-    write_timeline(video_dir, specs)
+    write_timeline(video_dir, specs, shrink=2)
     path, _ = run_detect(tmp_path, [webcam_answer(1)])
     assert [(p["start"], p["end"]) for p in load(path)["periods"]] == [(0.0, 300.0), (300.0, 1190.0)]
 
 
 def test_a_faceless_intro_before_the_just_chatting_does_not_hide_the_transition(tmp_path, video_dir):
     specs = [(10.0 * k, "plain" if k < 6 else "chat" if k < 60 else "game") for k in range(120)]
-    write_timeline(video_dir, specs)
+    write_timeline(video_dir, specs, shrink=2)
     path, _ = run_detect(tmp_path, [webcam_answer(1)])
     assert [(p["start"], p["end"]) for p in load(path)["periods"]] == [(0.0, 600.0), (600.0, 1190.0)]
 
 
 def test_a_stream_without_just_chatting_is_a_single_period(tmp_path, video_dir):
-    write_timeline(video_dir, every(10.0, 120, "game"))
+    write_timeline(video_dir, every(10.0, 120, "game"), shrink=2)
     path, fake = run_detect(tmp_path, [webcam_answer(1)])
     [period] = load(path)["periods"]
     assert period["facecam"] is not None
@@ -2245,7 +2281,7 @@ def test_a_stream_without_just_chatting_is_a_single_period(tmp_path, video_dir):
 
 
 def test_claude_gets_one_board_per_period_and_never_coordinates(tmp_path, video_dir):
-    write_timeline(video_dir, every(10.0, 120, "game"))
+    write_timeline(video_dir, every(10.0, 120, "game"), shrink=2)
     path, fake = run_detect(tmp_path, [webcam_answer(1)])
 
     [call] = fake.calls
@@ -2262,7 +2298,7 @@ def test_claude_gets_one_board_per_period_and_never_coordinates(tmp_path, video_
 
 
 def test_candidates_are_numbered_from_one_and_written_with_the_answer(tmp_path, video_dir):
-    write_timeline(video_dir, every(10.0, 120, "game"))
+    write_timeline(video_dir, every(10.0, 120, "game"), shrink=2)
     path, _ = run_detect(tmp_path, [webcam_answer(1, "c'est la webcam")])
 
     [period] = load(path)["periods"]
@@ -2271,22 +2307,23 @@ def test_candidates_are_numbered_from_one_and_written_with_the_answer(tmp_path, 
     assert period["answer"] == {"webcam": 1, "reason": "c'est la webcam"}
     chosen = [c for c in period["candidates"] if c["id"] == 1][0]
     assert period["facecam"] == chosen["rect"]
-    assert contains(period["facecam"], STREAM_FACE)
+    assert contains(period["facecam"], tuple(v // 2 for v in STREAM_FACE))  # timeline reduite de moitie
     assert period["facecam"]["w"] / period["facecam"]["h"] == pytest.approx(1080 / 768, rel=0.02)
 
 
 def test_a_webcam_without_any_face_is_still_a_candidate_when_it_moves(tmp_path, video_dir):
-    write_timeline(video_dir, every(10.0, 120, "live"))
+    write_timeline(video_dir, every(10.0, 120, "live"), shrink=2)
     path, fake = run_detect(tmp_path, [webcam_answer(1)])
 
     [period] = load(path)["periods"]
-    assert contains(period["facecam"], STREAM_PANEL, eps=3)  # cadre retrouve a 2-3 px pres
-    assert period["facecam"]["w"] <= (STREAM_PANEL[2] - STREAM_PANEL[0]) + 6
+    half_panel = tuple(v // 2 for v in STREAM_PANEL)  # timeline reduite de moitie
+    assert contains(period["facecam"], half_panel, eps=3)  # cadre retrouve a 2-3 px pres
+    assert period["facecam"]["w"] <= (half_panel[2] - half_panel[0]) + 6
     assert all(c["kind"] == "cadre" for c in period["candidates"])
 
 
 def test_a_framed_rectangle_that_never_moves_is_not_a_candidate(tmp_path, video_dir):
-    write_timeline(video_dir, every(10.0, 120, "static"))
+    write_timeline(video_dir, every(10.0, 120, "static"), shrink=2)
     path, fake = run_detect(tmp_path, [webcam_answer(1)])
 
     [period] = load(path)["periods"]
@@ -2298,7 +2335,7 @@ def test_a_framed_rectangle_that_never_moves_is_not_a_candidate(tmp_path, video_
 
 
 def test_none_answer_gives_no_webcam_for_the_period_with_claudes_reason(tmp_path, video_dir):
-    write_timeline(video_dir, every(10.0, 120, "live"))  # sans visage stable (TASK-a769)
+    write_timeline(video_dir, every(10.0, 120, "live"), shrink=2)  # sans visage stable (TASK-a769)
     path, _ = run_detect(tmp_path, [webcam_answer(None, "c'est un widget de chat")])
 
     [period] = load(path)["periods"]
@@ -2307,14 +2344,14 @@ def test_none_answer_gives_no_webcam_for_the_period_with_claudes_reason(tmp_path
 
 
 def test_an_answer_naming_an_unknown_rectangle_is_an_explicit_failure(tmp_path, video_dir):
-    write_timeline(video_dir, every(10.0, 120, "game"))
+    write_timeline(video_dir, every(10.0, 120, "game"), shrink=2)
     with pytest.raises(llm.SchemaError):
         run_detect(tmp_path, [webcam_answer(42)])
     assert not (video_dir / "facecam.json").exists()  # rien d'ecrit a moitie
 
 
 def test_each_clip_takes_the_rectangle_of_the_period_that_contains_its_start(tmp_path, video_dir):
-    write_timeline(video_dir, [(10.0 * k, "chat" if k < 20 else "game") for k in range(120)])
+    write_timeline(video_dir, [(10.0 * k, "chat" if k < 20 else "game") for k in range(120)], shrink=2)
     answers = [webcam_answer(1)]  # seule la periode de jeu a une planche
     out, _ = run_stream(tmp_path, start=400.0, end=430.0, answers=answers)
     data = load(out)
@@ -2332,7 +2369,7 @@ def test_each_clip_takes_the_rectangle_of_the_period_that_contains_its_start(tmp
 
 
 def test_period_without_webcam_keeps_the_letterbox_rule_with_the_decision_written(tmp_path, video_dir):
-    write_timeline(video_dir, every(10.0, 120, "live"))  # sans visage stable (TASK-a769)
+    write_timeline(video_dir, every(10.0, 120, "live"), shrink=2)  # sans visage stable (TASK-a769)
     out, _ = run_stream(tmp_path, start=100.0, end=130.0, answers=[webcam_answer(None, "pas de webcam ici")])
     data = load(out)
     assert data["layout"] == "letterbox"
@@ -2343,12 +2380,12 @@ def test_period_without_webcam_keeps_the_letterbox_rule_with_the_decision_writte
 def test_nothing_is_remembered_from_one_stream_to_another(tmp_path, video_dir):
     from clipper.reframe import detect_facecam
 
-    write_timeline(video_dir, every(10.0, 120, "live"))
+    write_timeline(video_dir, every(10.0, 120, "live"), shrink=2)
     path, _ = run_detect(tmp_path, [webcam_answer(1)])
     other = tmp_path / "workspace" / "zzzzzzzzzzz"
     other.mkdir()
     (other / "zzzzzzzzzzz.mp4").write_bytes(b"x")
-    write_timeline(other, every(10.0, 120, "live"))
+    write_timeline(other, every(10.0, 120, "live"), shrink=2)
 
     fake2 = FakeBackend([webcam_answer(None)])
     with llm.use_backend(fake2):
@@ -2734,6 +2771,14 @@ def test_detect_facecam_writes_refined_and_original_rectangles(tmp_path, video_d
 
 
 def _write_noise_keyframes(video_dir, faces, *, seed=0):
+    """Copie en cache (voir _copy_cached_fixture) de _write_noise_keyframes_uncached."""
+    _copy_cached_fixture(
+        video_dir, ("noise-keyframes", seed, tuple(faces)),
+        lambda source: _write_noise_keyframes_uncached(source, faces, seed=seed),
+    )
+
+
+def _write_noise_keyframes_uncached(video_dir, faces, *, seed=0):
     """Comme ``write_keyframes`` mais le fond est un bruit vivant (< 128 : le
     detecteur factice ne le prend pas pour un visage), jamais noir ni fige."""
     rng = np.random.default_rng(seed)
@@ -2857,22 +2902,29 @@ def test_prompt_tells_claude_when_a_frame_candidate_has_no_face(monkeypatch):
     assert "aucun visage" in prompt
 
 
+# Les memes valeurs que STREAM_PANEL / STREAM_FACE / la banniere (10, 10, 216, 154),
+# pour des images de timeline reduites de moitie (shrink=2).
+HALF_PANEL = tuple(v // 2 for v in STREAM_PANEL)
+HALF_FACE = tuple(v // 2 for v in STREAM_FACE)
+HALF_BANNER = {"x": 5, "y": 5, "w": 108, "h": 77}
+
+
 def _sponsor_banner_period(monkeypatch, video_dir, *, banner_face=0, extra_face=False):
     """Une periode ou le candidat 1 est un cadre (bannière) et le 2 le vrai visage."""
     from clipper import reframe
 
-    write_timeline(video_dir, every(10.0, 120, "game"))
+    write_timeline(video_dir, every(10.0, 120, "game"), shrink=2)  # images 960x540
     real = reframe._period_candidates
 
     def crafted(images, detector, settings):
         candidates, rejected = real(images, detector, settings)
         face = next(c for c in candidates if c["face_support"])
-        banner = dict(face, id=1, kind="cadre", rect={"x": 10, "y": 10, "w": 216, "h": 154},
+        banner = dict(face, id=1, kind="cadre", rect=HALF_BANNER,
                       face_support=banner_face, edge_reason=None, face=None)
         face = dict(face, id=2)
         out = [banner, face]
         if extra_face:
-            out.append(dict(face, id=3, rect={"x": 1500, "y": 800, "w": 300, "h": 213}))
+            out.append(dict(face, id=3, rect={"x": 750, "y": 400, "w": 150, "h": 106}))
         return out, rejected
 
     monkeypatch.setattr(reframe, "_period_candidates", crafted)
@@ -2884,8 +2936,8 @@ def test_a_faceless_frame_is_replaced_by_the_stable_face_candidate(tmp_path, vid
         path, _ = run_detect(tmp_path, [webcam_answer(1, "cadre present partout")])
 
     [period] = load(path)["periods"]
-    assert contains(period["facecam"], STREAM_FACE)
-    assert period["candidate_rect"] != {"x": 10, "y": 10, "w": 216, "h": 154}
+    assert contains(period["facecam"], HALF_FACE)
+    assert period["candidate_rect"] != HALF_BANNER
     assert period["answer"]["webcam"] == 1  # reponse de Claude gardee telle quelle
     assert period["override"]["from"] == 1 and period["override"]["to"] == 2
     assert "aucun visage" in caplog.text
@@ -2905,16 +2957,16 @@ def test_a_frame_with_a_face_is_kept_even_if_a_face_candidate_exists(tmp_path, v
     path, _ = run_detect(tmp_path, [webcam_answer(1)])
 
     [period] = load(path)["periods"]
-    assert period["candidate_rect"] == {"x": 10, "y": 10, "w": 216, "h": 154}
+    assert period["candidate_rect"] == HALF_BANNER
     assert period.get("override") is None
 
 
 def test_a_faceless_frame_stays_the_webcam_when_no_stable_face_candidate_exists(tmp_path, video_dir):
-    write_timeline(video_dir, every(10.0, 120, "live"))
+    write_timeline(video_dir, every(10.0, 120, "live"), shrink=2)
     path, _ = run_detect(tmp_path, [webcam_answer(1)])
 
     [period] = load(path)["periods"]
-    assert contains(period["facecam"], STREAM_PANEL, eps=3)
+    assert contains(period["facecam"], HALF_PANEL, eps=3)
     assert period.get("override") is None
 
 
@@ -2935,20 +2987,20 @@ def _null_period(monkeypatch, video_dir, *, face_support=None, extra_face=False)
     """Candidat 1 : cadre (banniere), 2 : visage ; face_support force le visage du 2."""
     from clipper import reframe
 
-    write_timeline(video_dir, every(10.0, 120, "game"))
+    write_timeline(video_dir, every(10.0, 120, "game"), shrink=2)  # images 960x540
     real = reframe._period_candidates
 
     def crafted(images, detector, settings):
         candidates, rejected = real(images, detector, settings)
         face = next(c for c in candidates if c["face_support"])
-        banner = dict(face, id=1, kind="cadre", rect={"x": 10, "y": 10, "w": 216, "h": 154},
+        banner = dict(face, id=1, kind="cadre", rect=HALF_BANNER,
                       face_support=0, edge_reason=None, face=None)
         face = dict(face, id=2)
         if face_support is not None:
             face["face_support"] = face_support
         out = [banner, face]
         if extra_face:
-            out.append(dict(face, id=3, rect={"x": 1500, "y": 800, "w": 300, "h": 213}))
+            out.append(dict(face, id=3, rect={"x": 750, "y": 400, "w": 150, "h": 106}))
         return out, rejected
 
     monkeypatch.setattr(reframe, "_period_candidates", crafted)
@@ -3012,7 +3064,7 @@ def test_null_answer_without_a_stable_face_stays_letterbox(tmp_path, video_dir, 
 
 
 def test_null_answer_with_no_candidate_at_all_stays_letterbox(tmp_path, video_dir):
-    write_timeline(video_dir, every(10.0, 120, "live"))
+    write_timeline(video_dir, every(10.0, 120, "live"), shrink=2)
     path, _ = run_detect(tmp_path, [webcam_answer(None)])
     [period] = load(path)["periods"]
     assert period.get("override") is None
@@ -3070,7 +3122,7 @@ def test_prompt_states_the_face_count_of_face_candidates_explicitly():
 
 
 def test_claude_receives_the_board_and_the_zoom_sheet(tmp_path, video_dir):
-    write_timeline(video_dir, every(10.0, 120, "live"))
+    write_timeline(video_dir, every(10.0, 120, "live"), shrink=2)
     _, fake = run_detect(tmp_path, [webcam_answer(1)])
 
     names = [p.name for p in fake.calls[0].images]
@@ -3231,7 +3283,7 @@ def _menu_faces_period(monkeypatch, video_dir, *, menus_per_period, persistent=T
     a l'autre). Tous sont stables dans leur periode."""
     from clipper import reframe
 
-    write_timeline(video_dir, [(10.0 * k, "chat" if k < 60 else "game") for k in range(120)])
+    write_timeline(video_dir, [(10.0 * k, "chat" if k < 60 else "game") for k in range(120)], shrink=2)
     real = reframe._period_candidates
     calls = []
 
@@ -3239,9 +3291,9 @@ def _menu_faces_period(monkeypatch, video_dir, *, menus_per_period, persistent=T
         candidates, rejected = real(images, detector, settings)
         index = len(calls)
         calls.append(index)
-        panel = {"x": 700, "y": 350, "w": 540, "h": 384}  # STREAM_PANEL, contient STREAM_FACE
+        panel = {"x": 350, "y": 175, "w": 270, "h": 192}  # STREAM_PANEL / 2, contient STREAM_FACE / 2
         if index == 0:
-            rect = panel if persistent else {"x": 300, "y": 300, "w": 300, "h": 213}
+            rect = panel if persistent else {"x": 150, "y": 150, "w": 150, "h": 106}
             face = {"kind": "visage", "rect": rect, "support": 24, "face_support": 24,
                     "edge_reason": None, "face": [10.0, 10.0, 50.0, 50.0]}
         else:
@@ -3255,8 +3307,8 @@ def _menu_faces_period(monkeypatch, video_dir, *, menus_per_period, persistent=T
 
 
 MENUS = [
-    [{"x": 1500, "y": 100 * k, "w": 300, "h": 213} for k in range(1, 4)],
-    [{"x": 100 * k, "y": 800, "w": 300, "h": 213} for k in range(1, 4)],
+    [{"x": 750, "y": 50 * k, "w": 150, "h": 106} for k in range(1, 4)],  # timeline reduite de moitie
+    [{"x": 50 * k, "y": 400, "w": 150, "h": 106} for k in range(1, 4)],
 ]
 
 
@@ -3327,7 +3379,7 @@ def test_null_answer_keeps_the_one_persistent_face_among_non_persistent_ones(tmp
 
     periods = load(path)["periods"]
     assert [p["override"]["to"] for p in periods] == [1, 1]
-    assert contains(periods[1]["facecam"], STREAM_FACE)
+    assert contains(periods[1]["facecam"], HALF_FACE)
 
 
 # --------------------------------------------------------------------------
@@ -3430,7 +3482,7 @@ def test_force_recompute_empties_the_facecam_boards_folder_first(tmp_path, video
     """image-M5 : les planches period_N.jpg d'un ancien calcul (plus de
     periodes) ne survivent pas a un recalcul : facecam/ ne contient que les
     planches referencees par facecam.json."""
-    write_timeline(video_dir, every(10.0, 120, "live"))
+    write_timeline(video_dir, every(10.0, 120, "live"), shrink=2)
     boards = video_dir / "facecam"
     boards.mkdir(parents=True)
     (boards / "period_7.jpg").write_bytes(b"ancien")
