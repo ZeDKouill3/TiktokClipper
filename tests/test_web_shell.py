@@ -33,6 +33,7 @@ MIGRATED = (
     "review",
     "channels",
     "stats",
+    "journal",
     "accounts",
     "settings",
 )
