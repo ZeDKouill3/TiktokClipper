@@ -5,7 +5,7 @@ slug: ui-v3-u1-vendoring-basecoat-idiomorph-pr-fixage
 title: "UI v3 U1 : Vendoring Basecoat + Idiomorph, préfixage .v3, test de garde"
 created: 2026-10-11T03:58:42Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - tools/vendor_basecoat.py
   - clipper/web/static/vendor/**
@@ -16,6 +16,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/60a9928ab690@9b8ed5e
+    tree: scope/347e0811fd40
+    criteria: 6be929d3ec0f
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
