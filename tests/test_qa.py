@@ -1252,3 +1252,36 @@ def test_split_empty_webcam_blocks_and_rejects_the_clip(tmp_path, dirs):
     assert data["ready"] is False
     issue = data["qa"]["issues"][0]
     assert (issue["type"], issue["severity"], issue["source"]) == ("empty_webcam", "blocking", "llm")
+
+
+# --------------------------------------------------------------------------
+# TASK-0aff43d73607 (image-M4) : la QA lit ce que le rendu a dessine
+# (sidecar title_shown), jamais la config courante.
+# --------------------------------------------------------------------------
+
+
+def test_split_prompt_follows_sidecar_title_shown_false_not_current_config(tmp_path, dirs):
+    workspace, output = dirs
+    write_split_clip(output, title_shown=False)
+    prompt = ask_prompt(tmp_path, workspace, output).prompt  # config par defaut : title_enabled = true
+    assert "Titre d'ecran du split" not in prompt
+    assert "titre d'ecran affiche" not in prompt.lower()
+
+
+def test_split_prompt_follows_sidecar_title_shown_true_not_current_config(tmp_path, dirs):
+    workspace, output = dirs
+    write_split_clip(output, title_shown=True)
+    cfg = Config(
+        mode="auto", workspace_dir=tmp_path / "workspace", output_dir=tmp_path / "output",
+        _sections={"qa": {"parallel": 1}, "render": {"title_enabled": False}},
+    )
+    prompt = ask_prompt(tmp_path, workspace, output, cfg).prompt
+    assert "Titre d'ecran du split" in prompt
+
+
+def test_letterbox_prompt_without_title_shown_does_not_cite_a_title(tmp_path, dirs):
+    workspace, output = dirs
+    path = write_clip_letterbox(output, screen_title="Titre fantome")
+    path.write_text(json.dumps({**read(path), "title_shown": False}), encoding="utf-8")
+    prompt = ask_prompt(tmp_path, workspace, output).prompt
+    assert "Titre fantome" not in prompt

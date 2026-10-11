@@ -884,6 +884,7 @@ def _render_split(
     zone_w = zx1 - zx0
     margin_r = PLAY_RES_X - zx1
     hold_s = float(settings["hold_s"])
+    words = _display_words(words, where)
 
     items: list[tuple[list[list[list[dict[str, Any]]]], int]] = []
     gap_s = float(settings["gap_s"])
