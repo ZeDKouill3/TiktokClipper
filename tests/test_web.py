@@ -7742,15 +7742,15 @@ def test_the_stats_screen_follows_the_mockup_account_period_scan_tabs_and_video_
         assert f'"{label}"' in js
 
 
-def test_the_stats_screen_no_longer_has_the_csv_import_nor_the_internal_measures():
+def test_the_stats_screen_no_longer_has_the_csv_import_but_carries_the_internal_measures():
     js, page, css = _static("screens", "stats.js"), _static("index.html"), _static("style.css")
     everything = "".join(p.read_text(encoding="utf-8") for p in sorted(STATIC.rglob("*.js"))) + page
 
     assert "/api/stats/import" not in everything and "data-stats-import" not in everything
     assert "Importer un CSV" not in everything and "data-stats-file" not in everything
-    for internal in ("llm_cost", "by_usage", "by_video", "by_day", ".steps", ".counts", "/api/measures", "Coûts du modèle de langage",
-                     "Durée par étape", "Vidéos par statut"):
-        assert internal not in js, internal
+    # U10 : le coût par vidéo et la durée par étape (ex-Tableau de bord) vivent ici
+    for internal in ("/api/measures", "by_video", "Coût par vidéo", "Durée par étape"):
+        assert internal in js, internal
     assert "Résultats par clip" not in js and "stats_unmatched" not in js
     assert ".stats-import" not in css
 
@@ -7763,13 +7763,13 @@ def test_the_dashboard_no_longer_carries_the_internal_measures_they_belong_to_th
         assert block not in js, block
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent du PATH")
-def test_stats_evolutions_are_signed_percentages_and_null_is_a_dash():
+def test_stats_evolutions_are_signed_percentages_and_null_says_not_given():
     out = _stats_js_run(["statsDelta"], "[statsDelta(12.5), statsDelta(-3), statsDelta(0), statsDelta(null)]")
 
     assert out[0] == {"cls": "up", "text": "▲ +12,5 %"}
     assert out[1] == {"cls": "down", "text": "▼ -3,0 %"}
     assert out[2] == {"cls": "flat", "text": "■ 0,0 %"}
-    assert out[3] == {"cls": "flat", "text": "—"}
+    assert out[3] == {"cls": "flat", "text": "variation non fournie"}
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent du PATH")
@@ -7813,12 +7813,12 @@ def test_stats_addresses_carry_account_tab_and_video():
 
 
 def test_stats_css_carries_the_mockup_layout():
-    css = _static("style.css")
+    css = _static("v3.css")
 
-    for selector in (".ctl", ".linked", ".scan", ".kpi-btn", ".delta", ".chart .ln", ".chart .ln.prev", ".gapband",
+    for selector in (".ctl", ".scan", ".kpi", ".delta", ".chart .ln", ".chart .ln.prev", ".gapband",
                      ".ptable", ".thumb-p", ".figs", ".src-row", ".poster-big", ".video-sheet", ".dlinks", ".sort-m"):
         assert selector in css, selector
-    assert "@media (max-width: 720px)" in css and ".ptable thead { display: none; }" in css  # liste en cartes sur mobile
+    assert "@media (max-width: 720px)" in css and ".v3 .ptable thead { display: none; }" in css  # liste en cartes sur mobile
 
 
 # --------------------------------------------------------------------------

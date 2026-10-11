@@ -5,8 +5,8 @@
    de fond si le dernier est perime (le dernier releve connu reste affiche, « Relevé en cours » jusqu'a la fin) ; le
    bouton « Relever maintenant » fait POST /api/stats/tiktok/refresh. Un seul releve a la fois par compte (serveur). Adresses : #/stats[/<compte>[/videos[/<id>]]].
    Graphiques en SVG calcule ici, sans bibliotheque (ADR-09ad). Une valeur que TikTok n'affiche pas (null) est un
-   tiret, jamais un 0. Les mesures internes (couts LLM, durees d'etapes, videos par statut) sont dans le Tableau
-   de bord. Charge apres screens.js dont il remplace l'entree Screens.stats. */
+   tiret, jamais un 0. Les mesures internes (cout par video, duree par etape : GET /api/measures) ont leur section ici ; le Tableau
+   de bord n'en garde que le resume. Charge apres screens.js dont il remplace l'entree Screens.stats. */
 "use strict";
 
 const STATS_STALE_MS = 4000;
@@ -33,11 +33,14 @@ const STATS_VIEWER_SECTIONS = [["types", "Types de spectateurs"], ["age", "Âge"
 const statsUi = {
   accounts: null, overview: null, videos: null, videosAccount: "", video: null, videoAccount: "", error: null, loading: null, dirty: false, at: 0, key: "",
   period: 28, metric: "views", sort: { key: "posted_at", dir: "desc" }, q: "", vtab: "overview", refreshing: false,
-  opened: {}, lastRender: 0, poll: null, wasRefreshing: {}, learning: null, learningError: null,
+  opened: {}, lastRender: 0, poll: null, wasRefreshing: {}, learning: null, learningError: null, measures: null, measuresError: null,
 };
 
 /* ---------- formats ---------- */
 
+const STATS_NOT_GIVEN = "non fourni par TikTok Studio";
+/* Valeur d'une tuile : jamais un tiret, TikTok Studio ne l'a simplement pas donnee (un vrai 0 reste 0). */
+const tileValue = (n) => (n === null || n === undefined ? STATS_NOT_GIVEN : fr(n));
 const statsNum = (n) => (n === null || n === undefined ? "—" : fr(n));
 const statsPctValue = (fraction, digits) => (fraction === null || fraction === undefined ? "—" : `${fr(fraction * 100, digits || 0)} %`);
 
@@ -50,7 +53,7 @@ function statsDuration(seconds) {
 
 /* Evolution : « ▲ +12,5 % » (vert), « ▼ -3 % » (rouge), « ■ 0 % » ; null -> tiret. */
 function statsDelta(change) {
-  if (change === null || change === undefined) return { cls: "flat", text: "—" };
+  if (change === null || change === undefined) return { cls: "flat", text: "variation non fournie" };
   const sign = change > 0.05 ? "▲" : change < -0.05 ? "▼" : "■";
   const cls = change > 0.05 ? "up" : change < -0.05 ? "down" : "flat";
   return { cls, text: `${sign} ${change > 0 ? "+" : ""}${fr(change, 1)} %` };
@@ -109,6 +112,7 @@ function statsLoad() {
     try {
       statsUi.accounts = (await api("/api/stats/tiktok")).accounts;
       try { statsUi.learning = await api("/api/learning"); statsUi.learningError = null; } catch (err) { statsUi.learningError = err; }
+      try { statsUi.measures = await api("/api/measures"); statsUi.measuresError = null; } catch (err) { statsUi.measuresError = err; }
       const account = statsAccount();
       if (account) {
         const r = statsRoute();
@@ -254,11 +258,11 @@ function statsChartWidth() {
 
 /* ---------- blocs ---------- */
 
-function statsEmpty(iconName, title, text, action) { return `<div class="panel">${emptyState(iconName, title, text, action)}</div>`; }
+function statsEmpty(iconName, title, text, action) { return `<div class="card s3-card">${emptyState(iconName, title, text, action)}</div>`; }
 
-const statsScanButton = (account) => `<button class="btn btn-primary" type="button" data-stats-scan${statsRefreshing(account) || !account.ready ? " disabled" : ""}>${icon("refresh-cw", statsRefreshing(account) ? "spin" : "")}${statsRefreshing(account) ? "Relevé en cours" : "Relever maintenant"}</button>`;
+const statsScanButton = (account) => `<button class="btn" type="button" data-stats-scan${statsRefreshing(account) || !account.ready ? " disabled" : ""}>${icon("refresh-cw", statsRefreshing(account) ? "spin" : "")}${statsRefreshing(account) ? "Relevé en cours" : "Relever maintenant"}</button>`;
 
-const statsFullButton = (account) => `<button class="btn" type="button" data-stats-full${statsRefreshing(account) || !account.ready ? " disabled" : ""}>${icon("layers", "")}Relevé complet</button>`;
+const statsFullButton = (account) => `<button class="btn" data-variant="outline" type="button" data-stats-full${statsRefreshing(account) || !account.ready ? " disabled" : ""}>${icon("layers", "")}Relevé complet</button>`;
 
 /* « Relevé complet » : detail de TOUTES les videos (le releve normal est plafonne aux plus recentes) ; la confirmation
    dit combien de pages TikTok Studio seront ouvertes (2 + 3 par video connue, jamais devine quand rien n'est connu). */
@@ -272,14 +276,14 @@ function statsControls(account) {
   const options = accounts.map((a) => `<option value="${esc(a.account)}"${a.account === account.account ? " selected" : ""}>${esc(a.label)} · ${esc(a.account)}</option>`).join("");
   const periods = `${STATS_PERIODS.map((n) => `<button type="button" data-stats-period="${n}" class="${n === statsUi.period ? "on" : ""}" aria-pressed="${n === statsUi.period}">${n} jours</button>`).join("")}`;
   const when = account.fetched_at
-    ? `Dernier relevé : <b>${esc(statsWhen(account.fetched_at))}</b><br><span class="faint">${esc(fr(account.snapshots))} relevé${account.snapshots > 1 ? "s" : ""} enregistré${account.snapshots > 1 ? "s" : ""}</span>`
+    ? `Dernier relevé : <b>${esc(statsWhen(account.fetched_at))}</b><br><span class="muted">${esc(fr(account.snapshots))} relevé${account.snapshots > 1 ? "s" : ""} enregistré${account.snapshots > 1 ? "s" : ""}</span>`
     : "Dernier relevé : <b>jamais</b>";
-  const notReady = account.ready ? "" : `<div class="banner warn" role="status" data-stats-notready>${icon("lock", "i-sm")}<div><b>Compte non prêt à publier : aucun relevé n'est lancé.</b><br><span class="muted">${esc(account.not_ready_reason)}</span></div></div>`;
-  const running = statsRefreshing(account) ? `<div class="banner" role="status" data-stats-running>${icon("refresh-cw", "i-sm spin")}<div><b>Relevé en cours.</b><br><span class="muted">${account.fetched_at ? "Les chiffres affichés sont ceux du dernier relevé ; ils se mettent à jour à la fin." : "Aucun relevé enregistré pour l'instant ; les chiffres apparaissent à la fin."}</span></div></div>` : "";
-  const failed = account.error ? `<div class="banner bad" role="alert" data-stats-error>${icon("circle-alert", "i-sm")}<div><b>Dernier relevé arrêté (${esc(account.error.code)}).</b><br><span class="muted">${esc(account.error.reason)}</span></div></div>` : "";
+  const notReady = account.ready ? "" : `<div class="alert" role="status" data-stats-notready>${icon("lock")}<h2>Compte non prêt à publier : aucun relevé n'est lancé.</h2><section>${esc(account.not_ready_reason)}</section></div>`;
+  const running = statsRefreshing(account) ? `<div class="alert" role="status" data-stats-running>${icon("refresh-cw", "spin")}<h2>Relevé en cours.</h2><section>${account.fetched_at ? "Les chiffres affichés sont ceux du dernier relevé ; ils se mettent à jour à la fin." : "Aucun relevé enregistré pour l'instant ; les chiffres apparaissent à la fin."}</section></div>` : "";
+  const failed = account.error ? `<div class="alert" data-variant="destructive" role="alert" data-stats-error>${icon("circle-alert")}<h2>Dernier relevé arrêté (${esc(account.error.code)}).</h2><section>${esc(account.error.reason)}</section></div>` : "";
   return `<section class="ctl" aria-label="Compte et période">
       <div class="acct field"><label for="stats-account">Compte TikTok</label><select class="input" id="stats-account" data-stats-account>${options}</select></div>
-      <div class="field"><span class="field-label" id="stats-lbl-period">Période</span><div class="seg stats-seg" data-stats-periods role="group" aria-labelledby="stats-lbl-period">${periods}</div></div>
+      <div class="field"><span class="field-label" id="stats-lbl-period">Période</span><div class="seg" data-stats-periods role="group" aria-labelledby="stats-lbl-period">${periods}</div></div>
       <div class="scan"><div class="scan-when">${when}</div>${statsScanButton(account)}${statsFullButton(account)}</div>
     </section>${notReady}${running}${failed}`;
 }
@@ -292,7 +296,7 @@ function statsTabs(account, tab, count) {
 
 function statsOverview(account) {
   const data = statsUi.overview;
-  if (!data || data.account !== account.account) return `<div class="skeleton skeleton-card"></div>`;
+  if (!data || data.account !== account.account) return `<div class="skeleton sk-card"></div>`;
   if (!data.tiles) return statsEmpty("inbox", `Aucun relevé pour ${account.label}`, "Clipper n'a encore rien relevé sur TikTok Studio pour ce compte. Le premier relevé remplit les tuiles et démarre les courbes par jour.");
   const period = data.period;
   const metric = STATS_METRICS.find((m) => m.id === statsUi.metric) || STATS_METRICS[0];
@@ -301,8 +305,8 @@ function statsOverview(account) {
     const given = statsDelta(tile.change_pct);
     const hist = tile.history_change_pct === null || tile.history_change_pct === undefined ? "" : `<small title="Calculée sur nos relevés : valeur il y a ${period} jours">relevés : ${esc(statsDelta(tile.history_change_pct).text)}</small>`;
     return `<button class="kpi kpi-btn" type="button" data-stats-metric="${m.id}" aria-pressed="${m.id === metric.id}">
-      <div class="kpi-label">${icon(m.icon)}${esc(m.label)}</div><div class="kpi-value">${esc(statsNum(tile.value))}</div>
-      <span class="delta ${given.cls}">${esc(given.text)} <small>vs ${period} j précédents (TikTok)</small></span>${hist}</button>`;
+      <div class="kpi-label">${icon(m.icon)}${esc(m.label)}</div><div class="kpi-value${tile.value === null || tile.value === undefined ? " none" : ""}">${esc(tileValue(tile.value))}</div>
+      ${tile.change_pct === null || tile.change_pct === undefined ? "" : `<span class="delta ${given.cls}">${esc(given.text)} <small>vs ${period} j précédents (TikTok)</small></span>`}${hist}</button>`;
   }).join("");
   const s = data.series[metric.id];
   const chart = statsChart({
@@ -312,12 +316,12 @@ function statsOverview(account) {
   });
   const noPoint = s.values.every((v) => v === null);
   return `<div class="kpis" data-stats-tiles>${tiles}</div>
-    <div class="panel" style="margin-top:24px" data-stats-curve>
-      <div class="panel-head"><h2>${esc(metric.label)} par jour</h2><div class="right"><span class="muted" style="font-size:13px">${period} derniers jours · ${esc(statsNum(data.tiles[metric.id].value))} sur la période</span></div></div>
-      <div class="toolbar" style="margin:16px 24px 0"><div class="seg stats-seg" role="group" aria-label="Métrique de la courbe">${STATS_METRICS.map((m) => `<button type="button" data-stats-metric="${m.id}" class="${m.id === metric.id ? "on" : ""}" aria-pressed="${m.id === metric.id}">${esc(m.label)}</button>`).join("")}</div></div>
+    <div class="card s3-card" data-stats-curve>
+      <div class="s3-head"><h2>${esc(metric.label)} par jour</h2><div class="s3-right"><span class="muted" style="font-size:13px">${period} derniers jours · ${esc(tileValue(data.tiles[metric.id].value))} sur la période</span></div></div>
+      <div class="toolbar" style="margin:16px 16px 0"><div class="seg" role="group" aria-label="Métrique de la courbe">${STATS_METRICS.map((m) => `<button type="button" data-stats-metric="${m.id}" class="${m.id === metric.id ? "on" : ""}" aria-pressed="${m.id === metric.id}">${esc(m.label)}</button>`).join("")}</div></div>
       <div class="chart-wrap"><div class="chart">${noPoint ? `<p class="muted stats-empty">TikTok n'affichait aucune valeur pour « ${esc(metric.label)} » sur les relevés.</p>` : chart}</div></div>
       <div class="legend"><span><i></i>${period} derniers jours</span><span><i class="prev"></i>${period} jours précédents</span><span><i class="gap"></i>Jour sans relevé</span></div>
-      <div class="pager-note"><span class="note">${icon("info", "i-xs")}<span>Les tuiles viennent du dernier relevé de la page Données analytiques. Un point de la courbe est la valeur de la tuile ${period} jours au dernier relevé du jour : un jour sans relevé reste vide au lieu d'être inventé.</span></span></div>
+      <div class="pager-note"><span class="note">${icon("info", "i-sm")}<span>Les tuiles viennent du dernier relevé de la page Données analytiques. Un point de la courbe est la valeur de la tuile ${period} jours au dernier relevé du jour : un jour sans relevé reste vide au lieu d'être inventé.</span></span></div>
     </div>`;
 }
 
@@ -354,19 +358,19 @@ function statsVideoRow(v) {
 
 function statsVideosList(account) {
   const videos = statsUi.videos;
-  if (!videos || statsUi.videosAccount !== account.account) return `<div class="skeleton skeleton-card"></div>`;
+  if (!videos || statsUi.videosAccount !== account.account) return `<div class="skeleton sk-card"></div>`;
   if (!account.fetched_at) return statsEmpty("inbox", `Aucune publication relevée pour ${account.label}`, "Les publications apparaissent après le premier relevé de la page Contenu de TikTok Studio.");
-  if (!videos.length && !statsUi.q) return statsEmpty("film", "Aucune publication sur ce compte", "Le relevé est à jour, mais TikTok Studio ne liste aucune vidéo pour ce compte. Publie un clip depuis Clipper : il apparaîtra ici au relevé suivant.", `<a class="btn" href="#/publish">${icon("send")}Aller à Publication</a>`);
+  if (!videos.length && !statsUi.q) return statsEmpty("film", "Aucune publication sur ce compte", "Le relevé est à jour, mais TikTok Studio ne liste aucune vidéo pour ce compte. Publie un clip depuis Clipper : il apparaîtra ici au relevé suivant.", `<a class="btn" data-variant="outline" href="#/publish">${icon("send")}Aller à Publication</a>`);
   const sort = statsUi.sort;
   const head = `<th aria-label="Vignette" style="width:56px"></th>` + STATS_COLUMNS.map(([key, label, right]) =>
     `<th class="${right ? "r" : ""}" ${sort.key === key ? `aria-sort="${sort.dir === "asc" ? "ascending" : "descending"}"` : ""}><button type="button" data-stats-sort="${key}">${esc(label)}<span class="arr" aria-hidden="true">${sort.key === key ? (sort.dir === "asc" ? "▲" : "▼") : ""}</span></button></th>`).join("");
   const body = videos.length ? videos.map(statsVideoRow).join("")
     : `<tr><td colspan="9" class="muted" style="text-align:center;padding:32px">Aucune légende ne contient « ${esc(statsUi.q)} ».</td></tr>`;
-  return `<div class="panel" data-stats-videos>
-    <div class="panel-head"><h2>Vidéos de ${esc(account.label)}</h2><div class="right">${statsRestrictionSummary(statsUi.videos)}<span class="input-ico">${icon("search")}<input class="input" id="stats-q" data-stats-q type="search" placeholder="Filtrer par légende" value="${esc(statsUi.q)}" aria-label="Filtrer par légende" style="width:220px"></span></div></div>
-    <div class="sort-m"><select class="input" data-stats-sort-select aria-label="Trier par">${STATS_COLUMNS.map(([key, label]) => `<option value="${key}"${sort.key === key ? " selected" : ""}>Trier : ${esc(label)}</option>`).join("")}</select><button class="btn" type="button" data-stats-sort-dir aria-label="Inverser le tri">${sort.dir === "asc" ? "▲" : "▼"}</button></div>
-    <div style="overflow-x:auto"><table class="table ptable"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
-    <div class="pager-note">${icon("info", "i-xs")}<span>${esc(fr(videos.length))} vidéo${videos.length > 1 ? "s" : ""} · cliquer une ligne ouvre sa fiche. Les vidéos en cours de traitement sont relevées à nouveau au prochain passage.</span></div></div>`;
+  return `<div class="card s3-card" data-stats-videos>
+    <div class="s3-head"><h2>Vidéos de ${esc(account.label)}</h2><div class="s3-right">${statsRestrictionSummary(statsUi.videos)}<span class="input-ico">${icon("search")}<input class="input" id="stats-q" data-stats-q type="search" placeholder="Filtrer par légende" value="${esc(statsUi.q)}" aria-label="Filtrer par légende" style="width:220px"></span></div></div>
+    <div class="sort-m"><select class="input" data-stats-sort-select aria-label="Trier par">${STATS_COLUMNS.map(([key, label]) => `<option value="${key}"${sort.key === key ? " selected" : ""}>Trier : ${esc(label)}</option>`).join("")}</select><button class="btn" data-variant="outline" type="button" data-stats-sort-dir aria-label="Inverser le tri">${sort.dir === "asc" ? "▲" : "▼"}</button></div>
+    <div class="s3-scroll"><table class="table s3-table ptable"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
+    <div class="pager-note">${icon("info", "i-sm")}<span>${esc(fr(videos.length))} vidéo${videos.length > 1 ? "s" : ""} · cliquer une ligne ouvre sa fiche. Les vidéos en cours de traitement sont relevées à nouveau au prochain passage.</span></div></div>`;
 }
 
 /* Barres « libelle · part » d'un onglet Spectateurs / Engagement ; une part est une fraction ou un nombre. */
@@ -393,37 +397,37 @@ function statsVideoOverviewTab(v) {
     ? `<p>${esc(v.traffic_sources)}</p>`
     : `<div class="reason">${icon("lock", "i-sm")}<span>Sources de trafic <b>disponibles dès 100 vues</b> : TikTok n'affiche pas encore la répartition.</span></div>`;
   const track = (v.history || []).map((h) => ({ label: statsWhen(h.fetched_at), views: h.views }));
-  const history = track.length > 1 ? `<div class="panel panel-pad"><div class="section-title">${icon("trending-up")}Vues à chaque relevé</div><div class="chart">${statsChart({
+  const history = track.length > 1 ? `<div class="card s3-card s3-pad"><div class="section-title">${icon("trending-up")}Vues à chaque relevé</div><div class="chart">${statsChart({
     labels: track.map((t) => t.label.slice(0, 5)), width: statsChartWidth() > 640 ? 640 : statsChartWidth(), height: 180, series: [{ values: track.map((t) => t.views) }],
     aria: "Vues à chaque relevé", tip: (i) => `${track[i].label} : ${track[i].views === null ? "—" : fr(track[i].views)} vues` })}</div></div>` : "";
   return `<div class="stack"><div class="figs">${figs.map(([l, val]) => statsFig(l, val)).join("")}</div>
-    <div class="panel"><div class="panel-head"><h2>Taux de rétention</h2><div class="right muted" style="font-size:13px">Part des spectateurs encore présents</div></div><div class="chart-wrap">${retention}</div></div>
-    ${history}<div class="panel panel-pad"><div class="section-title">${icon("trending-up")}Sources de trafic</div>${sources}</div></div>`;
+    <div class="card s3-card"><div class="s3-head"><h2>Taux de rétention</h2><div class="s3-right muted" style="font-size:13px">Part des spectateurs encore présents</div></div><div class="chart-wrap">${retention}</div></div>
+    ${history}<div class="card s3-card s3-pad"><div class="section-title">${icon("trending-up")}Sources de trafic</div>${sources}</div></div>`;
 }
 
 function statsVideoViewersTab(v) {
-  if (!v.viewers) return `<div class="panel panel-pad"><div class="reason">${icon("lock", "i-sm")}<span>Données <b>disponibles dès 100 vues</b> : TikTok n'affiche pas encore les spectateurs de cette vidéo.</span></div></div>`;
+  if (!v.viewers) return `<div class="card s3-card s3-pad"><div class="reason">${icon("lock", "i-sm")}<span>Données <b>disponibles dès 100 vues</b> : TikTok n'affiche pas encore les spectateurs de cette vidéo.</span></div></div>`;
   return `<div class="stack"><div class="figs">${statsFig("Total des spectateurs", statsNum(v.viewers.total))}</div>${STATS_VIEWER_SECTIONS.map(([key, label]) =>
-    `<div class="panel panel-pad" data-stats-section="${key}"><div class="section-title">${esc(label)}</div>${statsEntryBars(v.viewers[key], true)}</div>`).join("")}</div>`;
+    `<div class="card s3-card s3-pad" data-stats-section="${key}"><div class="section-title">${esc(label)}</div>${statsEntryBars(v.viewers[key], true)}</div>`).join("")}</div>`;
 }
 
 function statsVideoEngagementTab(v) {
-  if (!v.engagement) return `<div class="panel panel-pad"><div class="reason">${icon("lock", "i-sm")}<span>Données <b>disponibles dès 100 vues</b> : TikTok n'affiche pas encore l'engagement de cette vidéo.</span></div></div>`;
+  if (!v.engagement) return `<div class="card s3-card s3-pad"><div class="reason">${icon("lock", "i-sm")}<span>Données <b>disponibles dès 100 vues</b> : TikTok n'affiche pas encore l'engagement de cette vidéo.</span></div></div>`;
   return `<div class="stack"><div class="figs">${statsFig("J'aime", statsNum(v.likes))}${statsFig("Commentaires", statsNum(v.comments))}${statsFig("Partages", statsNum(v.engagement.shares))}</div>
-    <div class="panel panel-pad" data-stats-section="likes_over_time"><div class="section-title">J'aime dans le temps</div>${statsEntryBars(v.engagement.likes_over_time, false)}</div>
-    <div class="panel panel-pad" data-stats-section="comment_words"><div class="section-title">Mots les plus utilisés dans les commentaires</div>${statsEntryBars(v.engagement.comment_words, false)}</div></div>`;
+    <div class="card s3-card s3-pad" data-stats-section="likes_over_time"><div class="section-title">J'aime dans le temps</div>${statsEntryBars(v.engagement.likes_over_time, false)}</div>
+    <div class="card s3-card s3-pad" data-stats-section="comment_words"><div class="section-title">Mots les plus utilisés dans les commentaires</div>${statsEntryBars(v.engagement.comment_words, false)}</div></div>`;
 }
 
 function statsVideoSheet(account) {
   const v = statsUi.video;
-  const back = `<a class="btn btn-ghost" href="${statsHref(account.account, "videos")}" data-stats-back>${icon("chevron-left")}Toutes les vidéos</a>`;
-  if (!v || v.post_id !== statsRoute().post || statsUi.videoAccount !== account.account) return `${back}<div class="skeleton skeleton-card"></div>`;
-  const links = [`<a class="btn" href="${esc(v.post_url)}" target="_blank" rel="noopener noreferrer">${icon("external-link")}<span>Ouvrir sur TikTok</span></a>`];
+  const back = `<a class="btn" data-variant="ghost" href="${statsHref(account.account, "videos")}" data-stats-back>${icon("chevron-left")}Toutes les vidéos</a>`;
+  if (!v || v.post_id !== statsRoute().post || statsUi.videoAccount !== account.account) return `${back}<div class="skeleton sk-card"></div>`;
+  const links = [`<a class="btn" data-variant="outline" href="${esc(v.post_url)}" target="_blank" rel="noopener noreferrer">${icon("external-link")}<span>Ouvrir sur TikTok</span></a>`];
   if (v.clip) {
-    links.push(`<a class="btn" href="#/clips/${encodeURIComponent(v.clip.video_id)}">${icon("clapperboard")}<span>Voir le clip dans Clipper</span></a>`,
-      `<a class="btn" href="#/videos/${encodeURIComponent(v.clip.video_id)}">${icon("film")}<span>Vidéo source : ${esc(v.clip.video_id)}</span></a>`);
+    links.push(`<a class="btn" data-variant="outline" href="#/clips/${encodeURIComponent(v.clip.video_id)}">${icon("clapperboard")}<span>Voir le clip dans Clipper</span></a>`,
+      `<a class="btn" data-variant="outline" href="#/videos/${encodeURIComponent(v.clip.video_id)}">${icon("film")}<span>Vidéo source : ${esc(v.clip.video_id)}</span></a>`);
   }
-  const origin = v.outside_clipper ? `<p class="muted" style="font-size:13px;margin-top:12px" data-stats-outside>${icon("info", "i-xs")} Publié hors Clipper : aucun clip ni vidéo source ne correspond à ce post.</p>` : "";
+  const origin = v.outside_clipper ? `<p class="muted" style="font-size:13px;margin-top:12px" data-stats-outside>${icon("info", "i-sm")} Publié hors Clipper : aucun clip ni vidéo source ne correspond à ce post.</p>` : "";
   const vis = STATS_VISIBILITY[v.visibility] || v.visibility || "—";
   const tab = STATS_VIDEO_TABS.some(([id]) => id === statsUi.vtab) ? statsUi.vtab : "overview";
   const content = { overview: statsVideoOverviewTab, viewers: statsVideoViewersTab, engagement: statsVideoEngagementTab }[tab](v);
@@ -437,6 +441,36 @@ function statsVideoSheet(account) {
       ${v.processing ? `<div class="reason">${icon("hourglass", "i-sm")}<span><b>TikTok traite encore cette vidéo.</b> Les chiffres arrivent en général dans l'heure qui suit la publication ; Clipper la relèvera au prochain passage.</span></div>` : ""}
       ${v.detail_not_read ? `<div class="reason">${icon("info", "i-sm")}<span><b>Détail non relevé.</b> Cette vidéo est plus ancienne que les dernières relevées : seuls les chiffres de la liste sont connus. Le bouton « Relevé complet » relève aussi son détail.</span></div>` : ""}
       ${content}</div></div>`;
+}
+
+/* ---------- section « Coûts et durées » (mesures internes de Clipper, GET /api/measures) ---------- */
+
+const statsMoney = (usd) => `${fr(usd, 2)} $`;
+
+function statsMeasuresCost(cost) {
+  const videos = Object.entries(cost.by_video || {}).sort((a, b) => b[1].cost - a[1].cost);
+  if (!videos.length) return `<p class="muted stats-empty">Aucun appel au modèle de langage sur la période.</p>`;
+  const rows = videos.map(([id, v]) => `<tr><td class="wrap"><a href="#/videos/${encodeURIComponent(id)}">${esc(id)}</a></td><td class="r">${esc(fr(v.calls))}</td><td class="r">${esc(statsMoney(v.cost))}</td><td class="wrap">${v.unreported_calls ? `${esc(fr(v.unreported_calls))} appel${v.unreported_calls > 1 ? "s" : ""} sans coût rapporté` : ""}</td></tr>`).join("");
+  return `<div class="s3-scroll"><table class="table s3-table"><thead><tr><th>Vidéo</th><th class="r">Appels</th><th class="r">Coût</th><th>Remarque</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function statsMeasuresSteps(steps) {
+  const names = Object.keys(steps || {});
+  if (!names.length) return `<p class="muted stats-empty">Aucune étape terminée sur la période.</p>`;
+  const rows = names.map((name) => `<tr><td>${esc(STEP_LABELS[name] || name)}</td><td class="r">${esc(statsDuration(steps[name].mean_s))}</td><td class="r">${esc(statsDuration(steps[name].last_s))}</td><td class="r">${esc(fr(steps[name].count))}</td></tr>`).join("");
+  return `<div class="s3-scroll"><table class="table s3-table"><thead><tr><th>Étape</th><th class="r">Durée moyenne</th><th class="r">Dernière</th><th class="r">Vidéos</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function statsMeasuresSection() {
+  if (statsUi.measuresError) {
+    return `<section class="learning"><h2>Coûts et durées</h2><p class="reason bad" role="alert">Lecture impossible : ${esc(statsUi.measuresError.message || statsUi.measuresError)}</p></section>`;
+  }
+  const m = statsUi.measures;
+  if (!m) return "";
+  const total = m.llm_cost.unreported_calls ? `${statsMoney(m.llm_cost.total)} · ${fr(m.llm_cost.unreported_calls)} appel(s) sans coût rapporté, non comptés` : statsMoney(m.llm_cost.total);
+  return `<section class="learning"><h2>Coûts et durées</h2>
+    <div class="card s3-card s3-pad" data-measures-cost><h3>Coût par vidéo</h3><p class="muted">Modèle de langage, total sur la période : <strong>${esc(total)}</strong></p>${statsMeasuresCost(m.llm_cost)}</div>
+    <div class="card s3-card s3-pad" data-measures-steps><h3>Durée par étape</h3><p class="muted">Vidéos terminées sur la période.</p>${statsMeasuresSteps(m.steps)}</div></section>`;
 }
 
 /* ---------- section « Apprentissage » (ADR-c260, SPEC-00db R6-R7) ---------- */
@@ -478,7 +512,7 @@ function learningStateBlock(data) {
     excluded[key] = (excluded[key] || 0) + 1;
   }
   const excludedRows = Object.keys(excluded).map((k) => `<li><strong>${fr(excluded[k])}</strong> · ${esc(k)}</li>`).join("") || "<li>aucun</li>";
-  return `<div class="panel panel-pad" data-learning-state>
+  return `<div class="card s3-card s3-pad" data-learning-state>
     <h3>État de la boucle</h3>
     ${data.enabled ? "" : `<p class="reason">Apprentissage désactivé ([learning] enabled = false) : le worker ne rattache ni ne verse rien.</p>`}
     <p>Dernier versement : <strong>${esc(learningWhen(sync.last_sync))}</strong></p>
@@ -492,14 +526,14 @@ function learningStateBlock(data) {
 function learningWeightsBlock(data) {
   const judges = data.weights && data.weights.judges ? Object.keys(data.weights.judges) : [];
   if (!judges.length) {
-    return `<div class="panel panel-pad" data-learning-weights><h3>Poids par juge</h3><p class="reason">Pas encore de poids calculés : il faut des clips mûrs sur un compte éligible.</p></div>`;
+    return `<div class="card s3-card s3-pad" data-learning-weights><h3>Poids par juge</h3><p class="reason">Pas encore de poids calculés : il faut des clips mûrs sur un compte éligible.</p></div>`;
   }
   const rows = judges.map((name) => {
     const j = data.weights.judges[name];
     return `<tr><td>${esc(name)}</td><td>${fr(j.weight, 2)}</td><td>${j.agreement === null || j.agreement === undefined ? "—" : fr(j.agreement, 2)}</td><td>${fr(j.clips || 0)}</td><td>${esc(LEARNING_WEIGHT_REASONS[j.reason] || j.reason || "—")}</td></tr>`;
   }).join("");
-  return `<div class="panel panel-pad" data-learning-weights><h3>Poids par juge</h3>
-    <div style="overflow-x:auto"><table class="table"><thead><tr><th>Juge</th><th>Poids</th><th>Accord</th><th>Cas</th><th>Raison</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  return `<div class="card s3-card s3-pad" data-learning-weights><h3>Poids par juge</h3>
+    <div class="s3-scroll"><table class="table s3-table"><thead><tr><th>Juge</th><th>Poids</th><th>Accord</th><th>Cas</th><th>Raison</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
 function learningMetric(metric) {
@@ -511,8 +545,8 @@ function learningProposal(p) {
   const key = `${esc(p.judge)}/${p.version}`;
   const decided = p.status === "proposed" ? "" : ` · ${esc(learningWhen(p.decided_at))}`;
   const buttons = p.status === "proposed"
-    ? `<div class="right"><button class="btn btn-primary btn-sm" type="button" data-learning-adopt="${key}">Adopter</button><button class="btn btn-sm" type="button" data-learning-refuse="${key}">Refuser</button></div>` : "";
-  return `<div class="panel panel-pad" data-learning-proposal="${key}">
+    ? `<div class="s3-right"><button class="btn" data-size="sm" type="button" data-learning-adopt="${key}">Adopter</button><button class="btn" data-variant="outline" data-size="sm" type="button" data-learning-refuse="${key}">Refuser</button></div>` : "";
+  return `<div class="card s3-card s3-pad" data-learning-proposal="${key}">
     <h4>${esc(p.judge)} · v${fr(p.version)} <span class="chip plain">${esc(LEARNING_STATUS[p.status] || p.status)}${decided}</span></h4>
     <p>Métrique : ${esc(learningMetric(p.metric))} (plus bas est mieux)</p>
     ${p.error ? `<p class="reason bad">${esc(p.error)}</p>` : ""}
@@ -539,9 +573,9 @@ function learningRetentionBlock(data) {
   const body = r.rows.length
     ? r.rows.map((row) => `<tr><td>${esc(row.video_id)} · ${esc(row.clip_id)}</td><td>${statsDuration(row.duration)}</td><td>${statsPctValue(row.pct_watched, 1)}</td><td>${statsPctValue(row.watched_full, 0)}</td><td>${statsPctValue(row.views_percentile, 0)}</td><td>${esc(LEARNING_MOMENT_SOURCES[row.moment_source] || "—")}</td></tr>`).join("")
     : `<tr><td colspan="6" class="muted">Aucun clip mûr relevé.</td></tr>`;
-  return `<div class="panel panel-pad" data-learning-retention><h3>Rétention à maturité</h3>
+  return `<div class="card s3-card s3-pad" data-learning-retention><h3>Rétention à maturité</h3>
     <p>Clips mûrs : <strong>${fr(r.n)}</strong></p>${note}
-    <div style="overflow-x:auto"><table class="table"><thead><tr><th>Clip</th><th>Durée</th><th>% vu</th><th>% vu en entier</th><th>Rang des vues</th><th>Source du moment</th></tr></thead><tbody>${body}</tbody></table></div></div>`;
+    <div class="s3-scroll"><table class="table s3-table"><thead><tr><th>Clip</th><th>Durée</th><th>% vu</th><th>% vu en entier</th><th>Rang des vues</th><th>Source du moment</th></tr></thead><tbody>${body}</tbody></table></div></div>`;
 }
 
 /* « Ce qui marche » : quatre tableaux (jeu, streamer, heure, compte) ; groupes, medianes et `few` viennent du serveur, aucun calcul ici (ADR-49cd). */
@@ -549,7 +583,7 @@ const LEARNING_BREAKDOWN_TABLES = [["game", "Jeu"], ["streamer", "Streamer"], ["
 
 function learningBreakdownTable(name, title, groups) {
   const body = groups.map((g) => `<tr><td>${esc(g.label)}${g.few ? ` <span class="muted" data-breakdown-few>trop peu pour conclure</span>` : ""}</td><td>${fr(g.n)}</td><td>${fr(g.median_views)}</td><td>${statsPctValue(g.median_pct_watched, 1)}</td><td><a href="#/clips/${encodeURIComponent(g.best.video_id)}">${esc(g.best.video_id)} · ${esc(g.best.clip_id)}</a> (${fr(g.best.views)} vues)</td></tr>`).join("");
-  return `<div data-breakdown="${name}"><h4>${esc(title)}</h4><div style="overflow-x:auto"><table class="table"><thead><tr><th>${esc(title)}</th><th>n</th><th>Vues médianes</th><th>Part vue médiane</th><th>Meilleur clip</th></tr></thead><tbody>${body}</tbody></table></div></div>`;
+  return `<div data-breakdown="${name}"><h4>${esc(title)}</h4><div class="s3-scroll"><table class="table s3-table"><thead><tr><th>${esc(title)}</th><th>n</th><th>Vues médianes</th><th>Part vue médiane</th><th>Meilleur clip</th></tr></thead><tbody>${body}</tbody></table></div></div>`;
 }
 
 function learningBreakdownBlock(data) {
@@ -559,7 +593,7 @@ function learningBreakdownBlock(data) {
     ? LEARNING_BREAKDOWN_TABLES.map(([name, title]) => learningBreakdownTable(name, title, b.groups[name])).join("")
     : `<p class="muted" data-breakdown-empty>aucun relevé mûr</p>`;
   const skipped = b.skipped ? `<p class="muted">${fr(b.skipped)} relevé(s) sans vues ignoré(s).</p>` : "";
-  return `<div class="panel panel-pad" data-learning-breakdown><h3>Ce qui marche</h3>
+  return `<div class="card s3-card s3-pad" data-learning-breakdown><h3>Ce qui marche</h3>
     <p class="muted">Vues médianes à maturité, relevés réels seulement (${fr(b.n)} clips).</p>${skipped}${body}</div>`;
 }
 
@@ -657,14 +691,14 @@ Screens.stats = {
     statsUi.lastRender = Date.now();
     if (!statsUi.accounts || statsUi.key !== statsKey() || Date.now() - statsUi.at > STATS_STALE_MS) statsLoad();
     if (!statsUi.accounts) {
-      body.innerHTML = statsUi.error
+      morph(body, `<div class="v3 s3">${statsUi.error
         ? emptyState("circle-alert", "Chargement impossible", String(statsUi.error.message || statsUi.error))
-        : `<div class="skeleton skeleton-line"></div><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div>`;
+        : `<div class="skeleton sk-line"></div><div class="skeleton sk-card"></div><div class="skeleton sk-card"></div>`}</div>`);
       return;
     }
     const account = statsAccount();
     if (!account) {
-      body.innerHTML = emptyState("users", "Aucun compte TikTok", "Ajoute un compte dans l'écran Comptes : les statistiques sont relevées compte par compte.", `<a class="btn btn-primary" href="#/accounts">${icon("users")}Aller à Comptes</a>`);
+      morph(body, `<div class="v3 s3">${emptyState("users", "Aucun compte TikTok", "Ajoute un compte dans l'écran Comptes : les statistiques sont relevées compte par compte.", `<a class="btn" data-variant="outline" href="#/accounts">${icon("users")}Aller à Comptes</a>`)}</div>`);
       return;
     }
     const route = statsRoute();
@@ -674,7 +708,8 @@ Screens.stats = {
       const count = statsUi.videos && route.tab === "videos" ? statsUi.videos.length : null;
       pane = statsTabs(account, route.tab, count) + (route.tab === "videos" ? statsVideosList(account) : statsOverview(account));
     }
-    body.innerHTML = `${statsUi.error ? `<p class="reason bad">Actualisation impossible : ${esc(statsUi.error.message || statsUi.error)}</p>` : ""}${statsControls(account)}${pane}${route.tab === "videos" && route.post ? "" : statsLearningSection()}`;
+    const sheet = route.tab === "videos" && route.post;
+    morph(body, `<div class="v3 s3">${statsUi.error ? `<p class="reason bad">Actualisation impossible : ${esc(statsUi.error.message || statsUi.error)}</p>` : ""}${statsControls(account)}${pane}${sheet ? "" : statsMeasuresSection() + statsLearningSection()}</div>`);
     statsWire(body, account);
   },
 };

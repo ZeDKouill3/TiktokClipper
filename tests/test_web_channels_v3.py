@@ -70,10 +70,12 @@ def test_channels_is_a_v3_screen_and_its_css_left_style_css():
         assert selector + " {" not in legacy and selector + "," not in legacy, selector
 
 
-def test_channels_block_is_the_last_block_of_v3_css_and_stays_in_budget():
+def test_channels_block_is_a_closed_block_of_v3_css_and_stays_in_budget():
+    # les ecrans migres apres U9 ajoutent leur bloc a la suite : on exige un bloc ferme, pas la derniere place
     v3 = _static("v3.css")
     assert len(v3.encode("utf-8")) <= 124_162
     assert v3.rindex("/* >>> channels */") > v3.rindex("/* <<< dashboard */")
-    assert v3.rstrip().endswith("/* <<< channels */")
-    block = v3[v3.rindex("/* >>> channels */"):]
+    start = v3.rindex("/* >>> channels */")
+    end = v3.index("/* <<< channels */", start)
+    block = v3[start:end]
     assert "var(--surface" not in block and "var(--line" not in block and "var(--faint" not in block  # jetons v3 seulement
