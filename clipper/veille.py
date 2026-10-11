@@ -74,6 +74,7 @@ CONFIG_DEFAULTS: dict[str, object] = {
     "language": "fr",
     "region": "FR",
     "taste": "",
+    "default_channel": "",  # style (preset de chaîne) appliqué aux VOD mises en file sans style explicite ; "" = aucun
     "max_vods_per_day": 3,
     "best_clips_per_day": 3,
     "baseline_days": 7,
@@ -236,7 +237,21 @@ def settings(config: Config) -> dict[str, object]:
         ZoneInfo(str(table["timezone"]))
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise VeilleError(f"[veille] timezone inconnu : {table['timezone']!r}") from exc
+    default_channel = table["default_channel"]
+    if not isinstance(default_channel, str):
+        raise VeilleError(f"[veille] default_channel doit être un texte (reçu {default_channel!r})")
+    if default_channel:
+        watch = config.section("watch")
+        if default_channel not in channel_mod.list_channels(str(watch["presets_dir"])):
+            raise VeilleError(
+                f"[veille] default_channel {default_channel!r} ne correspond à aucun style (preset) dans "
+                f"{watch['presets_dir']} : créer ce style ou vider default_channel")
     return table
+
+
+def default_channel(config: Config) -> str | None:
+    """Style appliqué par défaut aux VOD mises en file depuis la veille (``None`` si aucun)."""
+    return str(settings(config)["default_channel"]) or None
 
 
 def _state_dir(table: dict[str, object]) -> Path:

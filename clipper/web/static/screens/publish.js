@@ -170,19 +170,21 @@ document.addEventListener("clipper:event", () => {
 /* État d'une carte du calendrier (couleur) : publié, échec, ou programmé (tout le reste : approuvé, planifié,
    programmé sur la plateforme pas encore en ligne, en attente du compte). Lu depuis le statut déjà calculé par
    l'API (pubStatusOf), jamais recalculé ici. */
-function pubPostState(c) {
+function pubPostState(c, now = Date.now()) {
   if (c.publish_status === "approved") return "scheduled";
+  // Publication avec post_id dont le créneau est dans le futur : programmée côté plateforme, pas encore en ligne.
+  if (c.publish_status === "published" && c.post_id && c.slot_at && Date.parse(c.slot_at) > now) return "scheduled";
   const cls = pubStatusOf(c).cls;
   return cls === "bad" ? "failed" : cls === "ok" ? "published" : "scheduled";
 }
 
 /* Carte d'une publication dans le calendrier (maquette v3 : heure, titre sur 2 lignes, compte · service). `extra`
    s'ajoute après l'heure (pastille de statut en vue Jour). */
-function calPostHtml(c, extra) {
+function calPostHtml(c, extra, now = Date.now()) {
   // Une programmation « à vérifier » (post peut-être déjà sur TikTok, publication-I1) ne se replanifie pas en la glissant.
   const draggable = (c.publish_status === "approved" || c.publish_status === "scheduled" || c.publish_status === "failed") && !c.missing && !c.to_verify;
   const at = c.slot_at_paris || c.published_at_paris || "";
-  const state = pubPostState(c);
+  const state = pubPostState(c, now);
   const parts = c.parts_total > 1 ? `<span class="muted">· ${esc(c.part)}/${esc(c.parts_total)}</span>` : "";
   return `<div class="cal-post ${state}${c.missing ? " missing" : ""}" data-post="${esc(pubKey(c))}" draggable="${draggable}" tabindex="0" role="button" aria-label="Ouvrir le clip ${esc(pubTitle(c))}, ${esc(pubStatusOf(c).label)}" title="${esc(pubTitle(c))}">
     <div class="when"><span class="dot"></span>${esc(at ? pubTime(at) : "sans heure")}${parts}${extra || ""}</div>
