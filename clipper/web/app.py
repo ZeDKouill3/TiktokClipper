@@ -848,16 +848,25 @@ class _SseHub:
             self.task = None
 
 
-_SSE_HUBS: dict[int, _SseHub] = {}
+_SSE_HUBS: dict[tuple, _SseHub] = {}
+
+
+def _hub_key(config: Config) -> tuple:
+    """Un hub par ce qu'il surveille, pas par objet ``Config`` : après ``PUT /api/settings`` la config est
+    rechargee (autre objet, memes dossiers) et un second scanner tournait en parallele de l'ancien."""
+    return (str(Path(config.workspace_dir).resolve()),
+            tuple((str(root.resolve()), kind) for root, kind in _watched_state_roots(config)),
+            float(config.section("web")["sse_poll_interval_s"]))
 
 
 async def _event_stream(config: Config) -> AsyncIterator[str]:
     """Événements temps réel (ADR-35b7 §4) : workspace/*/pipeline.json et les fichiers d'état nommés de state/, par
     mtime, sans broker ; un événement {kind, id, at} par changement, jamais pour l'état déjà vu à la connexion.
     Le scan est partagé entre clients et tourne hors de la boucle asyncio."""
-    hub = _SSE_HUBS.get(id(config))
+    key = _hub_key(config)
+    hub = _SSE_HUBS.get(key)
     if hub is None:
-        hub = _SSE_HUBS[id(config)] = _SseHub(config)
+        hub = _SSE_HUBS[key] = _SseHub(config)
     queue = await hub.subscribe()
     try:
         while True:
@@ -865,7 +874,7 @@ async def _event_stream(config: Config) -> AsyncIterator[str]:
     finally:
         hub.unsubscribe(queue)
         if not hub.subscribers:
-            _SSE_HUBS.pop(id(config), None)
+            _SSE_HUBS.pop(key, None)
 
 
 # --------------------------------------------------------------------------

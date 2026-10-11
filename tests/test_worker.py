@@ -5067,3 +5067,137 @@ def test_a_changed_base_is_reread_under_the_loaded_config_file(tmp_path):
     w.tick()
     w.tick()
     assert seen[1:] == [["streamer_x"], ["streamer_x"]]
+
+
+# --------------------------------------------------------------------------
+# TASK-38a2 : les 5 points douteux de la relecture des fusions du 11/10
+# --------------------------------------------------------------------------
+
+
+def _orphan_beat(config: Config, monkeypatch, *, pid: int = 99999) -> None:
+    """Un worker orphelin vivant (autre pid) bat sur la file."""
+    monkeypatch.setattr(worker, "_pid_alive", lambda p: True)
+    path = worker.heartbeat_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"pid": pid, "at": datetime.now(timezone.utc).isoformat()}), encoding="utf-8")
+
+
+class _ExitedProc:
+    def __init__(self, code: int):
+        self.code = code
+
+    def wait(self):
+        return self.code
+
+
+def test_refused_worker_of_serve_makes_the_orphan_visible_in_the_heartbeat(tmp_path, monkeypatch, caplog):
+    """Point 1 (CONFIRMÉ) : le worker lancé par serve est refusé car un orphelin bat ; sans signal, l'interface
+    montrait « active » (le battement de l'orphelin). Le marqueur de serve fait passer l'état à « orphan »."""
+    config = _config(tmp_path)
+    _orphan_beat(config, monkeypatch)
+    with pytest.raises(worker.WorkerError, match="un worker tourne déjà"):
+        worker.Worker(config=config, spawner=FakeSpawner()).startup()
+    assert worker.read_heartbeat(config)["state"] == "active"  # avant : rien ne signalait le refus
+
+    worker.watch_spawned(_ExitedProc(1), config).join(5)
+
+    beat = worker.read_heartbeat(config)
+    assert beat["state"] == "orphan" and "99999" in beat["reason"] and "refusé" in beat["reason"]
+    assert beat["command"] == "python -m clipper worker"
+
+
+def test_clean_exit_of_the_spawned_worker_leaves_no_refusal_marker(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    _orphan_beat(config, monkeypatch)
+
+    worker.watch_spawned(_ExitedProc(0), config).join(5)
+
+    assert worker.read_heartbeat(config)["state"] == "active"
+
+
+def test_a_worker_that_takes_the_place_lifts_the_refusal(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    _orphan_beat(config, monkeypatch)
+    worker.note_refused(config, 1)
+    monkeypatch.setattr(worker, "_pid_alive", lambda p: False)  # l'orphelin est mort
+
+    assert worker.read_heartbeat(config)["state"] == "stopped"
+    worker.Worker(config=config, spawner=FakeSpawner()).startup()
+
+    assert not worker.refused_path(config).exists()
+    monkeypatch.setattr(worker, "_pid_alive", lambda p: True)
+    assert worker.read_heartbeat(config)["state"] == "active"
+
+
+def test_dashboard_worker_reports_the_orphan_state(tmp_path, monkeypatch):
+    from clipper.web import app as web_app
+
+    config = _config(tmp_path)
+    _orphan_beat(config, monkeypatch)
+    worker.note_refused(config, 1)
+
+    assert web_app._dashboard_worker(config)["worker"]["state"] == "orphan"
+
+
+def _non_youtube_queued(config: Config, url: str, **kw) -> str:
+    video_id = pipeline.download.extract_video_id(url)
+    state = _queued_state(video_id, config, **kw)
+    state["source_url"] = url
+    pipeline.save_state(state, config=config)
+    return video_id
+
+
+def test_automatic_resume_does_not_restart_a_thumbnail_fetch(tmp_path, monkeypatch):
+    """Point 2 (CONFIRMÉ) : chaque reprise automatique d'une vidéo non YouTube relançait un fil yt-dlp."""
+    config = _config(tmp_path)
+    _no_inline_resume(monkeypatch)
+    fetches = []
+    monkeypatch.setattr(worker, "_start_thumbnail_fetch", lambda url, cfg: fetches.append(url))
+    _non_youtube_queued(config, "https://www.twitch.tv/videos/4242")
+
+    worker.Worker(config=config, spawner=FakeSpawner()).tick()
+
+    assert [e["action"] for e in _queue(config)] == ["run"] and _queue(config)[0]["resume"] is True
+    assert fetches == []
+
+
+def test_a_fresh_enqueue_still_fetches_the_thumbnail(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    fetches = []
+    monkeypatch.setattr(worker, "_start_thumbnail_fetch", lambda url, cfg: fetches.append(url))
+
+    worker.enqueue("https://www.twitch.tv/videos/4343", None, "run", config=config)
+
+    assert fetches == ["https://www.twitch.tv/videos/4343"]
+
+
+def test_a_queued_state_without_retry_at_neither_raises_nor_blocks_the_others(tmp_path, monkeypatch, caplog):
+    """Point 3 (CONFIRMÉ) : ``retry_at`` null faisait lever ``queued()`` (TypeError du tri) à chaque tour et
+    bloquait toutes les reprises."""
+    config = _config(tmp_path)
+    _no_inline_resume(monkeypatch)
+    _queued_state(VIDEO_A, config)
+    broken = _queued_state(VIDEO_B, config)
+    broken["retry_at"] = None
+    pipeline.save_state(broken, config=config)
+    w = worker.Worker(config=config, spawner=FakeSpawner())
+
+    with caplog.at_level(logging.ERROR):
+        w.tick()
+        w.tick()
+
+    assert [e["video_id"] for e in _queue(config)] == [VIDEO_A]  # la valide reprend
+    state_b = pipeline.load_state(VIDEO_B, config=config)
+    assert state_b["status"] == "queued" and "retry_at" in state_b["reason"]  # état signalé
+    assert not any(r.exc_info for r in caplog.records)  # aucune trace à chaque tour
+    assert sum("retry_at" in r.getMessage() for r in caplog.records) == 1  # journalisé une fois
+
+
+def test_pipeline_queued_sorts_a_missing_retry_at_last(tmp_path):
+    config = _config(tmp_path)
+    _queued_state(VIDEO_A, config)
+    broken = _queued_state(VIDEO_B, config)
+    broken["retry_at"] = None
+    pipeline.save_state(broken, config=config)
+
+    assert [s["video_id"] for s in pipeline.queued(config=config)] == [VIDEO_A, VIDEO_B]

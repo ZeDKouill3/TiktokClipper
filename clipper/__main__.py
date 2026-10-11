@@ -409,13 +409,14 @@ def main(argv: list[str] | None = None) -> int:
                 config = dataclasses.replace(config, _sections=sections)
             # le worker enfant lit la meme config que le serveur (sinon il retomberait sur config.toml)
             config_args = ["--config", args.config] if args.config is not None else []
+            from clipper import worker as worker_mod
+
             worker_proc = _popen([sys.executable, "-m", "clipper", *config_args, "worker"])
+            worker_mod.watch_spawned(worker_proc, config)  # worker refusé (orphelin) : visible dans l'interface
             try:
                 uvicorn.run(create_app(config=config), host=host, port=int(port))
             finally:
                 # le worker ET son enfant en cours (ffmpeg, yt-dlp...) : pas d'orphelin (audit 10/10, A2)
-                from clipper import worker as worker_mod
-
                 worker_mod.terminate_tree(worker_proc.pid, float(config.section("worker")["cancel_grace_s"]))
             return 0
         else:

@@ -306,7 +306,8 @@ function dashWorkerTile(data) {
     machine = `<div class="d3-kpi-foot">${esc(device)}${esc(vram)}</div>${hw.vram_used_mb == null ? dashError(hw.vram_used_mb_error) : ""}`;
   }
   if (worker === null || worker === undefined) return label + dashError(data.worker_error || "worker : donnée absente de la réponse.") + machine;
-  const state = worker.state === "active" ? dashChip("ok", "worker actif") : dashChip("bad", "worker arrêté");
+  const state = worker.state === "active" ? dashChip("ok", "worker actif")
+    : dashChip("bad", worker.state === "orphan" ? "worker orphelin" : "worker arrêté");
   const beat = worker.state === "active" ? `<div class="d3-kpi-foot">pid ${esc(worker.pid)} · dernier battement il y a ${esc(fr(Math.round(worker.age_s)))} s</div>` : "";
   return `${label}<div class="d3-kpi-state">${state}</div>${beat}${machine}`;
 }
