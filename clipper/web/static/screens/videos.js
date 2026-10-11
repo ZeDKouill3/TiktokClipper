@@ -1,527 +1,649 @@
-/* Ecran Videos (SPEC-c100 E2) : ajout par URL, liste filtrable cote serveur,
-   fiche d'une video (frise des 12 etapes, journal en direct, relancer,
-   annuler). Charge apres screens.js (qui definit Screens, STEP_LABELS,
-   STATUS_LABELS, statusChip, emptyState) et avant app.js ; remplace
-   l'entree Screens.videos de la coquille.
-
-   L'ecran garde son DOM : app.js rappelle render() a chaque evenement, et
-   refaire tout le HTML ferait perdre le focus des champs de filtre. */
+/* Écran « Vidéos » v3 (SPEC-7715 E2 / T2 / T7 / T9, ADR-a308, SPEC-74e9 §4.3) : une table dense triée comme le
+   serveur la renvoie (texte, statut et style filtrés côté serveur), et la fiche d'une vidéo (#/videos/<id>) avec
+   son stepper des 13 étapes, la bande de ses clips et son journal en table. Tout est rendu par rapprochement du
+   DOM (morph) : le focus d'un champ de filtre ne se perd jamais, et un événement SSE ne remplace rien.
+   L'ajout d'une vidéo passe par le dialogue global (bouton [data-add] branché par app.js, touche « n »).
+   Aucune logique vidéo ici : relancer, annuler, reprendre et purger sont des appels d'API confirmés.
+   Chargé après screens.js (qui définit Screens, STEP_LABELS, STATUS_LABELS, emptyState, videoThumb) ; remplace
+   l'entrée Screens.videos de la coquille. */
 "use strict";
 
-(function () {
-  const STEP_ORDER = Object.keys(STEP_LABELS);
-  const STALE_MS = 4000; // le polling de repli (5 s) rafraichit au-dela
-  const STEP_ICON = { done: "check", failed: "x", running: "loader", pending: "clock", queued: "circle-pause" };
+const VIDEOS_STEPS = Object.keys(STEP_LABELS);
+const VIDEOS_STALE_MS = 4000; // le polling de repli (5 s) rafraîchit au-delà
+const VIDEOS_STEP_ICON = { done: "check", failed: "x", running: "loader", pending: "clock", queued: "circle-pause" };
+const VIDEOS_TABS = [["", "Toutes"], ["running", "En cours"], ["queued", "En attente"], ["awaiting_review", "À valider"],
+  ["failed", "Échecs"], ["interrupted", "Interrompues"], ["done", "Terminées"]];
+const VIDEOS_CHIP = { running: "accent", queued: "info", awaiting_review: "warn", failed: "bad", interrupted: "bad", done: "ok", pending: "pending" };
+const VIDEOS_STRIP_MAX = 12; // la bande de la fiche montre les 12 premiers clips, « Voir les N clips » ouvre la galerie
+const VIDEOS_RUBRICS = { builtin: "Standard", "builtin:gaming": "Gaming", "builtin:gaming-action": "Gaming action" };
 
-  const state = {
-    root: null,
-    filters: { channel: "", status: "", q: "" },
-    list: null, listAt: 0, listBusy: false, listAgain: false, listKey: null,
-    detailId: null, detail: null, detailAt: 0, detailBusy: false, detailAgain: false,
-    events: [], step: null,
-    jury: null, juryFor: null, juryUi: { key: null, round: null },
-    channelsAsked: false, formChannels: null,
-  };
+const videosState = {
+  filters: { channel: "", status: "", q: "" },
+  list: null, listAt: 0, listBusy: false, listAgain: false, listError: null, disk: null, sel: -1,
+  channelsAsked: false,
+  detailId: null, detail: null, detailAt: 0, detailBusy: false, detailAgain: false, detailError: null,
+  events: [], step: null, menu: null, follow: true, logQ: "", clips: null, clipsFor: null,
+  jury: null, juryFor: null, juryUi: { key: null, round: null },
+  purging: null, openLogs: new Set(),
+};
 
-  /* Octets en unites lisibles (Ko/Mo/Go, base 1024). */
-  function fmtBytes(n) {
-    if (n == null) return "taille inconnue";
-    const units = ["o", "Ko", "Mo", "Go", "To"];
-    let v = n, i = 0;
-    while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
-    return `${i === 0 ? v : v.toFixed(v < 10 ? 2 : 1).replace(".", ",")} ${units[i]}`;
+/* ---------- Formats ---------- */
+
+/* Octets en unités lisibles (Ko/Mo/Go, base 1024). */
+function videosBytes(n) {
+  if (n == null) return "taille inconnue";
+  const units = ["o", "Ko", "Mo", "Go", "To"];
+  let v = n, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+  return `${i === 0 ? v : v.toFixed(v < 10 ? 2 : 1).replace(".", ",")} ${units[i]}`;
+}
+
+function videosDur(seconds) {
+  if (seconds == null) return null;
+  const s = Math.round(seconds);
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ${String(s % 60).padStart(2, "0")} s`;
+  return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}`;
+}
+
+const videosClock = (iso) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? esc(iso) : d.toLocaleTimeString("fr-FR", { timeZone: CLIPPER_TZ });
+};
+
+const videosWhen = (iso) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : fmtParis(iso, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+};
+
+const videosHashId = () => {
+  const hit = location.hash.match(/^#\/videos\/([^/?#]+)/);
+  return hit ? decodeURIComponent(hit[1]) : null;
+};
+
+const videosStatusLabel = (status) => (status === "interrupted" ? "interrompue" : STATUS_LABELS[status] || status);
+
+/* « interrompue » (serveur ou PC arrêté en plein traitement) n'est pas un statut de pipeline.json : l'API le déduit
+   d'une étape « running » sans processus. Ni « en cours » ni « en échec » : une pastille à part, rouge. */
+const videosChip = (status) => `<span class="chip ${VIDEOS_CHIP[status] || "pending"}">${esc(videosStatusLabel(status))}</span>`;
+
+/* Libellé d'une grille de notation : jamais un chemin (SPEC-9216 R4 : moments.json garde le chemin du fichier). */
+function rubricLabel(path) {
+  const value = String(path == null ? "" : path).trim();
+  if (Object.prototype.hasOwnProperty.call(VIDEOS_RUBRICS, value)) return VIDEOS_RUBRICS[value];
+  if (value.startsWith("builtin:")) return `Grille embarquée ${value.slice("builtin:".length)}`;
+  const name = value.split(/[\\/]/).filter(Boolean).pop() || "inconnue";
+  return `Fichier personnalisé (${name})`;
+}
+
+/* ---------- Liste : requête serveur, ligne de table ---------- */
+
+const videosListUrl = () => {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(videosState.filters)) if (v) params.set(k, v);
+  return `/api/videos?${params.toString()}`;
+};
+
+function videosSetFilter(key, value) {
+  videosState.filters[key] = value;
+  videosState.sel = -1;
+}
+
+async function videosLoad() {
+  const s = videosState;
+  if (s.listBusy) { s.listAgain = true; return; }
+  s.listBusy = true;
+  try {
+    const list = await api(videosListUrl());
+    if (!Array.isArray(list)) throw new Error("réponse inattendue de /api/videos");
+    s.list = list;
+    s.listError = null;
+  } catch (err) {
+    s.listError = err;
+    toastError("Liste des vidéos indisponible", err);
+  } finally {
+    s.listBusy = false;
+    s.listAt = Date.now();
   }
+  videosLoadDisk();
+  if (currentScreen === "videos") renderCurrent();
+  if (s.listAgain) { s.listAgain = false; videosLoad(); }
+}
 
-  const selectedId = () => {
-    const hit = location.hash.match(/^#\/videos\/([^/?#]+)/);
-    return hit ? decodeURIComponent(hit[1]) : null;
-  };
-
-  function fmtDur(seconds) {
-    if (seconds == null) return null;
-    const s = Math.round(seconds);
-    if (s < 60) return `${s} s`;
-    const m = Math.floor(s / 60);
-    if (m < 60) return `${m} min ${String(s % 60).padStart(2, "0")} s`;
-    return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}`;
+async function videosLoadDisk() {
+  try {
+    videosState.disk = await api("/api/disk");
+  } catch (err) {
+    videosState.disk = { error: String(err.message || err) };
   }
+  if (currentScreen === "videos" && !videosState.detailId) renderCurrent();
+}
 
-  const clock = (iso) => {
-    const d = new Date(iso);
-    return Number.isNaN(d.getTime()) ? esc(iso) : d.toLocaleTimeString("fr-FR", { timeZone: CLIPPER_TZ });
-  };
-
-  /* ---------- Structure fixe de l'ecran ---------- */
-  function build(body) {
-    body.innerHTML = `
-      <div class="vscreen">
-        <div data-vlist-view>
-          <form class="vadd" data-add-form autocomplete="off">
-            <div class="field vadd-url"><label for="vadd-url">Adresse de la vidéo (URL)</label>
-              <input class="input" id="vadd-url" name="url" type="url" required placeholder="https://…"></div>
-            <div class="field"><label for="vadd-channel">Style</label>
-              <select class="input" id="vadd-channel" name="channel"><option value="">Sans style (config.toml)</option></select></div>
-            <div class="field"><label for="vadd-action">Action</label>
-              <select class="input" id="vadd-action" name="action">
-                <option value="run">Traitement complet</option><option value="render">Rendu seul</option></select></div>
-            <button class="btn btn-primary" type="submit">${icon("plus")}Mettre en file</button>
-          </form>
-          <div class="toolbar vfilters">
-            <label class="input-ico">${icon("search")}<input class="input" name="q" type="search" placeholder="Titre, identifiant ou adresse" aria-label="Filtrer par texte"></label>
-            <select class="input" name="filter-channel" aria-label="Filtrer par style"><option value="">Tous les styles</option></select>
-            <select class="input" name="filter-status" aria-label="Filtrer par statut"><option value="">Tous les statuts</option>
-              ${Object.keys(STATUS_LABELS).map((k) => `<option value="${k}">${esc(STATUS_LABELS[k])}</option>`).join("")}<option value="interrupted">interrompue</option></select>
-            <span class="grow"></span><span class="muted" data-vcount></span>
-          </div>
-          <div class="toolbar vdisk">
-            <span class="muted" data-vdisk>Espace disque : calcul…</span><span class="grow"></span>
-            <button type="button" class="btn btn-sm" data-purge-completed>${icon("trash-2")}Purger les vidéos terminées</button>
-          </div>
-          <div class="jobs" data-vlist></div>
-        </div>
-        <div data-vdetail-view hidden></div>
-      </div>`;
-    state.root = body;
-    $("[data-add-form]", body).onsubmit = submitAdd;
-    $("[data-purge-completed]", body).onclick = purgeCompleted;
-    const filterChange = () => {
-      state.filters.channel = $('[name="filter-channel"]', body).value;
-      state.filters.status = $('[name="filter-status"]', body).value;
-      refreshList();
-    };
-    $('[name="filter-channel"]', body).onchange = filterChange;
-    $('[name="filter-status"]', body).onchange = filterChange;
-    let timer = null;
-    $('[name="q"]', body).oninput = (e) => {
-      clearTimeout(timer);
-      timer = setTimeout(() => { state.filters.q = e.target.value.trim(); refreshList(); }, 250);
-    };
-    $("[data-vlist]", body).innerHTML = skeletonRows();
+async function videosEnsureChannels() {
+  if (videosState.channelsAsked) return;
+  videosState.channelsAsked = true;
+  try {
+    store.channels = await api("/api/channels");
+  } catch (err) {
+    videosState.channelsAsked = false;
+    toastError("Styles indisponibles", err);
+    return;
   }
+  if (currentScreen === "videos") renderCurrent();
+}
 
-  const skeletonRows = () => Array.from({ length: 3 }, () => `<div class="job vrow"><div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div></div></div>`).join("");
+function videosStepStatus(video, name) {
+  return ((video.steps || {})[name] || {}).status || "pending";
+}
 
-  /* ---------- Styles : selecteurs d'ajout et de filtre ---------- */
-  async function ensureChannels() {
-    if (state.channelsAsked) return;
-    state.channelsAsked = true;
-    try {
-      store.channels = await api("/api/channels");
-    } catch (err) {
-      state.channelsAsked = false;
-      toastError("Styles indisponibles", err);
-      return;
-    }
-    paintChannelSelects();
+/* Cellule « Étape » : étape courante avec sa fraction et son reste à faire, plus une barre (transform seulement) ;
+   une vidéo terminée dit seulement « 13/13 étapes ». */
+function videosStepCell(video) {
+  const steps = video.steps || {};
+  const total = VIDEOS_STEPS.length;
+  const doneN = VIDEOS_STEPS.filter((n) => videosStepStatus(video, n) === "done").length;
+  if (video.status === "done") return `<span class="muted">${doneN}/${total} étapes</span>`;
+  const cur = video.current_step;
+  if (!cur) return "";
+  const live = (steps[cur] || {}).status === "running" ? (steps[cur] || {}).progress : null;
+  const frac = live ? live.fraction : doneN / total;
+  const pct = live ? ` · ${Math.round(live.fraction * 100)} %` : "";
+  const eta = live && live.eta_s != null ? ` · reste ${videosDur(live.eta_s)}` : "";
+  return `<span class="t2">${esc(STEP_LABELS[cur] || cur)}${pct}${eta}</span><div class="bar" style="--p:${+frac.toFixed(3)}"><i></i></div>`;
+}
+
+function videoRow(video, index) {
+  const id = encodeURIComponent(video.video_id);
+  const clips = (video.clips || []).length;
+  return `<tr class="clickable" tabindex="0" data-video="${esc(video.video_id)}" aria-selected="${index === videosState.sel}">
+    <td><div class="td-title">${videoThumb(video.video_id, video.platform_thumbnail)}<div style="min-width:0">
+      <a class="t" href="#/videos/${id}">${esc(video.title || video.video_id)}</a>
+      <div class="s"><span class="mono">${esc(video.video_id)}</span>${video.dismissed_at ? `<span class="chip pending plain">retirée</span>` : ""}${video.purged ? `<span class="chip pending plain">source purgée</span>` : ""}</div>
+      ${video.reason ? `<div class="vreason-line${video.status === "failed" || video.status === "interrupted" ? " bad" : ""}" title="${esc(video.reason)}">${esc(video.reason)}</div>` : ""}
+    </div></div></td>
+    <td data-l="Style">${video.channel ? `<span class="tag">${esc(video.channel)}</span>` : `<span class="muted">sans style</span>`}</td>
+    <td data-l="Statut">${videosChip(video.status)}</td>
+    <td data-l="Étape" class="vstep-cell">${videosStepCell(video)}</td>
+    <td data-l="Clips" class="r num">${clips || (video.status === "done" ? "0" : "")}</td>
+    <td data-l="Mise à jour" class="r muted">${esc(videosWhen(video.updated_at))}</td></tr>`;
+}
+
+const VIDEOS_HEAD = `<colgroup><col style="width:40%"><col style="width:12%"><col style="width:12%"><col style="width:18%"><col style="width:7%"><col style="width:11%"></colgroup>
+  <thead><tr><th>Vidéo</th><th>Style</th><th>Statut</th><th>Étape</th><th class="r">Clips</th><th class="r">Mise à jour</th></tr></thead>`;
+
+const videosTabCount = (key) => (store.videos || []).filter((v) => (!videosState.filters.channel || v.channel === videosState.filters.channel) && (!key || v.status === key)).length;
+
+function videosListBody(list, filtered) {
+  const s = videosState;
+  if (s.listError && list === null) {
+    return `<div class="alert" data-variant="destructive" role="alert">${icon("circle-alert")}<h2>Liste indisponible</h2><section>${esc(String(s.listError.message || s.listError))}
+      <div><button type="button" class="btn" data-variant="outline" data-size="sm" data-videos-retry>${icon("rotate-ccw", "i-xs")}Réessayer</button></div></section></div>`;
   }
-
-  function paintChannelSelects() {
-    const names = store.channels || [];
-    const key = names.join("|");
-    if (state.formChannels === key) return;
-    state.formChannels = key;
-    const options = (first) => `<option value="">${first}</option>` + names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
-    const keep = (sel, html) => { const v = sel.value; sel.innerHTML = html; sel.value = v; };
-    keep($('[name="channel"]', state.root), options("Sans style (config.toml)"));
-    keep($('[name="filter-channel"]', state.root), options("Tous les styles"));
+  if (list === null) {
+    return `<div class="table-container"><table class="table">${VIDEOS_HEAD}<tbody>${Array.from({ length: 5 }, () => `<tr><td colspan="6"><div class="skeleton sk-line" style="width:70%"></div></td></tr>`).join("")}</tbody></table></div>`;
   }
-
-  /* ---------- Ajout par URL ---------- */
-  async function submitAdd(e) {
-    e.preventDefault();
-    const form = e.target;
-    const url = $('[name="url"]', form).value.trim();
-    const channel = $('[name="channel"]', form).value || null;
-    const action = $('[name="action"]', form).value;
-    try {
-      const entry = await api("/api/queue", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url, channel, action }) });
-      toast({ kind: "ok", title: "Vidéo mise en file", body: entry.video_id });
-      form.reset();
-      await Promise.all([loadVideos(), loadQueue()]);
-      updateCounts();
-      refreshList();
-    } catch (err) { toastError("Ajout impossible", err); }
+  if (!list.length) {
+    return filtered
+      ? emptyState("search", "Aucune vidéo ne correspond", "Change le filtre de statut ou le texte, ou ajoute une vidéo.")
+      : emptyState("film", "Aucune vidéo", "Ajoute une vidéo par son adresse pour lancer un premier traitement.", `<button type="button" class="btn" data-size="sm" data-add>${icon("plus", "i-sm")}Ajouter une vidéo</button>`);
   }
+  return `<div class="table-container"><table class="table" id="videos-table">${VIDEOS_HEAD}<tbody>${list.map(videoRow).join("")}</tbody></table></div>`;
+}
 
-  /* ---------- Liste filtree (serveur) ---------- */
-  async function refreshList() {
-    if (state.listBusy) { state.listAgain = true; return; }
-    state.listBusy = true;
-    const params = new URLSearchParams();
-    for (const [k, v] of Object.entries(state.filters)) if (v) params.set(k, v);
-    try {
-      state.list = await api(`/api/videos?${params.toString()}`);
-      state.listAt = Date.now();
-      paintList();
-    } catch (err) {
-      $("[data-vlist]", state.root).innerHTML = emptyState("circle-alert", "Liste indisponible", String(err.message || err));
-      toastError("Liste des vidéos indisponible", err);
-    } finally {
-      state.listBusy = false;
-      if (state.listAgain) { state.listAgain = false; refreshList(); }
-    }
-  }
+function videosListView() {
+  const s = videosState;
+  const list = s.list;
+  const filtered = Object.values(s.filters).some(Boolean);
+  const channels = Array.isArray(store.channels) ? store.channels : [];
+  const doneN = videosTabCount("done");
+  const disk = s.disk && !s.disk.error ? ` · workspace ${videosBytes(s.disk.workspace_bytes)}` : "";
+  const purge = s.purging
+    ? `<button type="button" class="btn" data-variant="outline" data-size="sm" data-purge-completed disabled>${icon("loader", "i-xs")}${esc(s.purging)}</button>`
+    : `<button type="button" class="btn" data-variant="outline" data-size="sm" data-purge-completed>${icon("trash-2", "i-xs")}Purger les terminées${doneN ? `<span class="n">${doneN}</span>` : ""}</button>`;
+  const tabs = VIDEOS_TABS.map(([key, label]) => {
+    const n = videosTabCount(key);
+    return `<button type="button" data-status="${key}" aria-pressed="${s.filters.status === key}">${esc(label)}${store.videos && (n || !key) ? `<span class="n">${n}</span>` : ""}</button>`;
+  }).join("");
+  // l'ajout passe par le bouton « Ajouter une vidéo » de la barre du haut (dialogue global, touche n) ; l'état vide le propose aussi
+  return `<div class="toolbar">
+      <label class="input-ico">${icon("search", "i-sm")}<input class="input vsearch" type="search" name="q" data-screen-search placeholder="Titre, identifiant ou adresse" aria-label="Filtrer par texte" value="${esc(s.filters.q)}"><kbd class="kbd">/</kbd></label>
+      <select class="input" name="filter-channel" aria-label="Filtrer par style"><option value="">Tous les styles</option>${channels.map((c) => `<option value="${esc(c)}"${c === s.filters.channel ? " selected" : ""}>${esc(c)}</option>`).join("")}</select>
+      <span class="grow"></span>
+      <span class="muted vcount">${list ? `${list.length} vidéo${list.length > 1 ? "s" : ""}` : "Chargement…"}${disk}</span>
+      ${purge}
+    </div>
+    <div class="toolbar"><div class="seg" role="radiogroup" aria-label="Statut">${tabs}</div></div>
+    ${videosListBody(list, filtered)}`;
+}
 
-  function segs(video) {
-    const steps = video.steps || {};
-    return `<div class="segs" aria-hidden="true">${STEP_ORDER.map((n) => `<i class="${esc((steps[n] || {}).status || "pending")}"></i>`).join("")}</div>`;
-  }
+/* ---------- Purge disque (TASK-886a) : la taille d'abord, la confirmation ensuite ---------- */
 
-  function listRow(video) {
-    const cur = video.current_step;
-    const step = cur ? (video.steps || {})[cur] : null;
-    const progress = step && step.progress ? step.progress : null;
-    const pct = progress ? Math.round(progress.fraction * 100) : null;
-    const eta = progress && progress.eta_s != null ? ` · reste ${esc(fr(Math.ceil(progress.eta_s / 60)))} min` : "";
-    const where = cur ? `<span>${esc(STEP_LABELS[cur] || cur)}${pct != null ? ` · ${pct} %${eta}` : ""}</span>` : `<span>toutes les étapes terminées</span>`;
-    return `<a class="job vrow" href="#/videos/${encodeURIComponent(video.video_id)}" data-video="${esc(video.video_id)}">
-      ${videoThumb(video.video_id, video.platform_thumbnail)}
-      <div style="min-width:0">
-        <div class="job-title">${esc(video.title)}</div>
-        <div class="job-meta"><span class="mono">${esc(video.video_id)}</span>${video.channel ? `<span class="tag">${esc(video.channel)}</span>` : `<span class="muted">sans style</span>`}${where}</div>
-        <div style="margin-top:10px">${segs(video)}</div>
-        ${video.reason ? `<p class="reason ${video.status === "failed" ? "bad" : ""}">${esc(video.reason)}</p>` : ""}
-      </div>
-      <div class="job-side">${videoChip(video.status)}${video.dismissed_at ? `<span class="chip pending plain">retirée</span>` : ""}${video.purged ? `<span class="chip pending plain">source purgée</span>` : `<button type="button" class="btn btn-xs btn-ghost" data-purge-video="${esc(video.video_id)}">${icon("trash-2", "i-xs")}Purger</button>`}</div>
-    </a>`;
-  }
+async function videosPurge(id, withClips) {
+  const enc = encodeURIComponent(id);
+  let plan;
+  try { plan = await api(`/api/purge/${enc}${withClips ? "?clips=true" : ""}`); }
+  catch (err) { toastError("Purge impossible", err); return; }
+  const ok = await confirmDialog({
+    title: withClips ? "Purger la vidéo et ses clips ?" : "Purger cette vidéo ?",
+    body: `${videosBytes(plan.total_bytes)} seront libérés (source téléchargée, audio, images)${withClips ? `, plus ${videosBytes(plan.clips_bytes)} de clips rendus : irréversible` : ""}. La vidéo reste listée avec son état${withClips ? "" : " et ses clips"} ; pour la retraiter, il faudra la retélécharger.`,
+    confirmLabel: "Purger",
+  });
+  if (!ok) return;
+  try {
+    const done = await api(`/api/purge/${enc}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clips: Boolean(withClips) }) });
+    toast({ kind: "ok", title: "Vidéo purgée", body: `${id} : ${videosBytes(done.freed_bytes)} libérés` });
+    await loadVideos();
+    videosLoad();
+    if (videosState.detailId) videosRefreshDetail();
+  } catch (err) { toastError("Purge impossible", err); }
+}
 
-  function paintList() {
-    const list = state.list || [];
-    const filtered = Object.values(state.filters).some(Boolean);
-    $("[data-vcount]", state.root).textContent = `${list.length} vidéo${list.length > 1 ? "s" : ""}`;
-    $("[data-vlist]", state.root).innerHTML = list.length
-      ? list.map(listRow).join("")
-      : (filtered
-        ? emptyState("inbox", "Aucune vidéo ne correspond", "Change les filtres, ou ajoute une vidéo par son adresse.")
-        : emptyState("film", "Aucune vidéo", "Ajoute une vidéo par son adresse ci-dessus pour lancer un premier traitement."));
-    $$("[data-purge-video]", state.root).forEach((b) => (b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); purgeVideo(b.dataset.purgeVideo, false); }));
-    refreshDisk();
-  }
-
-  /* ---------- Purge disque (TASK-886a) : la taille d'abord, la confirmation ensuite ---------- */
-  async function refreshDisk() {
-    const el = $("[data-vdisk]", state.root);
-    if (!el) return;
-    try {
-      const d = await api("/api/disk");
-      el.textContent = `Espace disque : workspace/ ${fmtBytes(d.workspace_bytes)} · output/ ${fmtBytes(d.output_bytes)} (total ${fmtBytes(d.workspace_bytes + d.output_bytes)})`;
-    } catch (err) { el.textContent = `Espace disque indisponible : ${err.message || err}`; }
-  }
-
-  async function purgeVideo(id, withClips) {
-    const enc = encodeURIComponent(id);
+/* Une seule purge groupée à la fois : le bouton reste désactivé et dit où elle en est (état de l'écran, repeint par morph). */
+async function videosPurgeCompleted() {
+  const s = videosState;
+  if (s.purging) return;
+  const paint = (label) => { s.purging = label; if (currentScreen === "videos") renderCurrent(); };
+  try {
+    paint("Calcul de l'espace libérable…");
     let plan;
-    try { plan = await api(`/api/purge/${enc}${withClips ? "?clips=true" : ""}`); }
+    try { plan = await api("/api/purge-completed"); }
     catch (err) { toastError("Purge impossible", err); return; }
+    if (!plan.videos.length) { toast({ kind: "ok", title: "Rien à purger", body: "Aucune vidéo terminée n'a de fichiers lourds." }); return; }
+    paint(null);
     const ok = await confirmDialog({
-      title: withClips ? "Purger la vidéo et ses clips ?" : "Purger cette vidéo ?",
-      body: `${fmtBytes(plan.total_bytes)} seront libérés (source téléchargée, audio, images)${withClips ? `, plus ${fmtBytes(plan.clips_bytes)} de clips rendus : irréversible` : ""}. La vidéo reste listée avec son état${withClips ? "" : " et ses clips"} ; pour la retraiter, il faudra la retélécharger.`,
+      title: "Purger les vidéos terminées ?",
+      body: `${plan.videos.length} vidéo${plan.videos.length > 1 ? "s" : ""} terminée${plan.videos.length > 1 ? "s" : ""} : ${videosBytes(plan.total_bytes)} seront libérés. Les clips rendus sont gardés ; pour retraiter une vidéo purgée, il faudra la retélécharger.`,
       confirmLabel: "Purger",
     });
     if (!ok) return;
+    paint("Purge en cours…");
     try {
-      const done = await api(`/api/purge/${enc}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clips: Boolean(withClips) }) });
-      toast({ kind: "ok", title: "Vidéo purgée", body: `${id} : ${fmtBytes(done.freed_bytes)} libérés` });
+      const done = await api("/api/purge-completed", { method: "POST" });
+      toast({ kind: "ok", title: "Vidéos purgées", body: `${done.videos.length} vidéo(s) : ${videosBytes(done.freed_bytes)} libérés${done.skipped.length ? ` · ${done.skipped.length} ignorée(s)` : ""}` });
       await loadVideos();
-      refreshList();
-      if (state.detailId) refreshDetail();
+      videosLoad();
     } catch (err) { toastError("Purge impossible", err); }
+  } finally {
+    s.purging = null;
+    if (currentScreen === "videos") renderCurrent();
   }
+}
 
-  // Une seule purge groupée à la fois : le bouton reste désactivé pendant le calcul et la purge.
-  let purgeBusy = false;
-  async function purgeCompleted() {
-    if (purgeBusy) return;
-    purgeBusy = true;
-    const btn = $("[data-purge-completed]", state.root);
-    const idle = btn.innerHTML;
-    const setState = (label) => { btn.disabled = true; btn.innerHTML = `${icon("loader", "i-xs")}${esc(label)}`; };
-    try {
-      setState("Calcul de l'espace libérable…");
-      let plan;
-      try { plan = await api("/api/purge-completed"); }
-      catch (err) { toastError("Purge impossible", err); return; }
-      if (!plan.videos.length) { toast({ kind: "ok", title: "Rien à purger", body: "Aucune vidéo terminée n'a de fichiers lourds." }); return; }
-      btn.innerHTML = idle; btn.disabled = false;
-      const ok = await confirmDialog({
-        title: "Purger les vidéos terminées ?",
-        body: `${plan.videos.length} vidéo${plan.videos.length > 1 ? "s" : ""} terminée${plan.videos.length > 1 ? "s" : ""} : ${fmtBytes(plan.total_bytes)} seront libérés. Les clips rendus sont gardés ; pour retraiter une vidéo purgée, il faudra la retélécharger.`,
-        confirmLabel: "Purger",
-      });
-      if (!ok) return;
-      setState("Purge en cours…");
-      try {
-        const done = await api("/api/purge-completed", { method: "POST" });
-        toast({ kind: "ok", title: "Vidéos purgées", body: `${done.videos.length} vidéo(s) : ${fmtBytes(done.freed_bytes)} libérés${done.skipped.length ? ` · ${done.skipped.length} ignorée(s)` : ""}` });
-        await loadVideos();
-        refreshList();
-      } catch (err) { toastError("Purge impossible", err); }
-    } finally {
-      btn.innerHTML = idle; btn.disabled = false;
-      purgeBusy = false;
+/* ---------- Fiche d'une vidéo ---------- */
+
+function videosOpenDetail(id) {
+  const s = videosState;
+  s.detailId = id;
+  s.detail = null; s.detailAt = 0; s.detailError = null;
+  s.events = []; s.step = null; s.menu = null; s.logQ = ""; s.follow = true;
+  s.clips = null; s.clipsFor = null; s.openLogs.clear();
+}
+
+async function videosRefreshDetail() {
+  const s = videosState;
+  const id = s.detailId;
+  if (!id) return;
+  if (s.detailBusy) { s.detailAgain = true; return; }
+  s.detailBusy = true;
+  try {
+    const enc = encodeURIComponent(id);
+    const query = new URLSearchParams();
+    if (s.events.length) query.set("since", s.events[s.events.length - 1].at);
+    const [detail, fresh] = await Promise.all([api(`/api/videos/${enc}`), api(`/api/videos/${enc}/events?${query.toString()}`)]);
+    if (s.detailId !== id) return; // l'utilisateur a changé de vidéo entre-temps
+    s.detail = detail;
+    s.detailError = null;
+    s.events = s.events.concat(Array.isArray(fresh) ? fresh : []);
+  } catch (err) {
+    if (s.detailId === id) s.detailError = err;
+    toastError("Fiche vidéo indisponible", err);
+  } finally {
+    s.detailBusy = false;
+    if (s.detailId === id) s.detailAt = Date.now();
+  }
+  if (s.detailId === id && currentScreen === "videos") renderCurrent();
+  if (s.detailAgain) { s.detailAgain = false; videosRefreshDetail(); }
+}
+
+/* Clips de la vidéo pour la bande de la fiche : GET /api/videos/<id>/clips, relu quand leur nombre change. */
+async function videosLoadClips(video) {
+  const s = videosState;
+  const key = `${video.video_id}|${(video.clips || []).length}`;
+  if (s.clipsFor === key) return;
+  s.clipsFor = key;
+  try {
+    const clips = await api(`/api/videos/${encodeURIComponent(video.video_id)}/clips`);
+    if (s.clipsFor !== key) return;
+    s.clips = Array.isArray(clips) ? clips : [];
+  } catch (err) {
+    if (s.clipsFor !== key) return;
+    s.clips = [];
+    toastError("Clips de la vidéo indisponibles", err);
+  }
+  if (s.detailId === video.video_id && currentScreen === "videos") renderCurrent();
+}
+
+function videosStepTime(video, name) {
+  const step = (video.steps || {})[name] || {};
+  if (step.status === "running") return step.progress ? `${Math.round(step.progress.fraction * 100)} %` : "en cours";
+  if (step.status === "done") return videosDur((video.durations || {})[name]) || "durée inconnue";
+  if (step.status === "failed") return "échec";
+  return "en attente";
+}
+
+/* Stepper des 13 étapes : un bouton par étape, dans l'ordre du pipeline ; l'étape choisie est aria-pressed. */
+function stepperHtml(video, selected) {
+  return `<div class="stepper" role="group" aria-label="Étapes du traitement">${VIDEOS_STEPS.map((n) => {
+    const st = videosStepStatus(video, n);
+    return `<button type="button" class="step ${st}" data-step="${n}" aria-pressed="${n === selected}"><span class="dot">${icon(VIDEOS_STEP_ICON[st] || "clock")}</span><span class="lbl">${esc(STEP_LABELS[n])}</span><span class="dur">${esc(videosStepTime(video, n))}</span></button>`;
+  }).join("")}</div>`;
+}
+
+/* Radar du jury (TASK-3a08) : GET /api/videos/{id}/jury, relu quand l'étape Moments se termine. */
+function videosJuryBody() {
+  const s = videosState;
+  if (s.jury === null) return `<div class="skeleton sk-card"></div>`;
+  if (s.jury.error) return `<div class="jr-empty"><b>Jury indisponible.</b> ${esc(s.jury.error)}</div>`;
+  return juryPanelHtml(s.jury, s.juryUi);
+}
+
+async function videosLoadJury(video) {
+  const s = videosState;
+  const key = `${video.video_id}|${((video.steps || {}).moments || {}).finished_at || ""}`;
+  if (s.juryFor === key) return;
+  s.juryFor = key;
+  s.jury = null;
+  s.juryUi = { key: null, round: null };
+  try {
+    const data = await api(`/api/videos/${encodeURIComponent(video.video_id)}/jury`);
+    if (s.juryFor !== key) return;
+    s.jury = data;
+  } catch (err) {
+    if (s.juryFor !== key) return;
+    s.jury = { error: String(err.message || err) };
+  }
+  if (s.detailId === video.video_id && s.step === "moments" && currentScreen === "videos") renderCurrent();
+}
+
+function videosStepPanel(video) {
+  const name = videosState.step;
+  const step = (video.steps || {})[name] || {};
+  const st = videosStepStatus(video, name);
+  const progress = step.progress;
+  const dur = videosDur((video.durations || {})[name]);
+  const canRetry = (st === "done" || st === "failed") && video.status !== "running" && video.status !== "interrupted";
+  return `<div class="vstep-panel">
+    <div class="section-head"><h3>${esc(STEP_LABELS[name])}</h3><span class="chip ${VIDEOS_CHIP[st] || "pending"}">${esc(videosStatusLabel(st))}</span>
+      ${canRetry ? `<div class="right"><button type="button" class="btn" data-variant="outline" data-size="sm" data-retry="${name}">${icon("rotate-ccw", "i-sm")}Relancer depuis cette étape</button></div>` : ""}</div>
+    <dl class="kv">
+      <dt>Durée</dt><dd class="mono">${dur ? esc(dur) : (st === "done" ? "inconnue : horodatage absent de pipeline.json" : "pas terminée")}</dd>
+      ${step.started_at ? `<dt>Début</dt><dd class="mono">${videosClock(step.started_at)}</dd>` : ""}
+      ${step.finished_at ? `<dt>Fin</dt><dd class="mono">${videosClock(step.finished_at)}</dd>` : ""}
+      ${progress ? `<dt>Progression</dt><dd>${Math.round(progress.fraction * 100)} %${progress.eta_s != null ? ` · reste ${esc(videosDur(progress.eta_s))}` : ""}${progress.message ? ` · ${esc(progress.message)}` : ""}
+        <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(progress.fraction * 100)}" style="--p:${+progress.fraction.toFixed(3)}"><i></i></div></dd>` : ""}
+      ${step.reason ? `<dt>Raison</dt><dd class="vreason">${esc(step.reason)}</dd>` : ""}
+    </dl>
+    ${name === "moments" && st === "done" ? `<div class="vjury"><h3>Jury par moment</h3>${videosJuryBody()}</div>` : ""}
+  </div>`;
+}
+
+/* Niveau normalisé en trois classes : info, warning, error (critical compte comme error). */
+function videosLevel(level) {
+  const l = String(level || "info").toLowerCase();
+  return l === "error" || l === "critical" ? "error" : l === "warning" || l === "warn" ? "warning" : "info";
+}
+
+/* Clé stable d'une ligne du journal : sert à garder « dépliée » une ligne malgré les repeints. */
+const videosLogKey = (event) => `${event.at}|${event.step || ""}|${String(event.message || "").length}`;
+
+/* Message replié sur deux lignes (le journal d'une vidéo terminée porte un récapitulatif de plusieurs Ko) ; un clic le déplie. */
+function journalRow(event) {
+  const level = videosLevel(event.level);
+  const key = videosLogKey(event);
+  return `<tr data-log="${esc(key)}"><td class="mono">${videosClock(event.at)}</td><td><span class="lvl ${level}">${esc(level)}</span></td><td class="mono muted">${esc(event.step || "")}</td><td class="wrap"><div class="vmsg${videosState.openLogs.has(key) ? " open" : ""}">${esc(event.message)}</div></td></tr>`;
+}
+
+function videosJournal(video) {
+  const s = videosState;
+  const q = s.logQ.trim().toLowerCase();
+  const rows = s.events.filter((e) => !q || `${e.level || ""} ${e.step || ""} ${e.message || ""}`.toLowerCase().includes(q));
+  const body = rows.length
+    ? rows.map(journalRow).join("")
+    : `<tr><td colspan="4" class="muted wrap">${s.events.length ? "Aucun événement ne correspond au filtre." : "Aucun événement pour l'instant."}</td></tr>`;
+  return `<section class="vsec"><div class="section-head"><h2>Journal</h2><span class="mono muted vpath">workspace/${esc(video.video_id)}/events.jsonl</span>
+      <div class="right">
+        <label class="input-ico">${icon("search", "i-sm")}<input class="input vlogq" type="search" name="log-q" placeholder="Filtrer" aria-label="Filtrer le journal" value="${esc(s.logQ)}"></label>
+        <div class="vfollow"><input id="videos-follow" type="checkbox" role="switch" data-follow${s.follow ? " checked" : ""}><label for="videos-follow">Suivre en direct</label></div>
+        <button type="button" class="btn" data-variant="ghost" data-size="sm" data-log-copy>${icon("copy", "i-sm")}Copier</button>
+      </div></div>
+    <div class="table-container vlog" role="log" aria-live="polite"><table class="table"><colgroup><col style="width:96px"><col style="width:96px"><col style="width:130px"><col></colgroup>
+      <thead><tr><th>Heure</th><th>Niveau</th><th>Étape</th><th>Message</th></tr></thead><tbody>${body}</tbody></table></div></section>`;
+}
+
+function videosClipsStrip(video) {
+  const n = (video.clips || []).length;
+  if (!n) return "";
+  const enc = encodeURIComponent(video.video_id);
+  const clips = videosState.clips;
+  const items = clips === null
+    ? Array.from({ length: Math.min(n, 6) }, () => `<div class="skeleton poster"></div>`).join("")
+    : clips.slice(0, VIDEOS_STRIP_MAX).map((c) => `<a class="poster" href="#/clips/${enc}/${encodeURIComponent(c.clip_id)}" title="${esc(c.screen_title || c.clip_id)}">${c.thumbnail_url ? `<img loading="lazy" decoding="async" src="${esc(c.thumbnail_url)}" alt="">` : `<span class="ph">aperçu</span>`}</a>`).join("");
+  return `<section class="vsec"><div class="section-head"><h2>Clips</h2><span class="n">${n}</span>
+      <div class="right"><a class="btn" data-variant="ghost" data-size="sm" href="#/clips/${enc}">Voir les ${n} clips ${icon("arrow-right", "i-sm")}</a></div></div>
+    <div class="strip">${items}</div></section>`;
+}
+
+const videosBack = () => `<a class="vback" href="#/videos">${icon("chevron-left", "i-xs")}Toutes les vidéos</a>`;
+
+function videosActions(video) {
+  const s = videosState;
+  const enc = encodeURIComponent(video.video_id);
+  const id = esc(video.video_id);
+  const idle = video.status !== "running" && video.status !== "interrupted";
+  const review = video.status === "awaiting_review" || (video.awaiting || []).length;
+  const retrySteps = VIDEOS_STEPS.filter((n) => ["done", "failed"].includes(videosStepStatus(video, n)));
+  const retryMenu = idle && retrySteps.length
+    ? `<div class="vmenu-wrap"><button type="button" class="btn" data-variant="outline" data-size="sm" data-retry-menu aria-haspopup="menu" aria-expanded="${s.menu === "retry"}">${icon("rotate-ccw", "i-sm")}Relancer depuis…</button>
+        ${s.menu === "retry" ? `<div class="vmenu" role="menu">${retrySteps.map((n) => `<button type="button" role="menuitem" data-retry-step="${n}">${esc(STEP_LABELS[n])}</button>`).join("")}</div>` : ""}</div>`
+    : "";
+  return `${review ? `<a class="btn" data-size="sm" href="#/review/${enc}">${icon("sparkles", "i-sm")}Revoir les moments${(video.awaiting || []).length ? ` (${video.awaiting.length})` : ""}</a>` : ""}
+    ${(video.clips || []).length ? `<a class="btn" data-variant="outline" data-size="sm" href="#/clips/${enc}">${icon("clapperboard", "i-sm")}Voir les ${video.clips.length} clips</a>` : ""}
+    ${retryMenu}
+    ${!video.channel && idle ? `<button type="button" class="btn" data-variant="outline" data-size="sm" data-assign-channel="${id}">${icon("tv", "i-sm")}Attribuer un style</button>` : ""}
+    ${video.status === "interrupted" ? `<button type="button" class="btn" data-size="sm" data-resume-video>${icon("play", "i-sm")}Reprendre</button>` : ""}
+    ${video.status === "running" || video.status === "interrupted" ? `<button type="button" class="btn" data-variant="destructive" data-size="sm" data-cancel-video>${icon("ban", "i-sm")}Annuler le traitement</button>` : ""}
+    ${(video.status === "failed" || video.status === "queued") && !video.dismissed_at ? `<button type="button" class="btn" data-variant="outline" data-size="sm" data-retry-video="${id}" data-from-step="${esc(video.current_step || "")}">${icon("rotate-ccw", "i-sm")}Relancer</button>
+      <button type="button" class="btn" data-variant="ghost" data-size="sm" data-dismiss-video="${id}">Retirer</button>` : ""}
+    ${video.dismissed_at ? `<span class="chip pending plain">retirée des échecs</span><button type="button" class="btn" data-variant="outline" data-size="sm" data-restore-video="${id}">Rétablir</button>` : ""}
+    ${video.purged ? `<span class="chip pending plain">source purgée : retélécharger</span>` : `<button type="button" class="btn" data-variant="outline" data-size="sm" data-purge-video="${id}">${icon("trash-2", "i-sm")}Purger</button>`}
+    ${video.status === "done" && !video.purged ? `<button type="button" class="btn" data-variant="ghost" data-size="sm" data-purge-video-clips="${id}">Purger aussi les clips</button>` : ""}`;
+}
+
+function videosDetailView() {
+  const s = videosState;
+  const video = s.detail;
+  if (!video) {
+    if (s.detailError) {
+      return `${videosBack()}<div class="alert" data-variant="destructive" role="alert">${icon("circle-alert")}<h2>Vidéo indisponible</h2><section>${esc(String(s.detailError.message || s.detailError))}
+        <div><button type="button" class="btn" data-variant="outline" data-size="sm" data-videos-retry>${icon("rotate-ccw", "i-xs")}Réessayer</button></div></section></div>`;
     }
+    return `${videosBack()}<div class="skeleton sk-card"></div>`;
   }
-
-  /* ---------- Fiche d'une video ---------- */
-  async function refreshDetail() {
-    const id = state.detailId;
-    if (!id) return;
-    if (state.detailBusy) { state.detailAgain = true; return; }
-    state.detailBusy = true;
-    try {
-      const enc = encodeURIComponent(id);
-      const query = new URLSearchParams();
-      if (state.events.length) query.set("since", state.events[state.events.length - 1].at);
-      const [detail, fresh] = await Promise.all([api(`/api/videos/${enc}`), api(`/api/videos/${enc}/events?${query.toString()}`)]);
-      if (state.detailId !== id) return; // l'utilisateur a change de video entre-temps
-      state.detail = detail;
-      state.detailAt = Date.now();
-      state.events = state.events.concat(fresh);
-      paintDetail();
-    } catch (err) {
-      if (state.detailId === id) {
-        $("[data-vdetail-view]", state.root).innerHTML = backLink() + emptyState("circle-alert", "Vidéo indisponible", String(err.message || err));
-      }
-      toastError("Fiche vidéo indisponible", err);
-    } finally {
-      state.detailBusy = false;
-      if (state.detailAgain) { state.detailAgain = false; refreshDetail(); }
-    }
-  }
-
-  const backLink = () => `<a class="btn btn-sm btn-ghost vback" href="#/videos">${icon("chevron-left")}Toutes les vidéos</a>`;
-
-  function stepStatusOf(video, name) {
-    return ((video.steps || {})[name] || {}).status || "pending";
-  }
-
-  function stepTime(video, name) {
-    const step = (video.steps || {})[name] || {};
-    if (step.status === "running") {
-      return step.progress ? `${Math.round(step.progress.fraction * 100)} %` : "en cours";
-    }
-    if (step.status === "done") return fmtDur((video.durations || {})[name]) || "durée inconnue";
-    if (step.status === "failed") return "échec";
-    return "en attente";
-  }
-
-  function friseHtml(video) {
-    const last = STEP_ORDER.reduce((k, n, i) => (stepStatusOf(video, n) === "done" ? i : k), -1);
-    const cur = video.current_step ? (video.steps[video.current_step] || {}) : {};
-    const partial = cur.status === "running" && cur.progress ? cur.progress.fraction : 0;
-    const fill = Math.min(1, Math.max(0, (last + partial) / (STEP_ORDER.length - 1)));
-    return `<div class="frise" role="list"><div class="frise-fill" style="width:calc((100% - 100% / 12) * ${fill})"></div>
-      ${STEP_ORDER.map((n) => {
-        const st = stepStatusOf(video, n);
-        return `<button type="button" role="listitem" class="fstep ${st}${n === state.step ? " sel" : ""}" data-step="${n}">
-          <span class="node">${icon(STEP_ICON[st] || "clock")}</span><span class="fstep-name">${esc(STEP_LABELS[n])}</span><span class="fstep-time">${esc(stepTime(video, n))}</span></button>`;
-      }).join("")}</div>`;
-  }
-
-  /* Radar du jury (TASK-3a08) : GET /api/videos/{id}/jury, relu quand l'etape Moments se termine. */
-  function juryBody() {
-    if (state.jury === null) return `<div class="skeleton skeleton-card"></div>`;
-    if (state.jury.error) return `<div class="jr-empty"><b>Jury indisponible.</b> ${esc(state.jury.error)}</div>`;
-    return juryPanelHtml(state.jury, state.juryUi);
-  }
-
-  async function loadJury(video) {
-    const key = `${video.video_id}|${((video.steps || {}).moments || {}).finished_at || ""}`;
-    if (state.juryFor === key) return;
-    state.juryFor = key;
-    state.jury = null;
-    state.juryUi = { key: null, round: null };
-    try {
-      const data = await api(`/api/videos/${encodeURIComponent(video.video_id)}/jury`);
-      if (state.juryFor !== key) return;
-      state.jury = data;
-    } catch (err) {
-      if (state.juryFor !== key) return;
-      state.jury = { error: String(err.message || err) };
-    }
-    if (state.detailId === video.video_id && state.step === "moments") paintDetail();
-  }
-
-  function stepPanelHtml(video) {
-    const name = state.step;
-    const step = (video.steps || {})[name] || {};
-    const st = stepStatusOf(video, name);
-    const progress = step.progress;
-    const dur = fmtDur((video.durations || {})[name]);
-    const canRetry = (st === "done" || st === "failed") && video.status !== "running" && video.status !== "interrupted";
-    return `<div class="panel-head"><h2>${esc(STEP_LABELS[name])}</h2><div class="right">${statusChip(st)}</div></div>
-      <div class="vstep">
-        <dl class="kv">
-          <dt>Durée</dt><dd>${dur ? esc(dur) : (st === "done" ? "inconnue : horodatage absent de pipeline.json" : "pas terminée")}</dd>
-          ${step.started_at ? `<dt>Début</dt><dd>${clock(step.started_at)}</dd>` : ""}
-          ${step.finished_at ? `<dt>Fin</dt><dd>${clock(step.finished_at)}</dd>` : ""}
-          ${progress ? `<dt>Progression</dt><dd>${Math.round(progress.fraction * 100)} %${progress.eta_s != null ? ` · reste ${esc(fmtDur(progress.eta_s))}` : ""}${progress.message ? ` · ${esc(progress.message)}` : ""}
-            <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(progress.fraction * 100)}"><i style="width:${Math.round(progress.fraction * 100)}%"></i></div></dd>` : ""}
-          ${step.reason ? `<dt>Raison</dt><dd class="vreason">${esc(step.reason)}</dd>` : ""}
-        </dl>
-        ${canRetry ? `<div class="row wrap" style="margin-top:20px"><button type="button" class="btn btn-sm" data-retry="${name}">${icon("rotate-ccw")}Relancer depuis cette étape</button></div>` : ""}
-      </div>
-      ${name === "moments" && st === "done" ? `<div class="vjury"><h3>Jury par moment</h3>${juryBody()}</div>` : ""}`;
-  }
-
-  function levelClass(level) {
-    const l = String(level || "").toLowerCase();
-    return l === "error" || l === "critical" ? "lv-e" : l === "warning" || l === "warn" ? "lv-w" : "lv-i";
-  }
-
-  const logLine = (ev) => `<div><span class="t">${clock(ev.at)}</span><span class="${levelClass(ev.level)}">${esc(String(ev.level || "info").toLowerCase())}</span>${ev.step ? ` <span class="faint">${esc(ev.step)}</span>` : ""} ${esc(ev.message)}</div>`;
-
-  function paintDetail() {
-    const video = state.detail;
-    const view = $("[data-vdetail-view]", state.root);
-    if (!video) return;
-    if (!state.step || !STEP_ORDER.includes(state.step)) state.step = video.current_step || STEP_ORDER[STEP_ORDER.length - 1];
-    const enc = encodeURIComponent(video.video_id);
-    const review = video.status === "awaiting_review" || (video.awaiting || []).length;
-    const logEl = $(".log", view);
-    const stick = !logEl || logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 24;
-
-    view.innerHTML = `
-      ${backLink()}
-      <div class="vhead">
+  if (!s.step || !VIDEOS_STEPS.includes(s.step)) s.step = video.current_step || VIDEOS_STEPS[VIDEOS_STEPS.length - 1];
+  const doneN = VIDEOS_STEPS.filter((n) => videosStepStatus(video, n) === "done").length;
+  const total = VIDEOS_STEPS.reduce((t, n) => t + ((video.durations || {})[n] || 0), 0);
+  const failed = video.status === "failed" || video.status === "interrupted";
+  return `${videosBack()}
+    <div class="vhead">
+      <div class="vhead-main">
         ${videoThumb(video.video_id, video.platform_thumbnail)}
         <div style="min-width:0">
           <h2 class="vtitle">${esc(video.title)}</h2>
           ${video.title_reason ? `<p class="muted vsub">${esc(video.title_reason)}</p>` : ""}
-          <div class="job-meta"><span class="mono">${esc(video.video_id)}</span>${video.channel ? `<span class="tag">${esc(video.channel)}</span>` : `<span class="muted">sans style</span>`}${video.source_url ? `<span class="mono">${esc(video.source_url)}</span>` : ""}${videoChip(video.status)}${video.rubric ? `<span class="muted">Grille : <span class="mono">${esc(video.rubric)}</span></span>` : ""}${video.short_clips ? `<span class="muted">Clips courts : ${video.short_clips.on ? `oui (${esc(video.short_clips.min)}-${esc(video.short_clips.max)} s)` : "non"}</span>` : ""}</div>
-        </div>
-        <div class="vactions">
-          ${review ? `<a class="btn btn-primary" href="#/review/${enc}">${icon("sparkles")}Revoir les moments${(video.awaiting || []).length ? ` (${video.awaiting.length})` : ""}</a>` : ""}
-          ${(video.clips || []).length ? `<a class="btn" href="#/clips/${enc}">${icon("clapperboard")}Voir les ${video.clips.length} clips</a>` : ""}
-          ${!video.channel && video.status !== "running" && video.status !== "interrupted" ? `<button type="button" class="btn" data-assign-channel="${esc(video.video_id)}">${icon("tv")}Attribuer un style</button>` : ""}
-          ${video.status === "interrupted" ? `<button type="button" class="btn btn-primary" data-resume-video>${icon("play")}Reprendre</button>` : ""}
-          ${video.status === "running" || video.status === "interrupted" ? `<button type="button" class="btn btn-bad" data-cancel-video>${icon("ban")}Annuler le traitement</button>` : ""}
-          ${(video.status === "failed" || video.status === "queued") && !video.dismissed_at ? `<button type="button" class="btn" data-retry-video="${esc(video.video_id)}" data-from-step="${esc(video.current_step || "")}">${icon("rotate-ccw")}Relancer</button>
-            <button type="button" class="btn btn-ghost" data-dismiss-video="${esc(video.video_id)}">Retirer</button>` : ""}
-          ${video.purged ? `<span class="chip pending plain">source purgée : retélécharger</span>` : `<button type="button" class="btn" data-purge-video="${esc(video.video_id)}">${icon("trash-2")}Purger</button>`}
-          ${video.status === "done" ? `<button type="button" class="btn btn-ghost" data-purge-video-clips="${esc(video.video_id)}">Purger aussi les clips</button>` : ""}
-          ${video.dismissed_at ? `<span class="chip pending plain">retirée des échecs</span> <button type="button" class="btn" data-restore-video="${esc(video.video_id)}">Rétablir</button>` : ""}
+          <div class="vmeta">${videosChip(video.status)}<button type="button" class="mono vcopy" data-copy="${esc(video.video_id)}" title="Copier l'identifiant">${esc(video.video_id)} ${icon("copy", "i-xs")}</button>${video.channel ? `<span class="tag">${esc(video.channel)}</span>` : `<span class="muted">sans style</span>`}${video.rubric ? `<span class="muted">Grille : ${esc(rubricLabel(video.rubric))}</span>` : ""}${video.short_clips ? `<span class="muted">Clips courts : ${video.short_clips.on ? `oui (${esc(video.short_clips.min)}-${esc(video.short_clips.max)} s)` : "non"}</span>` : ""}${video.source_url ? `<a class="mono vsource" href="${esc(video.source_url)}" target="_blank" rel="noopener">${esc(video.source_url)}</a>` : ""}</div>
         </div>
       </div>
-      ${video.reason ? `<div class="banner"><p><b>${video.status === "failed" ? "Échec" : "Information"} :</b> ${esc(video.reason)}${video.retry_at ? ` · nouvelle tentative prévue ${clock(video.retry_at)}` : ""}</p></div>` : ""}
-      <section class="vsection"><div class="row" style="margin-bottom:16px"><h3>Progression</h3><span class="muted vsum"></span></div>${friseHtml(video)}</section>
-      <div class="step-detail vgrid${state.step === "moments" && stepStatusOf(video, "moments") === "done" ? " wide" : ""}">
-        <section class="vsection vstep-panel">${stepPanelHtml(video)}</section>
-        <section class="vsection">
-          <div class="panel-head"><h3>Journal</h3><span class="muted mono">workspace/${esc(video.video_id)}/events.jsonl</span><div class="right"><button type="button" class="btn btn-xs btn-ghost" data-log-copy>${icon("copy", "i-xs")}Copier</button></div></div>
-          <div style="padding:16px"><div class="log" role="log" aria-live="polite">${state.events.length ? state.events.map(logLine).join("") : `<span class="faint">Aucun événement pour l'instant.</span>`}</div></div>
-        </section>
-      </div>`;
+      <div class="vactions">${videosActions(video)}</div>
+    </div>
+    ${video.reason ? `<div class="alert"${failed ? ` data-variant="destructive"` : ""}${failed ? ` role="alert"` : ""}>${icon(failed ? "circle-alert" : "info")}<h2>${failed ? "Échec" : "Information"}</h2><section>${esc(video.reason)}${video.retry_at ? ` · nouvelle tentative prévue ${videosClock(video.retry_at)}` : ""}</section></div>` : ""}
+    <section class="vcard"><div class="section-head"><h2>Progression</h2><span class="muted">${doneN} / ${VIDEOS_STEPS.length} étapes · ${videosDur(total) || "0 s"} de calcul</span></div>
+      ${stepperHtml(video, s.step)}
+      ${videosStepPanel(video)}
+    </section>
+    ${videosClipsStrip(video)}
+    ${videosJournal(video)}`;
+}
 
-    if (state.step === "moments" && stepStatusOf(video, "moments") === "done") loadJury(video);
-    const done = STEP_ORDER.filter((n) => stepStatusOf(video, n) === "done").length;
-    const total = STEP_ORDER.reduce((t, n) => t + ((video.durations || {})[n] || 0), 0);
-    $(".vsum", view).textContent = `${done} / ${STEP_ORDER.length} étapes · ${fmtDur(total) || "0 s"} de calcul`;
-    const log = $(".log", view);
-    if (stick) log.scrollTop = log.scrollHeight;
-    wireDetail(view, video);
-  }
+/* ---------- Câblage (après chaque morph : les nœuds neufs n'ont pas encore leurs gestionnaires) ---------- */
 
-  function wireDetail(view, video) {
-    wireActions(view); // Relancer / Retirer / Rétablir : mêmes gestionnaires que le tableau de bord
-    $$("[data-step]", view).forEach((b) => (b.onclick = () => { state.step = b.dataset.step; paintDetail(); }));
-    $$("[data-jr-pick]", view).forEach((b) => (b.onclick = () => { state.juryUi = { key: b.dataset.jrPick, round: null }; paintDetail(); }));
-    $$("[data-jr-round]", view).forEach((b) => (b.onclick = () => { state.juryUi = { ...state.juryUi, round: Number(b.dataset.jrRound) }; paintDetail(); }));
-    const retry = $("[data-retry]", view);
-    if (retry) retry.onclick = () => retryFrom(video, retry.dataset.retry);
-    const cancel = $("[data-cancel-video]", view);
-    if (cancel) cancel.onclick = () => cancelVideo(video);
-    const resume = $("[data-resume-video]", view);
-    if (resume) resume.onclick = () => resumeVideo(video);
-    $$("[data-purge-video]", view).forEach((b) => (b.onclick = () => purgeVideo(b.dataset.purgeVideo, false)));
-    $$("[data-purge-video-clips]", view).forEach((b) => (b.onclick = () => purgeVideo(b.dataset.purgeVideoClips, true)));
-    const assign = $("[data-assign-channel]", view);
-    if (assign) assign.onclick = () => openAssignChannel(video.video_id);
-    $("[data-log-copy]", view).onclick = () => copyText(state.events.map((e) => `${e.at} ${e.level} ${e.step || ""} ${e.message}`).join("\n"), "Journal");
-  }
-
-  /* Relancer : remet cette etape et les suivantes a zero (SPEC-74e9 3.3). */
-  async function retryFrom(video, step) {
-    const after = STEP_ORDER.slice(STEP_ORDER.indexOf(step) + 1).map((n) => STEP_LABELS[n]);
-    const ok = await confirmDialog({
-      title: `Relancer depuis « ${STEP_LABELS[step]} » ?`,
-      body: `Cette étape repart de zéro${after.length ? `, ainsi que : ${after.join(", ")}` : ""}. Les clips déjà rendus de cette vidéo seront remplacés.`,
-      confirmLabel: "Relancer", danger: false,
-    });
-    if (!ok) return;
-    try {
-      await api(`/api/videos/${encodeURIComponent(video.video_id)}/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from_step: step }) });
-      toast({ kind: "ok", title: "Relance mise en file", body: `${video.video_id} : depuis « ${STEP_LABELS[step]} »` });
-      await Promise.all([loadVideos(), loadQueue()]);
-      refreshDetail();
-    } catch (err) { toastError("Relance impossible", err); }
-  }
-
-  /* « interrompue » (serveur ou PC arrete en plein traitement) n'est pas un statut de pipeline.json : l'API le
-     deduit d'une etape « running » sans processus. Ni « en cours » ni « en echec » : un chip a part. */
-  const videoChip = (status) => status === "interrupted" ? `<span class="chip failed">interrompue</span>` : statusChip(status);
-
-  /* Reprendre : remet la video interrompue en file, elle repart de l'etape interrompue (les etapes finies restent). */
-  async function resumeVideo(video) {
-    const ok = await confirmDialog({
-      title: "Reprendre le traitement ?",
-      body: `${video.video_id} repart de l'étape « ${STEP_LABELS[video.current_step] || video.current_step} » ; les étapes déjà terminées ne sont pas refaites.`,
-      confirmLabel: "Reprendre", danger: false,
-    });
-    if (!ok) return;
-    try {
-      await api(`/api/videos/${encodeURIComponent(video.video_id)}/resume`, { method: "POST" });
-      toast({ kind: "ok", title: "Reprise mise en file", body: video.video_id });
-      await Promise.all([loadVideos(), loadQueue()]);
-      refreshDetail();
-    } catch (err) { toastError("Reprise impossible", err); }
-  }
-
-  async function cancelVideo(video) {
-    const ok = await confirmDialog({ title: "Annuler le traitement ?", body: `Le traitement de ${video.video_id} sera arrêté.`, confirmLabel: "Annuler le traitement" });
-    if (!ok) return;
-    try {
-      await api(`/api/videos/${encodeURIComponent(video.video_id)}/cancel`, { method: "POST" });
-      toast({ kind: "ok", title: "Traitement annulé", body: video.video_id });
-      await loadVideos();
-      updateCounts();
-      refreshDetail();
-    } catch (err) { toastError("Annulation impossible", err); }
-  }
-
-  /* ---------- Branchement sur la coquille ---------- */
-  function openDetail(id) {
-    if (state.detailId === id) return;
-    state.detailId = id;
-    state.detail = null;
-    state.events = [];
-    state.step = null;
-    $("[data-vdetail-view]", state.root).innerHTML = backLink() + `<div class="skeleton skeleton-card"></div>`;
-  }
-
-  /* Temps reel (T3) : un evenement « video » rafraichit la fiche ouverte (et
-     son journal) ou la liste, jamais la page. */
-  document.addEventListener("clipper:event", (e) => {
-    if (currentScreen !== "videos" || !state.root || e.detail.kind !== "video") return;
-    if (state.detailId) { if (e.detail.id === state.detailId) refreshDetail(); } else refreshList();
+/* Relancer : remet cette étape et les suivantes à zéro (SPEC-74e9 3.3). */
+async function videosRetryFrom(video, step) {
+  const after = VIDEOS_STEPS.slice(VIDEOS_STEPS.indexOf(step) + 1).map((n) => STEP_LABELS[n]);
+  const ok = await confirmDialog({
+    title: `Relancer depuis « ${STEP_LABELS[step]} » ?`,
+    body: `Cette étape repart de zéro${after.length ? `, ainsi que : ${after.join(", ")}` : ""}. Les clips déjà rendus de cette vidéo seront remplacés.`,
+    confirmLabel: "Relancer", danger: false,
   });
+  if (!ok) return;
+  try {
+    await api(`/api/videos/${encodeURIComponent(video.video_id)}/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from_step: step }) });
+    toast({ kind: "ok", title: "Relance mise en file", body: `${video.video_id} : depuis « ${STEP_LABELS[step]} »` });
+    await Promise.all([loadVideos(), loadQueue()]);
+    videosRefreshDetail();
+  } catch (err) { toastError("Relance impossible", err); }
+}
 
-  Screens.videos = {
-    render(body) {
-      if (!body.querySelector(".vscreen")) { state.root = null; state.list = null; state.formChannels = null; state.channelsAsked = false; state.detailId = null; build(body); }
-      const id = selectedId();
-      $("[data-vlist-view]", body).hidden = Boolean(id);
-      $("[data-vdetail-view]", body).hidden = !id;
-      ensureChannels();
-      paintChannelSelects();
-      if (id) {
-        openDetail(id);
-        if (!state.detail || Date.now() - state.detailAt > STALE_MS) refreshDetail();
-      } else {
-        state.detailId = null;
-        if (state.list === null || Date.now() - state.listAt > STALE_MS) refreshList();
+/* Reprendre : remet la vidéo interrompue en file, elle repart de l'étape interrompue (les étapes finies restent). */
+async function videosResume(video) {
+  const ok = await confirmDialog({
+    title: "Reprendre le traitement ?",
+    body: `${video.video_id} repart de l'étape « ${STEP_LABELS[video.current_step] || video.current_step} » ; les étapes déjà terminées ne sont pas refaites.`,
+    confirmLabel: "Reprendre", danger: false,
+  });
+  if (!ok) return;
+  try {
+    await api(`/api/videos/${encodeURIComponent(video.video_id)}/resume`, { method: "POST" });
+    toast({ kind: "ok", title: "Reprise mise en file", body: video.video_id });
+    await Promise.all([loadVideos(), loadQueue()]);
+    videosRefreshDetail();
+  } catch (err) { toastError("Reprise impossible", err); }
+}
+
+async function videosCancel(video) {
+  const ok = await confirmDialog({ title: "Annuler le traitement ?", body: `Le traitement de ${video.video_id} sera arrêté.`, confirmLabel: "Annuler le traitement" });
+  if (!ok) return;
+  try {
+    await api(`/api/videos/${encodeURIComponent(video.video_id)}/cancel`, { method: "POST" });
+    toast({ kind: "ok", title: "Traitement annulé", body: video.video_id });
+    await loadVideos();
+    updateCounts();
+    videosRefreshDetail();
+  } catch (err) { toastError("Annulation impossible", err); }
+}
+
+function videosWireList(body) {
+  $$("[data-status]", body).forEach((b) => (b.onclick = () => { videosSetFilter("status", b.dataset.status); renderCurrent(); videosLoad(); }));
+  const channel = $('[name="filter-channel"]', body);
+  if (channel) channel.onchange = () => { videosSetFilter("channel", channel.value); renderCurrent(); videosLoad(); };
+  const q = $('[name="q"]', body);
+  let timer = null;
+  // le texte est gardé tout de suite (le prochain morph ne l'écrase pas), seule la requête serveur est différée
+  if (q) q.oninput = () => { videosSetFilter("q", q.value.trim()); clearTimeout(timer); timer = setTimeout(videosLoad, 250); };
+  $$("tr.clickable", body).forEach((tr) => (tr.onclick = (e) => {
+    if (e.target.closest("a, button")) return;
+    location.hash = `#/videos/${encodeURIComponent(tr.dataset.video)}`;
+  }));
+  const purge = $("[data-purge-completed]", body);
+  if (purge) purge.onclick = videosPurgeCompleted;
+}
+
+function videosWireDetail(body, video) {
+  const s = videosState;
+  $$("[data-step]", body).forEach((b) => (b.onclick = () => { s.step = b.dataset.step; renderCurrent(); }));
+  $$("[data-jr-pick]", body).forEach((b) => (b.onclick = () => { s.juryUi = { key: b.dataset.jrPick, round: null }; renderCurrent(); }));
+  $$("[data-jr-round]", body).forEach((b) => (b.onclick = () => { s.juryUi = { ...s.juryUi, round: Number(b.dataset.jrRound) }; renderCurrent(); }));
+  const menu = $("[data-retry-menu]", body);
+  if (menu) menu.onclick = () => { s.menu = s.menu === "retry" ? null : "retry"; renderCurrent(); };
+  $$("[data-retry-step]", body).forEach((b) => (b.onclick = () => { s.menu = null; renderCurrent(); videosRetryFrom(video, b.dataset.retryStep); }));
+  const retry = $("[data-retry]", body);
+  if (retry) retry.onclick = () => videosRetryFrom(video, retry.dataset.retry);
+  const cancel = $("[data-cancel-video]", body);
+  if (cancel) cancel.onclick = () => videosCancel(video);
+  const resume = $("[data-resume-video]", body);
+  if (resume) resume.onclick = () => videosResume(video);
+  $$("[data-purge-video]", body).forEach((b) => (b.onclick = () => videosPurge(b.dataset.purgeVideo, false)));
+  $$("[data-purge-video-clips]", body).forEach((b) => (b.onclick = () => videosPurge(b.dataset.purgeVideoClips, true)));
+  const assign = $("[data-assign-channel]", body);
+  if (assign) assign.onclick = () => openAssignChannel(video.video_id);
+  $$("[data-copy]", body).forEach((b) => (b.onclick = () => copyText(b.dataset.copy, "Identifiant")));
+  const copyLog = $("[data-log-copy]", body);
+  if (copyLog) copyLog.onclick = () => copyText(s.events.map((e) => `${e.at} ${e.level} ${e.step || ""} ${e.message}`).join("\n"), "Journal");
+  const follow = $("[data-follow]", body);
+  if (follow) follow.onchange = () => { s.follow = follow.checked; renderCurrent(); };
+  const logq = $('[name="log-q"]', body);
+  if (logq) logq.oninput = () => { s.logQ = logq.value; renderCurrent(); };
+  $$("tr[data-log]", body).forEach((tr) => (tr.onclick = () => {
+    const key = tr.dataset.log;
+    if (s.openLogs.has(key)) s.openLogs.delete(key); else s.openLogs.add(key);
+    renderCurrent();
+  }));
+  const log = $(".vlog", body);
+  if (log && s.follow) log.scrollTop = log.scrollHeight;
+}
+
+/* j / k déplacent la sélection de la liste, Entrée ouvre la fiche (SPEC-7715 T7) ; rien dans un champ de saisie. */
+function videosOnKey(e) {
+  const s = videosState;
+  if (currentScreen !== "videos" || s.detailId || !s.list || !s.list.length) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || drawer.isOpen() || document.querySelector("dialog[open]")) return;
+  const t = e.target;
+  if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
+  if (e.key === "j" || e.key === "k") {
+    s.sel = Math.max(0, Math.min(s.list.length - 1, s.sel + (e.key === "j" ? 1 : -1)));
+    e.preventDefault();
+    renderCurrent();
+    const row = $('tr[aria-selected="true"]');
+    if (row) row.scrollIntoView({ block: "nearest" });
+  } else if (e.key === "Enter" && s.sel >= 0 && s.list[s.sel]) {
+    e.preventDefault();
+    location.hash = `#/videos/${encodeURIComponent(s.list[s.sel].video_id)}`;
+  }
+}
+document.addEventListener("keydown", videosOnKey);
+
+// le menu « Relancer depuis… » se ferme au clic ailleurs
+document.addEventListener("click", (e) => {
+  if (videosState.menu && currentScreen === "videos" && !e.target.closest(".vmenu-wrap")) { videosState.menu = null; renderCurrent(); }
+});
+
+/* Temps réel (T3) : un événement « video » rafraîchit la fiche ouverte (et son journal) ou la liste, jamais la page. */
+document.addEventListener("clipper:event", (e) => {
+  if (currentScreen !== "videos" || e.detail.kind !== "video") return;
+  if (videosState.detailId) { if (e.detail.id === videosState.detailId) videosRefreshDetail(); } else videosLoad();
+});
+
+Screens.videos = {
+  render(body) {
+    const s = videosState;
+    const section = body.closest(".screen");
+    if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
+    const id = videosHashId();
+    if (id !== s.detailId) videosOpenDetail(id);
+    videosEnsureChannels();
+    if (id) {
+      if (!s.detail || Date.now() - s.detailAt > VIDEOS_STALE_MS) videosRefreshDetail();
+      if (s.detail) {
+        if (!s.step || !VIDEOS_STEPS.includes(s.step)) s.step = s.detail.current_step || VIDEOS_STEPS[VIDEOS_STEPS.length - 1];
+        videosLoadClips(s.detail);
+        if (s.step === "moments" && videosStepStatus(s.detail, "moments") === "done") videosLoadJury(s.detail);
       }
-    },
-  };
-})();
+    } else if (s.list === null || Date.now() - s.listAt > VIDEOS_STALE_MS) {
+      videosLoad();
+    }
+    morph(body, id ? videosDetailView() : videosListView());
+    const retry = $("[data-videos-retry]", body);
+    if (retry) retry.onclick = () => (id ? videosRefreshDetail() : videosLoad());
+    if (id) { if (s.detail) videosWireDetail(body, s.detail); } else videosWireList(body);
+  },
+};

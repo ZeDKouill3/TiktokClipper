@@ -852,47 +852,6 @@ input[type="color"] { width: 36px; height: 36px; padding: 2px; border-radius: va
 }
 /* <<< shell */
 
-/* >>> videos */
-/* ---------- Ecran Videos (TASK-157b) ---------- */
-.vscreen .vadd {
-  display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 12px;
-  align-items: end; padding: 16px 24px; border-bottom: 1px solid var(--line);
-}
-.vscreen .vfilters { padding: 16px 24px 0; margin-bottom: 8px; }
-.vscreen .vfilters .input-ico .input { width: 260px; }
-.vscreen .vdisk { padding: 0 24px; margin-bottom: 8px; }
-.vscreen .vrow { grid-template-columns: 96px minmax(0, 1fr) auto; color: inherit; text-decoration: none; }
-.vscreen .vrow .reason { margin-top: 10px; }
-.vscreen .vback { margin: 16px 24px 0; }
-.vscreen .vhead { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; padding: 16px 24px; }
-.vscreen .vtitle { font-family: var(--font-cond); font-size: 28px; font-weight: 700; overflow-wrap: anywhere; }
-.vscreen .vsub { font-size: 13px; margin-top: 4px; }
-.vscreen .vactions { display: flex; gap: 8px; flex-wrap: wrap; }
-.vscreen .banner { margin: 0 24px 16px; }
-.vscreen .vsection { margin: 0 24px 24px; border: 1px solid var(--line); border-radius: var(--r-lg); padding: 24px; }
-.vscreen .vgrid { padding: 0 24px; margin: 0; gap: 0 24px; }
-.vscreen .vgrid .vsection { margin: 0 0 24px; padding: 0; overflow: hidden; }
-.vscreen .fstep-name { font-size: 10.5px; letter-spacing: -0.03em; overflow-wrap: normal; hyphens: none; }
-.vscreen .vstep { padding: 24px; }
-.vscreen .vreason { color: var(--bad); }
-.vscreen .vsection h3 { font-size: 15px; font-weight: 600; }
-.vscreen .fstep { background: none; border: 0; color: inherit; font: inherit; }
-.vscreen .log { height: 260px; }
-@media (max-width: 900px) {
-  .vscreen .vadd { grid-template-columns: 1fr; padding: 16px; }
-  .vscreen .vfilters { padding: 16px 16px 0; }
-  .vscreen .vdisk { padding: 0 16px; }
-  .vscreen .vfilters .input-ico, .vscreen .vfilters .input-ico .input { width: 100%; }
-  .vscreen .vback { margin: 12px 16px 0; }
-  .vscreen .vhead { padding: 12px 16px; }
-  .vscreen .banner { margin: 0 16px 16px; }
-  .vscreen .vsection { margin: 0 16px 16px; }
-  .vscreen .vgrid { grid-template-columns: minmax(0, 1fr); padding: 0 16px; }
-  .vscreen .vgrid .vsection { margin: 0 0 16px; }
-  .vscreen .fstep { min-height: 44px; }
-  .vscreen .vrow { padding: 16px; }
-}
-/* <<< videos */
 /* >>> review */
 /* ---------- Revue des moments v2 (TASK-6e75) ---------- */
 .screen[id="screen-review"] [data-body] { background: none; border: 0; box-shadow: none; }
@@ -1097,9 +1056,6 @@ input[type="color"] { width: 36px; height: 36px; padding: 2px; border-radius: va
   .stats-bar { grid-template-columns: minmax(0, 1fr); gap: 4px; }
 }
 /* <<< stats */
-/* >>> videos */
-.vscreen .vhead .job-thumb { flex: none; }
-/* <<< videos */
 
 /* >>> stats */
 /* ---------- Ecran Statistiques TikTok (SPEC-86fe, maquette docs/maquette-stats) ---------- */
@@ -1245,61 +1201,6 @@ input[type="color"] { width: 36px; height: 36px; padding: 2px; border-radius: va
 /* <<< journal */
 
 
-/* >>> videos */
-/* ---------- Radar du jury (fiche video, etape Moments) ---------- */
-.vjury { padding: 0 24px 24px; }
-.vjury h3 { margin: 0 0 16px; }
-.jr { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 24px; }
-.jr-list { display: flex; flex-direction: column; gap: 4px; min-width: 0; max-height: 640px; overflow-y: auto; }
-.jr-group { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 12px 0 4px; }
-.jr-group:first-child { margin-top: 0; }
-.jr-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 8px; align-items: center; text-align: left; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
-.jr-item.sel { border-color: var(--accent-line); background: var(--accent-soft); }
-.jr-item-hook { grid-column: 1 / -1; grid-row: 2; font-size: 13px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.jr-item-score { font-family: var(--font-cond); font-size: 18px; font-variant-numeric: tabular-nums; text-align: right; }
-.jr-item .chip { justify-self: end; grid-column: 3; grid-row: 1; }
-.jr-item-score { grid-column: 2; grid-row: 1; justify-self: end; }
-.jr-main { min-width: 0; }
-.jr-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.jr-chart { display: grid; grid-template-columns: minmax(240px, 400px) minmax(0, 1fr); gap: 16px; align-items: center; }
-.jr-svg { width: 100%; height: auto; display: block; overflow: visible; }
-.jr-ring { fill: none; stroke: var(--line-2); stroke-width: 1; }
-.jr-axis { stroke: var(--line-2); stroke-width: 1; }
-.jr-label { fill: var(--text); font-size: 14px; font-family: var(--font); }
-.jr-label .jr-w { fill: var(--muted); font-size: 11px; }
-.jr-axis.jr-zero { stroke-dasharray: 3 3; stroke: var(--faint); }
-.jr-label.jr-zero, .jr-label.jr-zero .jr-w { fill: var(--faint); }
-.jr-judge { fill: currentColor; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; }
-.jr-retained { fill: var(--text); fill-opacity: .08; stroke: var(--text); stroke-width: 4; stroke-linejoin: round; }
-.jr-c0 { color: var(--jr-c0); } .jr-c1 { color: var(--jr-c1); } .jr-c2 { color: var(--jr-c2); }
-.jr-c3 { color: var(--jr-c3); } .jr-c4 { color: var(--jr-c4); } .jr-c5 { color: var(--jr-c5); }
-.jr-judge.jr-vetoer { color: var(--bad); stroke-dasharray: 5 3; }
-.jr-legend { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 14px; }
-.jr-legend li { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
-.jr-sw { width: 16px; height: 4px; border-radius: 2px; background: currentColor; flex: none; }
-.jr-sw-retained { height: 6px; background: var(--text); }
-.jr-sw.jr-vetoer { color: var(--bad); }
-.jr-jname { font-weight: 600; }
-.jr-hint { grid-column: 1 / -1; font-size: 12px; margin: 0; }
-.jr-bad { color: var(--bad); }
-.jr-veto { margin: 12px 0; padding: 12px 16px; border: 1px solid var(--bad); border-radius: var(--r); background: var(--bad-soft); color: var(--bad); font-size: 14px; }
-.jr-facts { margin: 16px 0; }
-.jr-table-wrap { overflow-x: auto; }
-.jr-table { border-collapse: collapse; font-size: 13px; width: 100%; }
-.jr-table th, .jr-table td { padding: 4px 8px; text-align: right; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
-.jr-table th:first-child, .jr-table thead th { text-align: left; font-weight: 600; color: var(--text-2); }
-.jr-table tr.jr-zero { color: var(--faint); }
-.jr-empty { padding: 16px; border: 1px dashed var(--line-2); border-radius: var(--r); color: var(--text-2); }
-@media (max-width: 900px) {
-  .vjury { padding: 0 16px 16px; }
-  .jr { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .jr-list { max-height: 280px; }
-  .jr-chart { grid-template-columns: minmax(0, 1fr); }
-}
-
-/* Etape Moments (radar du jury) : panneau sur toute la largeur, journal en dessous. */
-.step-detail.wide { grid-template-columns: minmax(0, 1fr); }
-/* <<< videos */
 
 /* >>> channels */
 /* ---------- Tour 6 : actions directes sur la carte d'un style ---------- */
