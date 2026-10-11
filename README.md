@@ -12,7 +12,7 @@
     <img alt="GPU" src="https://img.shields.io/badge/GPU-CUDA%20optionnel-76b900">
   </p>
 
-  <img src="docs/assets/readme/progression-en-direct.gif" alt="Animation : la console suit en direct la progression d'une vidéo, étape par étape" width="100%"/>
+  <img src="docs/assets/readme/progression-en-direct.webp" alt="Animation : la console suit en direct la progression d'une vidéo, étape par étape" width="100%"/>
 </div>
 
 > ⚠️ **Pré-version.** Pas encore de garantie de stabilité de la ligne de
@@ -47,7 +47,7 @@ titres et légendes, contrôle qualité...) passent par Claude via
 
 | Progression en direct | Radar du jury | Nouvelle publication |
 |---|---|---|
-| <img src="docs/assets/readme/progression-en-direct.gif" alt="Animation : une vidéo avance d'étape en étape dans la frise de progression" width="100%"/> | <img src="docs/assets/readme/radar-du-jury.gif" alt="Animation : ouverture du radar du jury, choix d'un moment, avant et après débat" width="100%"/> | <img src="docs/assets/readme/nouvelle-publication.gif" alt="Animation : formulaire Nouvelle publication, choix du clip et d'une date de programmation" width="100%"/> |
+| <img src="docs/assets/readme/progression-en-direct.webp" alt="Animation : une vidéo avance d'étape en étape dans la frise de progression" width="100%"/> | <img src="docs/assets/readme/radar-du-jury.webp" alt="Animation : ouverture du radar du jury, choix d'un moment, avant et après débat" width="100%"/> | <img src="docs/assets/readme/nouvelle-publication.webp" alt="Animation : formulaire Nouvelle publication, choix du clip et d'une date de programmation" width="100%"/> |
 | Frise des étapes et journal en direct. | Les juges, moment par moment. | Un clip, un compte, maintenant ou à une date. |
 
 Générées sur des données de démonstration (voir [Développement](#développement)).
@@ -261,11 +261,12 @@ motivé.
 
 ## La console en images
 
-Captures en thème clair de la vraie console (`python -m clipper serve`), prises
-en lecture seule. Le dépôt est public : les vignettes, jaquettes, miniatures,
-titres de VOD et noms de chaînes tiers sont floutés, et l'écran Comptes
-(adresses e-mail) n'est pas montré. Les animations plus bas viennent de
-données de démonstration neutres.
+Captures en thème clair de la console (`python -m clipper serve`), générées par
+[`tools/readme_shots/capture.py`](tools/readme_shots/capture.py) sur un espace
+de **démonstration** temporaire : chaîne, compte, vidéos, clips, statistiques,
+relevé de la Veille et vignettes de synthèse sont inventés, aucun nom ni
+aucune donnée réels. Les trois animations de « Démo » sont des enregistrements
+vidéo de la même console (curseur et clics visibles), convertis en WebP animé.
 
 ### Tableau de bord
 
@@ -280,7 +281,7 @@ worker, coût LLM et alerte « posts à 0 vue » (voir
 
 <img src="docs/assets/readme/veille-light.webp" alt="Veille : état des sources du relevé du jour, jeux qui montent, VOD proposées et prochain relevé" width="100%">
 
-<img src="docs/assets/readme/veille-selection-light.webp" alt="Veille : sélection du jour (meilleurs clips, vignettes floutées) et tableau Ce qui monte" width="100%">
+<img src="docs/assets/readme/veille-selection-light.webp" alt="Veille : tableau Ce qui monte et sélection du jour (meilleurs clips)" width="100%">
 
 Le relevé du jour (une pastille par source, avec ses comptes d'éléments
 demandés, trouvés et écartés), les VOD que Claude propose de clipper (envoi
@@ -319,7 +320,7 @@ créneau, lien du post) et relevés TikTok du post. Une donnée absente s'affich
 « inconnu », jamais 0. Un clip publié dont la vidéo a été supprimée garde sa
 fiche et ses statistiques.
 
-<img src="docs/assets/readme/clip-fiche-light.webp" alt="Fiche d'un clip publié : vidéo, titre d'écran, score et critères, passage dans la VOD, qualité (vignette et textes floutés)" width="100%">
+<img src="docs/assets/readme/clip-fiche-light.webp" alt="Fiche d'un clip publié : vidéo, titre d'écran, score et critères, passage dans la VOD, qualité" width="100%">
 
 ### Publication
 
@@ -601,16 +602,20 @@ sauté par défaut (`skipif`), jamais lancé en CI. Exemples : candidats d'actio
 (`CLIPPER_ACTION_REAL=1`, quota Claude consommé), installeur portable
 (`CLIPPER_INSTALLER_REAL=1`, ~700 Mo téléchargés) ; voir `AGENTS.md`.
 
-**Régénérer les animations.** Les trois GIF de `docs/assets/readme/` viennent
-d'un script reproductible,
+**Régénérer les captures et les animations.** Les 12 captures
+`*-light.webp` et les trois animations `*.webp` de `docs/assets/readme/`
+viennent d'un script reproductible,
 [`tools/readme_shots/capture.py`](tools/readme_shots/capture.py) : il crée un
 espace de démonstration **temporaire** (données factices, vignettes de
-synthèse ffmpeg), lance `clipper serve` dessus, capture la console avec
-Playwright (Chromium headless, 1440×900), assemble les GIF puis supprime tout.
-Il ne lit ni n'écrit jamais le vrai `workspace/`, `output/` ni `state/`. Les
-captures `*-light.webp` de « La console en images » sont prises à la main sur
-la vraie console (thème clair, lecture seule), avec vignettes, titres et noms
-tiers floutés avant publication.
+synthèse ffmpeg, relevé de la Veille inventé), lance `clipper serve` dessus
+(IP publique simulée : aucun appel réseau, aucun relevé TikTok), prend les
+captures avec Playwright (Chromium headless, 1440×900, thème clair), filme la
+console pour les animations (`record_video`, curseur et halo de clic
+dessinés, 15 images par seconde, WebP animé en vraies couleurs, chaque
+animation sous un plafond de poids réglable `anim_max_mb`) puis supprime tout.
+Il ne lit ni n'écrit jamais le vrai `workspace/`, `output/` ni `state/`. Test
+hors CI : on le lance à la main (ffmpeg avec libwebp requis) ; la suite de
+tests ne vérifie que ses garde-fous, la conversion et le poids des fichiers.
 
 ```powershell
 python -m playwright install chromium

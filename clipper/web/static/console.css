@@ -1065,7 +1065,7 @@ details.releve[open] > summary svg { transform: rotate(90deg); }
 .jr-table th:first-child, .jr-table thead th { text-align: left; font-weight: 600; color: var(--foreground-2); }
 .jr-table tr.jr-zero { color: var(--muted-foreground); }
 .jr-empty { padding: 16px; border: 1px dashed var(--border-2); border-radius: var(--radius); color: var(--foreground-2); }
-{ --jr-c0: #2f5fc8; --jr-c1: #1f8a4f; --jr-c2: #a87a00; --jr-c3: #8a3fd1; --jr-c4: #0c7f87; --jr-c5: #c23a6b; }
+:root { --jr-c0: #2f5fc8; --jr-c1: #1f8a4f; --jr-c2: #a87a00; --jr-c3: #8a3fd1; --jr-c4: #0c7f87; --jr-c5: #c23a6b; }
 .dark { --jr-c0: #7fa9ff; --jr-c1: #5cc98a; --jr-c2: #e8bd4a; --jr-c3: #c78bff; --jr-c4: #4fd1d9; --jr-c5: #ff9fb8; }
 /* ---------- Comptes (E10, SPEC-7715 E10) : table, menu « … » (une ligne = 3 boutons au plus), tiroir d'édition ----------
    Ex-accounts.css, fusionné ici : classes acc-* . */

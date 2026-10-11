@@ -5,11 +5,15 @@ valides, logo reference, badges, SVG valides sans <script>, animation CSS
 pure (pas de JavaScript), duree de boucle 15-25 s, aucun identifiant reel ou
 chemin perso, ordre des etapes du pipeline, lisibilite clair/sombre.
 
-TASK-dbb2 : README refait avec captures et GIF de la console (docs/assets/readme/,
-generes par tools/readme_shots/) : chaque image et GIF reference existe, poids
+TASK-dbb2 : README refait avec captures et animations de la console (docs/assets/readme/,
+generes par tools/readme_shots/) : chaque image et animation referencee existe, poids
 maximal respecte, aucun nom reel interdit, liens et ancres valides, et le
 script de capture n'utilise que le dossier temporaire (jamais le vrai
-workspace/state)."""
+workspace/state).
+
+TASK-60bddde86152 (cloture U14) : les trois GIF deviennent des WebP animes (la console est
+filmee par Playwright, 12 a 15 images par seconde) et les 12 captures fixes sont refaites
+sur les donnees de demonstration, veille et statistiques comprises."""
 
 from __future__ import annotations
 
@@ -235,9 +239,9 @@ SHOT_NAMES = ("tableau-de-bord", "veille", "veille-selection", "videos", "video-
 # TASK-5142ea3f07cc : captures refaites en theme clair uniquement (plus de variante sombre, plus de <picture>) ;
 # l'ecran Comptes n'est plus capture (adresses e-mail).
 THEMES = ("light",)
-GIF_NAMES = ("progression-en-direct", "radar-du-jury", "nouvelle-publication")
+ANIM_NAMES = ("progression-en-direct", "radar-du-jury", "nouvelle-publication")
 MAX_IMAGE_BYTES = 400 * 1024
-MAX_GIF_BYTES = 2 * 1024 * 1024
+MAX_ANIM_BYTES = 3 * 1024 * 1024  # = CONFIG_DEFAULTS["anim_max_mb"] de capture.py (test_anim_weight_cap_matches_the_script)
 IMAGE_SUFFIXES = (".png", ".webp", ".gif", ".svg")
 
 # Liste de controle : noms de personnes, de chaines ou de jeux reels qui ne doivent apparaitre ni dans le README,
@@ -262,7 +266,7 @@ def _load(name: str):
 
 def _expected_assets() -> list[Path]:
     return ([ASSETS_DIR / f"{name}-{theme}.webp" for name in SHOT_NAMES for theme in THEMES]
-            + [ASSETS_DIR / f"{name}.gif" for name in GIF_NAMES])
+            + [ASSETS_DIR / f"{name}.webp" for name in ANIM_NAMES])
 
 
 def _slug(heading: str) -> str:
@@ -271,7 +275,7 @@ def _slug(heading: str) -> str:
     return re.sub(r"\s", "-", text)
 
 
-def test_every_expected_screenshot_and_gif_exists():
+def test_every_expected_screenshot_and_animation_exists():
     for path in _expected_assets():
         assert path.is_file(), f"image attendue absente : {path.relative_to(ROOT)} (lance tools/readme_shots/capture.py)"
 
@@ -282,10 +286,19 @@ def test_readme_uses_light_screenshots_only_without_picture_or_dark_variant():
     assert "-dark" not in text
     assert not list(ASSETS_DIR.glob("*-dark.*")), "variante sombre restante dans docs/assets/readme/"
     assert not (ASSETS_DIR / "comptes-light.webp").exists(), "l'ecran Comptes montre des e-mails : jamais capture"
-    cited = set(re.findall(r"docs/assets/readme/([\w.-]+\.webp)", text))
+    cited = set(re.findall(r"docs/assets/readme/([\w.-]+-light\.webp)", text))
     assert cited == {f"{name}-light.webp" for name in SHOT_NAMES}
-    on_disk = {path.name for path in ASSETS_DIR.glob("*.webp")}
+    on_disk = {path.name for path in ASSETS_DIR.glob("*-light.webp")}
     assert on_disk == cited, f"images non citees dans docs/assets/readme/ : {sorted(on_disk - cited)}"
+
+
+def test_the_animations_are_animated_webp_and_no_gif_remains():
+    text = _readme_text()
+    assert not list(ASSETS_DIR.glob("*.gif")), "GIF restant dans docs/assets/readme/ : remplaces par des WebP animes"
+    assert ".gif" not in text
+    cited = set(re.findall(r"docs/assets/readme/([\w.-]+\.webp)", text))
+    assert {f"{name}.webp" for name in ANIM_NAMES} <= cited
+    assert {path.name for path in ASSETS_DIR.glob("*.webp")} == cited
 
 
 def test_readme_references_every_generated_image_and_gif():
@@ -302,8 +315,25 @@ def test_every_image_referenced_by_the_readme_exists_and_respects_its_weight_lim
         assert path.is_file(), f"image absente : {target}"
         if "docs/assets/readme/" not in target.replace("\\", "/"):
             continue
-        limit = MAX_GIF_BYTES if path.suffix == ".gif" else MAX_IMAGE_BYTES
+        limit = MAX_ANIM_BYTES if path.stem in ANIM_NAMES else MAX_IMAGE_BYTES
         assert path.stat().st_size <= limit, f"{target} pese {path.stat().st_size} octets (maximum {limit})"
+
+
+def _webp_frame_durations_ms(path: Path) -> list[int]:
+    """Durée de chaque image d'un WebP animé (chunks ANMF) : Pillow ne la rend pas toujours, le conteneur la porte.
+    L'encodeur fusionne les images identiques (écran immobile) : une image peut donc durer longtemps, jamais moins
+    d'une période d'image."""
+    import struct
+
+    data = path.read_bytes()
+    assert data[:4] == b"RIFF" and data[8:12] == b"WEBP", path.name
+    durations, offset = [], 12
+    while offset + 8 <= len(data):
+        tag, size = data[offset:offset + 4], struct.unpack("<I", data[offset + 4:offset + 8])[0]
+        if tag == b"ANMF":
+            durations.append(int.from_bytes(data[offset + 20:offset + 23], "little"))
+        offset += 8 + size + (size & 1)
+    return durations
 
 
 def test_generated_assets_are_real_images_of_the_expected_size():
@@ -311,10 +341,16 @@ def test_generated_assets_are_real_images_of_the_expected_size():
 
     for path in _expected_assets():
         with Image.open(path) as image:
-            if path.suffix == ".webp":
-                assert image.size == (1440, 900), f"{path.name} : {image.size}"
+            if path.stem in ANIM_NAMES:
+                assert image.size[0] == 960, f"{path.name} : {image.size}"  # anim_width de capture.py
+                assert getattr(image, "is_animated", False) and image.n_frames >= 24, \
+                    f"{path.name} : une animation d'au moins 24 images est attendue"
+                durations = _webp_frame_durations_ms(path)
+                assert len(durations) == image.n_frames
+                assert sum(durations) >= 3000, f"{path.name} : {sum(durations)} ms, trop court pour être lisible"
+                assert 60 <= min(durations) <= 84, f"{path.name} : image la plus courte {min(durations)} ms (12 à 15 images/s)"
             else:
-                assert image.n_frames >= 4, f"{path.name} : un GIF d'au moins 4 images est attendu"
+                assert image.size == (1440, 900), f"{path.name} : {image.size}"
 
 
 def test_every_generated_image_has_a_non_empty_alt_text_in_the_readme():
@@ -472,22 +508,74 @@ def test_optimize_image_keeps_the_limit_and_fails_explicitly_when_it_cannot(tmp_
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg absent du PATH")
 
 
-@needs_ffmpeg
-def test_frames_to_gif_builds_a_gif_and_fails_explicitly_above_the_weight_limit(tmp_path):
+def _ffmpeg_has_animated_webp() -> bool:
+    import subprocess
+
+    if shutil.which("ffmpeg") is None:
+        return False
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return "libwebp_anim" in out.stdout
+
+
+needs_webp_anim = pytest.mark.skipif(not _ffmpeg_has_animated_webp(), reason="ffmpeg sans libwebp_anim")
+
+
+@needs_webp_anim
+def test_video_to_webp_builds_an_animated_webp_and_fails_explicitly_above_the_weight_limit(tmp_path):
+    import subprocess
+
     from PIL import Image
 
     capture = _load("capture")
-    frames = tmp_path / "frames"
-    frames.mkdir()
-    for index in range(4):
-        Image.new("RGB", (64, 40), (index * 60, 20, 90)).save(frames / f"f{index + 1:03d}.png")
-    settings = capture._settings({"gif_width": 64})
+    video = tmp_path / "ecran.webm"
+    made = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=160x100:rate=25",
+                           "-t", "2", "-c:v", "libvpx", str(video)], capture_output=True, text=True)
+    assert made.returncode == 0, made.stderr
+    settings = capture._settings({"anim_width": 80})
 
-    size = capture.frames_to_gif(frames, tmp_path / "ok.gif", settings)
-    assert size > 0 and Image.open(tmp_path / "ok.gif").n_frames >= 2
+    assert 1.8 <= capture.video_seconds(video) <= 2.3
+    size = capture.video_to_webp(video, tmp_path / "ok.webp", settings)
+    with Image.open(tmp_path / "ok.webp") as image:
+        assert size > 0 and image.is_animated and image.n_frames >= 24 and image.size[0] == 80   # ~2 s a 15 images/s
+    durations = _webp_frame_durations_ms(tmp_path / "ok.webp")
+    assert 1800 <= sum(durations) <= 2300 and 60 <= min(durations) <= 84                  # durée conservée, 15 images/s
+    capture.video_to_webp(video, tmp_path / "coupe.webp", settings, start_s=1.0)
+    assert sum(_webp_frame_durations_ms(tmp_path / "coupe.webp")) <= 1300                  # le début est bien coupé
 
     with pytest.raises(capture.CaptureError, match="dépasse"):
-        capture.frames_to_gif(frames, tmp_path / "gros.gif", capture._settings({"gif_width": 64, "gif_max_mb": 0.00001}))
+        capture.video_to_webp(video, tmp_path / "gros.webp", capture._settings({"anim_width": 80, "anim_max_mb": 0.00001}))
+    assert not (tmp_path / "gros.webp").exists()
+
+
+def test_animations_run_between_12_and_15_images_per_second_under_a_weight_cap():
+    capture = _load("capture")
+    assert 12 <= capture.CONFIG_DEFAULTS["anim_fps"] <= 15
+    for bad in (11, 16, 30):
+        with pytest.raises(capture.CaptureError, match="images par seconde"):
+            capture._settings({"anim_fps": bad})
+    assert "gif_max_mb" not in capture.CONFIG_DEFAULTS and "gif_fps" not in capture.CONFIG_DEFAULTS
+
+
+def test_anim_weight_cap_matches_the_script():
+    capture = _load("capture")
+    assert capture.CONFIG_DEFAULTS["anim_max_mb"] * 1024 * 1024 == MAX_ANIM_BYTES
+    assert capture.ANIM_NAMES == ANIM_NAMES and capture.STILL_NAMES == SHOT_NAMES
+
+
+def test_capture_films_the_console_with_a_visible_cursor_and_click_halo_instead_of_assembling_frames():
+    source = (SHOTS_DIR / "capture.py").read_text(encoding="utf-8")
+    assert "record_video_dir" in source and "libwebp_anim" in source
+    assert ".gif" not in source and "frames_to_gif" not in source and "palettegen" not in source
+    capture = _load("capture")
+    assert "mousemove" in capture.CURSOR_SCRIPT and "mousedown" in capture.CURSOR_SCRIPT and "demo-cursor" in capture.CURSOR_SCRIPT
+    assert capture.CONFIG_DEFAULTS["theme"] == "light"
+
+
+def test_the_demo_server_simulates_the_public_ip_and_never_refreshes_tiktok_stats_on_open():
+    serve = (SHOTS_DIR / "serve_demo.py").read_text(encoding="utf-8")
+    assert "network.use_fetcher(fake_geo)" in serve
+    demo = (SHOTS_DIR / "demo_data.py").read_text(encoding="utf-8")
+    assert "stats_stale_min = 0" in demo
 
 
 @needs_ffmpeg
@@ -524,6 +612,15 @@ def test_demo_workspace_is_neutral_complete_and_written_only_under_its_folder(tm
             assert not sensitive_hits(text), f"{path.relative_to(root)} : {sensitive_hits(text)}"
     accounts = json.loads((root / "state" / "accounts.json").read_text(encoding="utf-8"))["accounts"]
     assert all("password" not in a or a["password"] in (None, "") for a in accounts)
+    # relevé de la veille factice : un jour fini (le worker ne le relance jamais), 3 propositions, une sélection du jour
+    days = list((root / "state" / "veille" / "days").glob("*.json"))
+    assert len(days) == 1
+    day = json.loads(days[0].read_text(encoding="utf-8"))
+    assert day["finished_at"] and len(day["proposals"]) == 3 and day["games"] and day["releases"]["upcoming"]
+    selection = json.loads((root / "state" / "veille" / "selection" / days[0].name).read_text(encoding="utf-8"))
+    assert selection["kept"] and selection["archived"]
+    assert [s for s in demo.STEPS] == ["download", "transcribe", "audio", "scenes", "action", "moments", "vision", "parts",
+                                       "captions", "reframe", "subtitles", "render", "qa"]
 
 
 # --------------------------------------------------------------------------

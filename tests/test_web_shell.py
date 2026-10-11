@@ -457,6 +457,14 @@ def test_basecoat_unlayered_tokens_are_redeclared_by_console_css_for_both_themes
     assert "scroll-behavior: auto" in _static("console.css")  # Basecoat pose « smooth » : les ancres restent immédiates
 
 
+def test_console_css_has_no_rule_without_a_selector_and_themes_the_jury_radar_colours():
+    """Retirer le préfixe d'une règle écrite `.v3 { ... }` laisse `{ ... }` : une règle sans sélecteur, ignorée du
+    navigateur (le radar du jury perdait ses couleurs en thème clair)."""
+    css = re.sub(r"/\*.*?\*/", "", _static("console.css"), flags=re.S)
+    assert not re.search(r"(?:^|[};])\s*\{", css), "règle sans sélecteur dans console.css"
+    assert re.search(r"(?m)^:root \{ --jr-c0: #2f5fc8;", css) and re.search(r"(?m)^\.dark \{ --jr-c0: #7fa9ff;", css)
+
+
 def test_sidebar_is_232_px_wide():
     assert "var(--nav-w, 232px)" in _static("console.css")
 
