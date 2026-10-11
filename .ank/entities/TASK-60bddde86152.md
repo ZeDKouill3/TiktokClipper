@@ -5,7 +5,7 @@ slug: ui-v3-u14-cl-ture-suppression-de-style-css-du-pr
 title: "UI v3 U14 : Clôture : suppression de style.css, du préfixe .v3 (script --no-prefix), des attributs data-theme, de fonts.css inutilisés ; captures README en clair"
 created: 2026-10-11T03:59:40Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - tools/vendor_basecoat.py
   - clipper/web/static/**
@@ -20,6 +20,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/2cf04f8699c7@d430842
+    tree: scope/ead40a1379f3
+    criteria: accb9fd85341
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 3
+version: 5
 ---
