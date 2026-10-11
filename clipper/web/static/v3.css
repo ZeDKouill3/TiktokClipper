@@ -625,3 +625,31 @@ html[data-nav="rail"] .sidenav .nav-rail .i { transform: rotate(180deg); }
   .v3 .agenda-row, .v3 .cal-free, .v3 .pub-dialog .btn { min-height: 44px; }
 }
 #screen-publish [data-body] { background: none; border: 0; box-shadow: none; padding: 0; }
+/* ---------- Veille (SPEC-7715 E9) : sommaire collant, sources en table, « Voir plus » des jaquettes ---------- */
+.v3 .veille-toc { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; padding: 8px 0; margin: 0 0 16px; background: var(--background); border-bottom: 1px solid var(--border); }
+.v3 .veille-toc a { display: inline-flex; align-items: center; min-height: 32px; padding: 0 12px; border-radius: 999px; font-size: 13px; font-weight: 500; color: var(--foreground-2); text-decoration: none; }
+.v3 .veille-toc a:hover { background: var(--muted); color: var(--foreground); }
+.v3 .veille-toc a:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.v3 [id^="veille-"] { scroll-margin-top: 56px; }
+.v3 .sources-table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.v3 .sources-table th { padding: 6px 12px; font: 500 11px var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted-foreground); text-align: left; }
+.v3 .sources-table td { padding: 6px 12px; border-top: 1px solid var(--border); vertical-align: middle; font-size: 13px; }
+.v3 .sources-table td .reason { margin: 0; max-width: 70ch; }
+.v3 .sources-table { table-layout: fixed; }
+.v3 .sources-table th:nth-child(1) { width: 210px; } .v3 .sources-table th:nth-child(2) { width: 104px; } .v3 .sources-table th:nth-child(4) { width: 34%; }
+.v3 .sources-table td { white-space: normal; overflow-wrap: anywhere; }
+.v3 .sources-table .src-ico { display: inline-flex; vertical-align: middle; margin-right: 8px; }
+.v3 .sources { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; padding: 0 0 8px; border: 0; background: none; font-size: 13px; color: var(--muted-foreground); }
+.v3 .sources b { color: var(--foreground); }
+.v3 .more-row { display: flex; justify-content: center; padding: 12px 0 0; }
+@media (max-width: 900px) {
+  .v3 .sources-table thead { display: none; }
+  .v3 .sources-table th:nth-child(n) { width: auto; }
+  .v3 .sources-table tr { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 8px 12px; border-top: 1px solid var(--border); }
+  .v3 .sources-table td { padding: 0; border: 0; } .v3 .sources-table td:nth-child(3), .v3 .sources-table td:nth-child(4) { grid-column: 1 / -1; }
+  .v3 .veille-toc { overflow-x: auto; flex-wrap: nowrap; }
+}
+.v3 details.releve > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 8px 0; font-weight: 500; list-style: none; }
+.v3 details.releve > summary::-webkit-details-marker { display: none; }
+.v3 details.releve[open] > summary svg { transform: rotate(90deg); }
+.v3 [data-veille-alert] { margin: 0 0 12px; }

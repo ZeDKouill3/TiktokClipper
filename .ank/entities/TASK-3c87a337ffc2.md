@@ -5,7 +5,7 @@ slug: ui-v3-u8-veille-v3
 title: "UI v3 U8 : Veille v3"
 created: 2026-10-11T03:59:35Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/web/static/screens/veille.js
   - clipper/web/static/screens/veille.css
@@ -18,6 +18,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/08a77935c8cd@509f909
+    tree: scope/94bde1eeb0d0
+    criteria: db70bb544629
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
