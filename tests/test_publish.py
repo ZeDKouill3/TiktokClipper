@@ -2993,10 +2993,11 @@ def _tv_actions(publish, cwd):
                                                    schedule=_TV_SCHEDULE),
         "cancel_post": lambda: publish.cancel_post("vid1", "01", "ma_chaine"),
         "set_mode": lambda: publish.set_mode("vid1", "01", "ma_chaine", "immediate"),
+        "set_account": lambda: publish.set_account("vid1", "01", "ma_chaine", _OTHER),
     }
 
 
-@pytest.mark.parametrize("action", ["move", "unschedule", "update_post", "cancel_post", "set_mode"])
+@pytest.mark.parametrize("action", ["move", "unschedule", "update_post", "cancel_post", "set_mode", "set_account"])
 def test_a_to_verify_failure_is_refused_by_every_action_but_retry_and_nothing_is_written(isolated_cwd, action):
     publish, before = _to_verify_env(isolated_cwd)
 
