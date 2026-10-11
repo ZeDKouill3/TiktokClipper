@@ -2985,6 +2985,7 @@ def test_null_answer_with_two_persistent_faces_over_several_periods_is_an_explic
 ):
     from clipper.reframe import ReframeError
 
+    _same_content_everywhere(monkeypatch)
     twice = [MENUS[0], MENUS[0]]  # memes rectangles dans les deux periodes : persistants
     _menu_faces_period(monkeypatch, video_dir, menus_per_period=[twice[0][:1], twice[1][:1]])
     with pytest.raises(ReframeError, match="plusieurs"):
@@ -3206,6 +3207,14 @@ def test_real_aion_clip_webcam_face_found_in_the_enlarged_crop():
 # --------------------------------------------------------------------------
 
 
+def _same_content_everywhere(monkeypatch):
+    """Les images synthetiques different d'une periode a l'autre (grand visage
+    plein ecran puis jeu) : ces tests simulent une webcam identique partout."""
+    from clipper import reframe
+
+    monkeypatch.setattr(reframe, "_content_signature", lambda images, rect: np.zeros((16, 16), np.float32))
+
+
 def _menu_faces_period(monkeypatch, video_dir, *, menus_per_period, persistent=True):
     """Deux periodes (chat puis jeu). Candidat 1 : visage de la webcam, meme
     rectangle dans les deux periodes si ``persistent`` ; ``menus_per_period`` :
@@ -3255,7 +3264,55 @@ def test_null_answer_with_menu_faces_that_do_not_persist_stays_letterbox(
     assert "ecarte" in caplog.text
 
 
+def test_waiting_screen_zones_matching_a_real_webcam_rectangle_do_not_contradict_claude(
+    tmp_path, video_dir, monkeypatch, caplog
+):
+    """TASK-e1379cfab349 (cas v2895819258) : periode 1 = ecran d'attente dessine
+    dont plusieurs zones (nuages) passent pour des visages stables, periode 2 = jeu
+    avec la vraie webcam au meme endroit. Meme rectangle (IoU >= 0,5) mais autre
+    contenu : pas persistant, Claude (aucune webcam) fait foi, aucune erreur."""
+    from clipper import reframe
+
+    periods_seen: dict[int, int] = {}
+
+    def per_period(images, rect):  # contenu uniforme propre a chaque periode : decor different
+        n = periods_seen.setdefault(id(images), len(periods_seen))
+        return np.full((16, 16), 200.0 * n, np.float32)
+
+    monkeypatch.setattr(reframe, "_content_signature", per_period)
+    twice = [MENUS[0], MENUS[0]]  # memes rectangles dans les deux periodes, contenus differents
+    _menu_faces_period(monkeypatch, video_dir, menus_per_period=[twice[0], twice[1]])
+    with caplog.at_level("WARNING"):
+        path, _ = run_detect(tmp_path, [webcam_answer(None, "ecran d'attente")] * 2)
+
+    for period in load(path)["periods"]:
+        assert period["facecam"] is None and period.get("override") is None
+        assert "aucune webcam" in period["reason"] and "pas persistants" in period["reason"]
+    assert "pas persistants" in caplog.text
+
+
+def test_same_rectangle_with_same_content_is_persistent_and_other_content_is_not():
+    from clipper.reframe import _content_signature, _persistent, _settings
+
+    rng = np.random.default_rng(0)
+    face = rng.integers(0, 255, (100, 100, 3), dtype=np.uint8)
+    clouds = np.full((100, 100, 3), 200, np.uint8)
+    rect = {"x": 10, "y": 10, "w": 60, "h": 60}
+    candidate = {"rect": rect}
+    settings = _settings(None)
+    sigs = {"a": _content_signature([face], rect), "b": _content_signature([face], rect),
+            "c": _content_signature([clouds], rect)}
+    other = {"rect": dict(rect)}
+
+    def same(want):
+        return lambda a, b: float(np.abs(sigs[want[0]] - sigs[want[1]]).mean()) <= settings["facecam_persist_content_diff"] * 255
+
+    assert _persistent(candidate, [[other], [other]], settings, same("ab"))
+    assert not _persistent(candidate, [[other], [other]], settings, same("ac"))
+
+
 def test_null_answer_keeps_the_one_persistent_face_among_non_persistent_ones(tmp_path, video_dir, monkeypatch):
+    _same_content_everywhere(monkeypatch)
     _menu_faces_period(monkeypatch, video_dir, menus_per_period=[MENUS[0], MENUS[1]])
     path, _ = run_detect(tmp_path, [webcam_answer(None, "decor")] * 2)
 

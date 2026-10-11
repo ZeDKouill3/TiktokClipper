@@ -5,7 +5,7 @@ slug: reframe-cran-d-attente-dessin-sur-plusieurs-p-ri
 title: "Reframe : écran d'attente dessiné sur plusieurs périodes -> ReframeError « plusieurs candidats visage stables et persistants » alors que Claude répond à raison aucune webcam"
 created: 2026-10-11T06:19:34Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/reframe.py
   - tests/test_reframe.py
@@ -15,6 +15,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: diagnose
+proof:
+  - type: test
+    ref: local/a455def8c8e3@98e28e6
+    tree: scope/06865911774f
+    criteria: 3efc2ade0318
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---

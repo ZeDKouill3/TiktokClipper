@@ -272,6 +272,11 @@ CONFIG_DEFAULTS: dict[str, object] = {
     "facecam_clip_face_min_inside": 0.9,
     # Part du plus grand support à partir de laquelle un candidat visage est stable, et remplace un cadre sans aucun visage choisi par Claude.
     "facecam_face_stable_share": 0.8,
+    # Persistance d'un candidat d'une période à l'autre : même rectangle (IoU >= 0,5) ET même contenu, soit une
+    # différence moyenne de vignettes grises 16x16 (médiane sur les images de la période, fraction de 255) d'au plus
+    # cette valeur. Mesure réelle v2895819258 : même webcam ~0,03, nuages de l'écran d'attente contre la vraie
+    # webcam 0,37-0,59.
+    "facecam_persist_content_diff": 0.2,
     # Vignettes agrandies de chaque candidat webcam envoyees a Claude en plus de la planche : facecam_zoom_frames recadrages par candidat, chacun facecam_zoom_tile_height px de haut.
     "facecam_zoom_frames": 3,
     "facecam_zoom_tile_height": 240,
@@ -2101,16 +2106,45 @@ def _stable_face_instead(
     return stable[0]
 
 
-def _persistent(candidate: dict[str, Any], periods: Sequence[list[dict[str, Any]]], settings: dict[str, Any]) -> bool:
+def _content_signature(images: Sequence[np.ndarray], rect: dict[str, int]) -> np.ndarray:
+    """Vignette grise 16x16 du rectangle, mediane sur les images de la periode
+    (une webcam vivante garde son allure, un decor fixe reste identique)."""
+    thumbs = []
+    for image in images:
+        x, y, w, h = (max(int(rect[k]), 0) for k in ("x", "y", "w", "h"))
+        crop = image[y:y + h, x:x + w]
+        if crop.size == 0:
+            continue
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+        thumbs.append(cv2.resize(gray, (16, 16), interpolation=cv2.INTER_AREA).astype(np.float32))
+    if not thumbs:
+        return np.zeros((16, 16), np.float32)
+    return np.median(thumbs, axis=0)
+
+
+def _persistent(
+    candidate: dict[str, Any],
+    periods: Sequence[list[dict[str, Any]]],
+    settings: dict[str, Any],
+    same_content: Callable[[dict[str, Any], dict[str, Any]], bool] | None = None,
+) -> bool:
     """Le rectangle du candidat revient (IoU >= 0.5) dans au moins
     ``facecam_face_stable_share`` des periodes qui ont des candidats : une
     webcam est la meme sur toute la video, un visage de menu n'apparait que par
-    moments. Une seule periode : persistant par construction (l'appelant,
+    moments. ``same_content`` (candidat, candidat d'une autre periode) : un
+    rectangle au meme endroit mais d'un autre contenu (decor de l'ecran d'attente
+    contre la vraie webcam) ne prouve pas la persistance. Une seule periode : persistant par construction (l'appelant,
     ``_stable_face_over_null``, ne renverse toutefois jamais Claude dans ce cas)."""
     if len(periods) <= 1:
         return True
     box = _rect_box(candidate["rect"])
-    seen = sum(any(_iou(box, _rect_box(c["rect"])) >= 0.5 for c in period) for period in periods)
+    seen = sum(
+        any(
+            _iou(box, _rect_box(c["rect"])) >= 0.5 and (same_content is None or same_content(candidate, c))
+            for c in period
+        )
+        for period in periods
+    )
     return seen >= float(settings["facecam_face_stable_share"]) * len(periods) - 1e-9
 
 
@@ -2118,6 +2152,7 @@ def _stable_face_over_null(
     candidates: list[dict[str, Any]],
     settings: dict[str, Any],
     periods: Sequence[list[dict[str, Any]]] = (),
+    same_content: Callable[[dict[str, Any], dict[str, Any]], bool] | None = None,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     """Garde-fou local sur « aucune webcam » (TASK-a769, TASK-5979) : un unique
     candidat dont le support ET le visage atteignent ``facecam_face_stable_share``
@@ -2138,7 +2173,7 @@ def _stable_face_over_null(
         # Claude fait foi, pas d'erreur bloquante ; l'appelant journalise les
         # candidats ecartes.
         return None, stable
-    keep = [c for c in stable if _persistent(c, periods, settings)]
+    keep = [c for c in stable if _persistent(c, periods, settings, same_content)]
     dropped = [c for c in stable if c not in keep]
     if len(keep) > 1:
         raise ReframeError(
@@ -2146,6 +2181,24 @@ def _stable_face_over_null(
             f"existent ({sorted(c['id'] for c in keep)}) : choix impossible sans deviner"
         )
     return (keep[0] if keep else None), dropped
+
+
+def _same_content_across(period_inputs: Sequence[dict[str, Any]], settings: dict[str, Any]) -> Callable[..., bool]:
+    """Compare le contenu de deux candidats de periodes differentes (vignettes
+    calculees une fois par candidat, a la demande)."""
+    owner = {id(c): item["all_images"] for item in period_inputs for c in item["candidates"]}
+    cache: dict[int, np.ndarray] = {}
+    limit = float(settings["facecam_persist_content_diff"]) * 255
+
+    def signature(candidate: dict[str, Any]) -> np.ndarray:
+        if id(candidate) not in cache:
+            cache[id(candidate)] = _content_signature(owner[id(candidate)], candidate["rect"])
+        return cache[id(candidate)]
+
+    def same(a: dict[str, Any], b: dict[str, Any]) -> bool:
+        return float(np.abs(signature(a) - signature(b)).mean()) <= limit
+
+    return same
 
 
 def _facecam_check(ids: set[int]) -> Callable[[Any], None]:
@@ -2313,7 +2366,8 @@ def detect_facecam(
             better = None
             if answer["webcam"] is None:
                 better, dropped = _stable_face_over_null(
-                    candidates, settings, [i["candidates"] for i in period_inputs if i["candidates"]]
+                    candidates, settings, [i["candidates"] for i in period_inputs if i["candidates"]],
+                    _same_content_across(period_inputs, settings),
                 )
                 if dropped:
                     single = sum(1 for i in period_inputs if i["candidates"]) <= 1
