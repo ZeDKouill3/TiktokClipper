@@ -5,7 +5,7 @@ slug: worker-la-relecture-de-config-surveille-le-fichi
 title: "Worker : la relecture de config surveille le fichier réellement chargé (--config + base)"
 created: 2026-10-11T00:54:29Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/worker.py
   - clipper/__main__.py
@@ -17,6 +17,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: diagnose
+proof:
+  - type: test
+    ref: local/ad4be18a1437@39ffc64
+    tree: scope/e511bc2bb34e
+    criteria: c363039c8146
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---

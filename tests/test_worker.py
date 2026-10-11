@@ -886,7 +886,7 @@ def test_main_worker_command_runs_worker_loop(tmp_path, monkeypatch):
     built = {}
 
     class FakeWorker:
-        def __init__(self, *, config):
+        def __init__(self, *, config, config_path="config.toml", config_base=None):
             built["config"] = config
 
         def loop(self):
@@ -4718,7 +4718,7 @@ def test_main_worker_command_reports_a_worker_already_running(tmp_path, monkeypa
     monkeypatch.setattr("clipper.__main__.load_config", lambda path="config.toml": config)
 
     class FakeWorker:
-        def __init__(self, *, config):
+        def __init__(self, *, config, config_path="config.toml", config_base=None):
             pass
 
         def loop(self):
@@ -5004,3 +5004,66 @@ def test_a_broken_config_toml_is_logged_once_and_skips_the_repartition_turn(tmp_
         w.tick()
     assert calls == []
     assert len([r for r in caplog.records if "répartition" in r.getMessage()]) == 1
+
+
+# ---- relecture : le fichier reellement charge (--config X, base config.toml) (TASK-d850f9d78db2)
+
+def _bump_mtime(path):
+    import os
+
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+
+
+def _repartition_worker(tmp_path, other, base, seen):
+    return worker.Worker(
+        config=_learning_config(tmp_path), config_path=other, config_base=base, spawner=FakeSpawner(),
+        learning_runner=lambda now, *, config: {},
+        repartition_runner=lambda now, *, config: seen.append(config.section("repartition")["excluded_sources"]),
+    )
+
+
+def test_reload_sees_a_change_of_the_loaded_config_file_over_its_base(tmp_path):
+    base = tmp_path / "config.toml"
+    other = tmp_path / "autre.toml"
+    _write_toml(base, ["from_base"])
+    _write_toml(other, [])
+    seen = []
+    w = _repartition_worker(tmp_path, other, base, seen)
+    w._veille_due = lambda: None
+    w.tick()
+    _write_toml(other, ["streamer_x"])
+    _bump_mtime(other)
+    w.tick()
+    assert seen == [[], ["streamer_x"]]
+
+
+def test_touching_the_base_keeps_the_keys_of_the_loaded_config_file(tmp_path):
+    base = tmp_path / "config.toml"
+    other = tmp_path / "autre.toml"
+    _write_toml(base, ["from_base"])
+    _write_toml(other, ["streamer_x"])
+    seen = []
+    w = _repartition_worker(tmp_path, other, base, seen)
+    w._veille_due = lambda: None
+    w.tick()
+    _bump_mtime(base)
+    w.tick()
+    w.tick()
+    assert seen[1:] == [["streamer_x"], ["streamer_x"]]
+
+
+def test_a_changed_base_is_reread_under_the_loaded_config_file(tmp_path):
+    base = tmp_path / "config.toml"
+    other = tmp_path / "autre.toml"
+    base.write_text('[repartition]\nenabled = true\n', encoding="utf-8")
+    other.write_text('[repartition]\nexcluded_sources = ["streamer_x"]\n', encoding="utf-8")
+    seen = []
+    w = _repartition_worker(tmp_path, other, base, seen)
+    w._veille_due = lambda: None
+    w.tick()
+    base.write_text('[repartition]\nenabled = true\nposts_per_day = 3\n', encoding="utf-8")
+    _bump_mtime(base)
+    w.tick()
+    w.tick()
+    assert seen[1:] == [["streamer_x"], ["streamer_x"]]

@@ -369,7 +369,10 @@ def main(argv: list[str] | None = None) -> int:
             from clipper import worker as worker_mod
 
             try:
-                worker_mod.Worker(config=config).loop()
+                # relecture : le fichier reellement charge et sa base, pas config.toml seul
+                config_path = args.config if args.config is not None else "config.toml"
+                config_base = "config.toml" if args.config is not None else None
+                worker_mod.Worker(config=config, config_path=config_path, config_base=config_base).loop()
             except worker_mod.WorkerError as exc:  # ex. « un worker tourne déjà (pid N) » (audit 10/10, A1)
                 print(f"erreur : {exc}", file=sys.stderr)
                 return 1
