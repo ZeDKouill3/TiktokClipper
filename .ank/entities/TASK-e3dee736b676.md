@@ -5,7 +5,7 @@ slug: ui-v3-u6-publication-v3-calendrier-d-abord-rail
 title: "UI v3 U6 : Publication v3 : calendrier d'abord, rail À faire, dialogues, agenda mobile"
 created: 2026-10-11T03:59:33Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/web/static/screens/publish.js
   - clipper/web/static/v3.css
@@ -17,6 +17,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/f5b5d0fd14af@6f65d2d
+    tree: scope/2a60e21577ab
+    criteria: dde6411f9202
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
