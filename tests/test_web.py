@@ -1325,6 +1325,56 @@ def test_no_external_resource_in_index_and_css(tmp_path, isolated_cwd):
         assert name in licences
 
 
+# Mots personnels (noms d'utilisateur, pseudos, comptes reels) : seules leurs empreintes sha256 (du mot en
+# minuscules) sont ecrites ici, couples (longueur, empreinte), jamais les mots (meme methode que
+# tests/test_readme_assets.py).
+_SENSITIVE_SHA256 = (
+    (5, "bbb6fa51708957e6b8f72b02fbc5cfca676c5f01b45fe9d05c18aa5efe753d05"),
+    (4, "c36f5752453a46a8e0e18e5dd67df14f1729b0619ba7597bef3350ec6348226b"),
+    (6, "f0d9991c5e47e0d26a350c1618bd3154cd0f9f2461d3df671a753c393fe7a6a7"),
+    (11, "fab4709bd8b5b0db766618ccc702fd1302b4186dc674c6f05c603d1952d0843f"),
+    (10, "b43e58133ebc879e8158f187ca79904a67562c22aa2fec97eebda05eda06ec37"),
+    (10, "5e9421dca8bedb74ede3fdf7ad196358f417d23243cbbdb26068995490c347f3"),
+)
+
+
+# Sous-ensemble cherche dans tout fichier suivi : nom d'utilisateur Windows et compte reel. Les autres
+# mots (pseudos) figurent legitimement dans des docs, auteurs ou URL deja suivis.
+_TRACKED_SENSITIVE_SHA256 = (_SENSITIVE_SHA256[0], _SENSITIVE_SHA256[5])
+
+
+def _sensitive_hits(text: str, hashes=_SENSITIVE_SHA256) -> list[str]:
+    import hashlib
+
+    lowered = text.lower()
+    return [
+        f"mot sensible {number} a la position {start}"
+        for number, (length, digest) in enumerate(hashes, start=1)
+        for start in range(len(lowered) - length + 1)
+        if hashlib.sha256(lowered[start:start + length].encode("utf-8")).hexdigest() == digest
+    ]
+
+
+def test_tracked_files_carry_no_personal_word():
+    """Depot public : aucun nom d'utilisateur, pseudo ni compte reel dans un fichier suivi (hors .ank/)."""
+    import subprocess
+
+    root = Path(__file__).resolve().parent.parent
+    tracked = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True).stdout.split("\n")
+    leaks = []
+    for name in tracked:
+        if not name or name.startswith(".ank/"):
+            continue
+        try:
+            text = (root / name).read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for number, line in enumerate(text.splitlines(), start=1):
+            if _sensitive_hits(line, _TRACKED_SENSITIVE_SHA256):
+                leaks.append(f"{name}:{number}")
+    assert not leaks, leaks
+
+
 def test_visible_strings_are_french_and_no_real_names(tmp_path, isolated_cwd):
     html = served(tmp_path, "/")
     parser = _TextAndLinks()
@@ -1333,12 +1383,13 @@ def test_visible_strings_are_french_and_no_real_names(tmp_path, isolated_cwd):
     for english in ("Loading", "Submit", "Cancel", "Dashboard", "Settings", "Save", "Search", "Connection lost"):
         assert english not in visible, english
     assert "Tableau de bord" in visible and "Réglages" in visible and "Styles" in visible
-    forbidden = ("contre-pied", "contrepied", "amelia", "zedk", "nicoc", "twitch.tv/", "youtube.com/@")
+    forbidden = ("twitch.tv/", "youtube.com/@")
     for path in sorted(STATIC.rglob("*")):
         if path.suffix in {".html", ".css", ".js", ".txt", ".svg"}:
             text = path.read_text(encoding="utf-8").lower()
             for word in forbidden:
                 assert word not in text, f"{word!r} dans {path.name}"
+            assert not _sensitive_hits(text), f"mot sensible dans {path.name}"
     assert "ma_chaine" in served(tmp_path, "/static/screens.js")
 
 
@@ -10553,10 +10604,10 @@ def test_clip_sheet_dates_that_are_missing_say_inconnu():
 
 @_NODE_SHEET
 def test_clip_sheet_account_shows_its_label_with_the_id_in_secondary():
-    html = _sheet_html({"clip": {"account": "ab12cd"}}, [{"id": "ab12cd", "label": "ClipperFou"}])
+    html = _sheet_html({"clip": {"account": "ab12cd"}}, [{"id": "ab12cd", "label": "MonCompte"}])
 
-    assert "ClipperFou" in html and "ab12cd" in html
-    assert html.index("ClipperFou") < html.index("ab12cd")
+    assert "MonCompte" in html and "ab12cd" in html
+    assert html.index("MonCompte") < html.index("ab12cd")
 
 
 @_NODE_SHEET
@@ -10565,14 +10616,14 @@ def test_clip_sheet_account_that_no_longer_exists_says_inconnu_not_its_id_alone(
 
     assert "ab12cd" in html
     assert "inconnu" in html
-    assert "ClipperFou" not in html
+    assert "MonCompte" not in html
 
 
 @_NODE_SHEET
 def test_clip_sheet_without_account_says_inconnu():
-    html = _sheet_html({"clip": {"account": None}}, [{"id": "ab12cd", "label": "ClipperFou"}])
+    html = _sheet_html({"clip": {"account": None}}, [{"id": "ab12cd", "label": "MonCompte"}])
 
-    assert "ClipperFou" not in html
+    assert "MonCompte" not in html
 
 
 def test_clip_sheet_loads_the_accounts_list_to_name_the_account():

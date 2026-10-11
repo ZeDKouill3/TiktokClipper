@@ -410,11 +410,16 @@ def _prompt(
 # --------------------------------------------------------------------------
 
 
+_HASHTAG_SEPARATOR = re.compile(r"[\s,]")
+
+
 def _validate_hashtags(hashtags: list[str]) -> None:
     seen: set[str] = set()
     for tag in hashtags:
         if not tag.startswith("#") or not tag[1:].strip():
             raise llm.SchemaError(f"hashtag invalide (doit commencer par #) : {tag!r}")
+        if _HASHTAG_SEPARATOR.search(tag):
+            raise llm.SchemaError(f"hashtag invalide (espace ou virgule interdits) : {tag!r}")
         key = tag.lower()
         if key in seen:
             raise llm.SchemaError(f"hashtag en double : {tag!r}")
@@ -646,6 +651,8 @@ def _apply_cta_line(clips: list[dict[str, Any]], settings: dict[str, Any]) -> No
     for tag in cta_hashtags:
         if not isinstance(tag, str) or not tag.startswith("#") or not tag[1:].strip():
             raise CaptionsError(f"[captions] cta_hashtags : hashtag invalide (doit commencer par #) : {tag!r}")
+        if _HASHTAG_SEPARATOR.search(tag):
+            raise CaptionsError(f"[captions] cta_hashtags : hashtag invalide (espace ou virgule interdits) : {tag!r}")
     for clip in clips:
         if cta_line:
             clip["caption"] = f"{clip['caption']}\n{cta_line}"

@@ -217,6 +217,17 @@ def test_hashtag_without_hash_prefix_is_a_failure_and_writes_nothing(workspace, 
     assert not (workspace / VIDEO_ID / "captions.json").exists()
 
 
+@pytest.mark.parametrize("bad", ["#deux mots", "#a,#b", "#a, #b", "#a#b ", "#a\t"])
+def test_hashtag_with_a_space_or_a_comma_is_a_failure_and_writes_nothing(workspace, tmp_path, bad):
+    """jury-M4 : un hashtag avec espace ou virgule n'en est pas un (TikTok le coupe)."""
+    write_moments(workspace, moment(0))
+    write_parts(workspace, parts_record(0, "single", 1, [part(1, 0.0, 3.9)]))
+
+    with pytest.raises(llm.SchemaError, match="espace ou virgule"):
+        run(workspace, make_config(tmp_path), [answer(hashtags=[bad])] * 2)
+    assert not (workspace / VIDEO_ID / "captions.json").exists()
+
+
 def test_duplicate_hashtags_case_insensitive_is_a_failure(workspace, tmp_path):
     write_moments(workspace, moment(0))
     write_parts(workspace, parts_record(0, "single", 1, [part(1, 0.0, 3.9)]))
@@ -1124,6 +1135,17 @@ def test_cta_hashtag_without_a_leading_hash_is_an_explicit_error(workspace, tmp_
     with pytest.raises(CaptionsError, match="cta_hashtags"):
         run(workspace, make_config(tmp_path, cta_hashtags=["horreur"]), [answer()])
     assert not (workspace / VIDEO_ID / "captions.json").exists()
+
+
+@pytest.mark.parametrize("bad", ["#deux mots", "#a,#b"])
+def test_cta_hashtag_with_a_space_or_a_comma_is_an_explicit_error(workspace, tmp_path, bad):
+    from clipper.captions import CaptionsError
+
+    write_moments(workspace, moment(0))
+    write_parts(workspace, parts_record(0, "single", 1, [part(1, 0.0, 3.9)]))
+
+    with pytest.raises(CaptionsError, match="espace ou virgule"):
+        run(workspace, make_config(tmp_path, cta_hashtags=[bad]), [answer()])
 
 
 # --------------------------------------------------------------------------

@@ -413,6 +413,7 @@ def test_a_relaunch_resumes_from_action_partial_json(tmp_path, video_dir):
 
     fake, path = run_action(tmp_path, [describe_all()], batch_size=4, parallel=1, **BIG_CAPS)
     assert len(fake.calls) == 1  # seul le lot qui avait echoue est redemande
+    assert load(path)["llm_calls"] == 1  # media-M5 : les appels reels, pas les lots du plan
     assert path.exists()
     assert not (video_dir / "action_partial.json").exists()
     assert all(f["description"] for p in load(path)["passages"] for f in p["frames"])
