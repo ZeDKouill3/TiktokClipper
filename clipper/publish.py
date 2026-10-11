@@ -995,6 +995,7 @@ def set_account(
         if entry["status"] in ("published", "rejected", REMOVED_FROM_PLATFORM):
             raise PublishError(f"changement de compte refusé pour {video_id}/{clip_id} : statut {entry['status']!r}")
         _refuse_in_progress(entry, "changement de compte")
+        _refuse_to_verify(entry, "changement de compte")
         entry = dict(entry)
         entry["account"] = account
         entry["waiting_reason"] = None
