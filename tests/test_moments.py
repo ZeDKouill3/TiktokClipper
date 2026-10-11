@@ -2601,3 +2601,145 @@ def test_same_passage_proposed_as_single_and_multipart_keeps_both_candidates(tmp
     data = read_moments(video_dir)
     assert [(m["start"], m["end"], m["format"]) for m in data["moments"]] == [(250.25, 389.65, "multipart")]
     assert any(r["start"] == 250.25 and "serie" in r["reason"] for r in data["rejected"])
+
+
+# --------------------------------------------------------------------------
+# TASK-721f : amorce de gameplay avant la reaction ([moments] lead_in_seconds).
+# Le debut de chaque moment retenu recule de lead_in_seconds, borne par la fin
+# de la phrase precedente + lead_in_margin_seconds (0,1 s), par 0 et par la
+# duree maximale de la grille ; la fin ne bouge jamais.
+# --------------------------------------------------------------------------
+
+
+def drop_sentences(video_dir, ks):
+    """Retire les phrases ``ks`` de transcript.json : un silence a leur place."""
+    transcript = json.loads((video_dir / "transcript.json").read_text(encoding="utf-8"))
+    transcript["segments"] = [s for s in transcript["segments"] if s["id"] not in ks]
+    (video_dir / "transcript.json").write_text(json.dumps(transcript), encoding="utf-8")
+
+
+def run_lead_in(tmp_path, rubric_path, response, **moments):
+    return run(tmp_path, rubric_path, [{"moments": response}], config=make_config(tmp_path, rubric_path, **moments))
+
+
+def test_lead_in_defaults_to_zero_and_changes_nothing(tmp_path, video_dir, rubric_path):
+    from clipper.moments import CONFIG_DEFAULTS
+
+    assert CONFIG_DEFAULTS["lead_in_seconds"] == 0
+    drop_sentences(video_dir, {8, 9})
+
+    run(tmp_path, rubric_path, [{"moments": [moment(50.25, 79.65)]}])
+
+    [m] = read_moments(video_dir)["moments"]
+    assert (m["start"], m["end"], m["duration"]) == (50.25, 79.65, 29.4)
+    assert "lead_in_s" not in m
+
+
+def test_lead_in_moves_the_start_back_fully_after_a_silence(tmp_path, video_dir, rubric_path):
+    drop_sentences(video_dir, {8, 9})  # la phrase 7 finit a 39.65 s, le moment commence a 50.25 s
+
+    run_lead_in(tmp_path, rubric_path, [moment(50.25, 79.65)], lead_in_seconds=5)
+
+    [m] = read_moments(video_dir)["moments"]
+    assert (m["start"], m["end"], m["duration"], m["lead_in_s"]) == (45.25, 79.65, 34.4, 5.0)
+
+
+def test_lead_in_stops_at_the_end_of_the_previous_sentence_plus_a_margin(tmp_path, video_dir, rubric_path):
+    # La phrase 9 finit a 49.65 s : 0.6 s avant le debut (50.25 s).
+    run_lead_in(tmp_path, rubric_path, [moment(50.25, 79.65)], lead_in_seconds=10)
+
+    [m] = read_moments(video_dir)["moments"]
+    assert (m["start"], m["lead_in_s"]) == (49.75, 0.5)
+
+
+def test_lead_in_never_enters_a_sentence_two_seconds_before(tmp_path, video_dir, rubric_path):
+    drop_sentences(video_dir, {9})
+    transcript = json.loads((video_dir / "transcript.json").read_text(encoding="utf-8"))
+    seg = next(s for s in transcript["segments"] if s["id"] == 8)
+    shift = 48.25 - seg["words"][-1]["end"]  # la phrase 8 finit a 48.25 s, 2 s avant 50.25 s
+    for w in seg["words"]:
+        w["start"] += shift
+        w["end"] += shift
+    seg["start"], seg["end"] = seg["words"][0]["start"], seg["words"][-1]["end"]
+    (video_dir / "transcript.json").write_text(json.dumps(transcript), encoding="utf-8")
+
+    run_lead_in(tmp_path, rubric_path, [moment(50.25, 79.65)], lead_in_seconds=6)
+
+    [m] = read_moments(video_dir)["moments"]
+    assert (m["start"], m["lead_in_s"]) == (48.35, 1.9)
+
+
+def test_lead_in_never_goes_below_zero(tmp_path, video_dir, rubric_path):
+    run_lead_in(tmp_path, rubric_path, [moment(0.25, 29.65)], lead_in_seconds=5)
+
+    [m] = read_moments(video_dir)["moments"]
+    assert (m["start"], m["lead_in_s"]) == (0.0, 0.25)
+
+
+def test_lead_in_is_reduced_so_a_single_never_exceeds_single_max(tmp_path, video_dir, rubric_path):
+    drop_sentences(video_dir, {8, 9})
+
+    run_lead_in(tmp_path, rubric_path, [moment(50.25, 89.65)], lead_in_seconds=10)  # 39.4 s, single_max 45
+
+    [m] = read_moments(video_dir)["moments"]
+    assert (m["start"], m["end"], m["lead_in_s"]) == (44.65, 89.65, 5.6)
+    assert m["duration"] == 45.0
+
+
+def test_lead_in_is_reduced_to_the_room_left_under_single_max(tmp_path, video_dir, rubric_path):
+    drop_sentences(video_dir, {8, 9})
+
+    run_lead_in(tmp_path, rubric_path, [moment(50.25, 94.65)], lead_in_seconds=10)  # 44.4 s : il reste 0.6 s sous single_max
+
+    [m] = read_moments(video_dir)["moments"]
+    assert (m["start"], m["end"], m["lead_in_s"]) == (49.65, 94.65, 0.6)
+
+
+def test_lead_in_of_a_multipart_moves_only_the_start_of_part_one(tmp_path, video_dir, rubric_path):
+    drop_sentences(video_dir, {8, 9})
+    story = moment(50.25, 174.65, fmt="multipart", breaks=[104.65])
+    run(tmp_path, rubric_path, [{"moments": [story]}])
+    before = read_moments(video_dir)["moments"][0]
+
+    run(
+        tmp_path, rubric_path, [{"moments": [story]}], force=True,
+        config=make_config(tmp_path, rubric_path, lead_in_seconds=5),
+    )
+
+    [m] = read_moments(video_dir)["moments"]
+    assert m["start"] == 45.25 and m["lead_in_s"] == 5.0
+    assert m["parts"][0]["start"] == 45.25
+    assert m["parts"][0]["end"] == before["parts"][0]["end"]
+    assert m["parts"][1:] == before["parts"][1:]
+    assert m["end"] == before["end"]
+
+
+def test_lead_in_is_logged(tmp_path, video_dir, rubric_path, caplog):
+    drop_sentences(video_dir, {8, 9})
+
+    with caplog.at_level("INFO", logger="clipper.moments"):
+        run_lead_in(tmp_path, rubric_path, [moment(50.25, 79.65)], lead_in_seconds=5)
+
+    assert any("amorce" in r.getMessage() and "5.0" in r.getMessage() for r in caplog.records)
+
+
+def test_rescore_keeps_the_lead_in(tmp_path, video_dir, rubric_path):
+    drop_sentences(video_dir, {8, 9})
+    run_lead_in(tmp_path, rubric_path, [moment(50.25, 79.65)], lead_in_seconds=5)
+    write_vision_after_moments(video_dir, [striking(60.0)])
+
+    fake, _ = rescore(tmp_path, rubric_path, config=make_config(tmp_path, rubric_path, lead_in_seconds=5))
+
+    assert fake.calls == []
+    [m] = read_moments(video_dir)["moments"]
+    assert (m["start"], m["end"], m["lead_in_s"]) == (45.25, 79.65, 5.0)
+    assert m["bonus"]["visual"] > 0
+
+
+@pytest.mark.parametrize("value", [-1, "5", True, None])
+def test_invalid_lead_in_is_refused(tmp_path, video_dir, rubric_path, value):
+    from clipper.moments import MomentsError
+
+    with pytest.raises(MomentsError, match="lead_in_seconds"):
+        run_lead_in(tmp_path, rubric_path, [moment(50.25, 79.65)], lead_in_seconds=value)
+    assert not (video_dir / "moments.json").exists()
