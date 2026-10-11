@@ -5,7 +5,7 @@ slug: r-gles-de-l-interface-de-gestion-v2-crans-action
 title: "Règles de l'interface de gestion v2 : écrans, actions, erreurs visibles, temps réel, raccourcis, accès"
 created: 2026-09-30T20:40:18Z
 author: w-plan-web
-status: accepted
+status: superseded
 scope:
   - clipper/web/**
 references: [ADR-09ad233678f2, ADR-4f6ed60e24e8, ADR-ad2e562b1810, SPEC-fc0c156a8684]
@@ -14,7 +14,7 @@ verified:
   - by: nicoc@zedk_ordi
     at: 2026-09-30T21:07:00Z
 schema: 4
-version: 2
+version: 3
 ---
 
 ## Objet
