@@ -22,7 +22,8 @@ NODE = pytest.mark.skipif(shutil.which("node") is None, reason="node absent du P
 SCREENS = ("dashboard", "veille", "videos", "review", "clips", "clip", "channels", "publish", "stats",
            "accounts", "settings", "journal")
 # Écrans qui ont (encore) un bloc dans style.css : chaque tâche d'écran retire le sien entre ses délimiteurs.
-STYLE_BLOCKS = ("dashboard", "videos", "review", "clips", "clip", "channels", "publish", "stats", "settings",
+# U5 (TASK-1679e58d021b) a retire les blocs « clips » et « clip » : leurs regles vivent dans v3.css.
+STYLE_BLOCKS = ("dashboard", "videos", "review", "channels", "publish", "stats", "settings",
                 "journal", "shared", "shell")
 
 
@@ -382,8 +383,9 @@ def test_style_css_has_balanced_delimiters_for_every_screen_and_lost_its_shell_b
     closes = re.findall(r"/\* <<< ([a-z-]+) \*/", css)
     assert opens and sorted(opens) == sorted(closes)
     assert set(opens) <= set(STYLE_BLOCKS), set(opens) - set(STYLE_BLOCKS)
-    for name in ("dashboard", "videos", "review", "clips", "clip", "channels", "publish", "stats", "settings", "journal"):
+    for name in ("dashboard", "videos", "review", "channels", "publish", "stats", "settings", "journal"):
         assert name in opens, f"aucun bloc /* >>> {name} */"
+    assert "clips" not in opens and "clip" not in opens  # ecrans migres par U5 : plus de bloc legacy
     # un délimiteur ouvert est fermé avant le suivant du même nom, et les blocs ne se chevauchent pas
     depth = None
     for kind, name in re.findall(r"/\* (>>>|<<<) ([a-z-]+) \*/", css):
@@ -405,8 +407,10 @@ def test_screen_content_rules_are_untouched_in_style_css():
     css = _static("style.css")
     for needle in (".view { flex: 1; padding: 32px; max-width: 1480px;", ".panel { background: var(--surface);",
                    ".btn {\n  display: inline-flex;", ".modal {\n  position: fixed; z-index: 61;",
-                   ".overlay { position: fixed; inset: 0; z-index: 60;", ".drawer {\n  position: fixed; z-index: 61;",
+                   ".overlay { position: fixed; inset: 0; z-index: 60;",  # .drawer legacy retiré par U5 : seul Clips l'ouvrait
                    ".skeleton { border-radius: var(--r);", ".empty { padding: 48px 24px;",
+                   ".clip { display: flex; flex-direction: column; gap: 8px; cursor: pointer; }",  # carte de la Veille
+                   ".hashtags { display: flex; flex-wrap: wrap; gap: 6px; }",  # Publication
                    ".token-view {", ".screen[hidden] { display: none; }", ':root[data-theme="light"] {'):
         assert needle in css, needle
 

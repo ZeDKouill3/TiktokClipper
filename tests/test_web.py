@@ -2322,7 +2322,7 @@ def test_clips_screen_is_wired_with_gallery_sidecar_and_actions():
     assert "Screens.clips" in js
     assert "/api/clips" in js
     assert "<video" in js and "controls" in js           # lecteur
-    assert "clip-poster" in js and "aspect" in (STATIC / "style.css").read_text(encoding="utf-8")
+    assert "clip-poster" in js and "aspect" in (STATIC / "v3.css").read_text(encoding="utf-8")  # U5 : v3.css
     for label in ("Titre d'écran", "Description", "Hashtags", "Contrôle qualité", "Partie"):
         assert label in js, label
     for action in ("/approve", "/reject", "/rerender", "PATCH"):
@@ -5547,8 +5547,8 @@ def test_every_thumbnail_reserves_its_size_so_loading_never_shifts_the_layout():
         assert thumbs, name
         for tag in thumbs:
             assert "width=" in tag and "height=" in tag, f"{name} : {tag}"
-    css = _static("style.css")
-    for selector in (".job-thumb", ".mini-clip", ".clip-poster"):
+    css = _static("style.css") + _static("v3.css")  # .clip-poster vit dans v3.css depuis U5 (ecran Clips migre)
+    for selector in (".job-thumb", ".mini-clip", ".v3 .clip-poster"):
         rule = re.search(rf"^{re.escape(selector)} \{{[^}}]*\}}|^{re.escape(selector)} \{{\n[^}}]*\}}", css, re.MULTILINE)
         assert rule and "aspect-ratio" in rule.group(0), selector
 
@@ -7671,7 +7671,7 @@ def test_every_panel_screen_keeps_its_content_off_the_edges():
     """Un écran dont [data-body] garde le cadre d'un panneau a une marge intérieure ; sinon le cadre est retiré
     (les panneaux sont alors à l'intérieur) ou ses lignes portent leur propre marge (liste des vidéos)."""
     page = (STATIC / "index.html").read_text(encoding="utf-8")
-    css = "\n".join(p.read_text(encoding="utf-8") for p in [STATIC / "style.css", *sorted((STATIC / "screens").glob("*.css"))])
+    css = "\n".join(p.read_text(encoding="utf-8") for p in [STATIC / "style.css", STATIC / "v3.css", *sorted((STATIC / "screens").glob("*.css"))])  # v3.css : écrans migrés (U5)
     own_margin = {"videos"}  # .vadd, .vfilters et .job portent 16-24 px de marge
     screens = re.findall(r'<section class="screen" id="screen-(\w+)".*?<div class="([^"]*)" data-body', page, re.S)
     assert {name for name, _ in screens} == {"dashboard", "veille", "videos", "review", "clips", "clip", "publish", "channels", "stats", "accounts", "settings", "journal"}
@@ -10283,7 +10283,9 @@ def test_clips_delete_empty_selection_and_bad_ids_are_400_or_422(tmp_path, isola
 
 def test_clips_selection_bar_has_a_danger_delete_button_with_confirmation_and_toast():
     js = (STATIC / "screens" / "clips.js").read_text(encoding="utf-8")
-    assert "Supprimer la sélection" in js and "data-clips-sel-delete" in js and "btn-bad" in js
+    assert "Supprimer la sélection" in js and "data-clips-sel-delete" in js
+    delete_line = next(raw for raw in js.splitlines() if "data-clips-sel-delete" in raw and "<button" in raw)
+    assert 'data-variant="destructive"' in delete_line  # U5 : variante Basecoat, plus btn-bad
     assert "/api/clips/delete" in js
     assert "Irréversible" in js and "confirmDialog" in js
 
@@ -10633,8 +10635,8 @@ def test_clip_sheet_loads_the_accounts_list_to_name_the_account():
 
 
 def test_clip_sheet_row_labels_never_break_inside_a_word():
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
-    label_rule = css[css.index(".sheet-row > span:first-child"):]
+    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U5 : la fiche clip est un ecran v3
+    label_rule = css[css.index(".v3 .sheet-row > span:first-child"):]
     label_rule = label_rule[:label_rule.index("}")]
 
     assert "overflow-wrap: normal" in label_rule
@@ -10820,12 +10822,12 @@ def test_clip_sheet_shows_sent_to_tiktok_not_published_and_keeps_the_slot():
 
 def test_clip_sheet_grid_panels_can_shrink_so_values_never_overflow_the_panel():
     # Un panneau de grille garde min-width auto par défaut : son contenu le fait déborder du bord droit.
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
-    panel_rule = css[css.index(".sheet-grid > *"):]
+    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U5 : la fiche clip est un ecran v3
+    panel_rule = css[css.index(".v3 .sheet-grid > *"):]
     panel_rule = panel_rule[:panel_rule.index("}")]
 
     assert "min-width: 0" in panel_rule
-    assert "overflow-wrap: anywhere" in css[css.index(".sheet-row {"):].split("}")[0]
+    assert "overflow-wrap: anywhere" in css[css.index(".v3 .sheet-row {"):].split("}")[0]
 
 
 # --------------------------------------------------------------------------

@@ -1,6 +1,8 @@
-/* Ecran « Fiche clip » (TASK-fa7619ccf83a) : #/clip/<video_id>/<clip_id>. Lit GET /api/clips/.../sheet, lecture seule :
-   rien n'est recalcule ici. Une donnee absente s'affiche « inconnu », jamais 0 (ADR-ad2e). Une video supprimee
-   (.mp4 absent) garde la fiche avec la mention « vidéo supprimée, fiche conservée ». */
+/* Ecran « Fiche clip » (TASK-fa7619ccf83a, SPEC-7715 E12) : #/clip/<video_id>/<clip_id>, la page plein ecran d'un
+   lien partage. Lit GET /api/clips/.../sheet, lecture seule : rien n'est recalcule ici. Une donnee absente
+   s'affiche « inconnu », jamais 0 (ADR-ad2e). Une video supprimee (.mp4 absent) garde la fiche avec la mention
+   « vidéo supprimée, fiche conservée ». Rendu v3 (cartes Basecoat, morph), les actions vivent dans le tiroir de
+   l'ecran Clips (« Ouvrir dans Clips »). */
 "use strict";
 
 const clipSheetUi = { key: null, data: null, accounts: null, error: null, loading: null, at: 0 };
@@ -48,7 +50,7 @@ function clipSheetVideoHtml(video) {
   if (video.deleted || !video.video_url) {
     return `<div class="empty"><p>${esc(video.note || "vidéo supprimée, fiche conservée")}</p></div>`;
   }
-  return `<video controls preload="metadata" playsinline src="${esc(video.video_url)}" style="width:100%;max-height:70vh;border-radius:12px;background:#000"></video>`;
+  return `<video controls preload="metadata" playsinline src="${esc(video.video_url)}" class="sheet-video"></video>`;
 }
 
 function clipSheetJuryHtml(jury) {
@@ -58,7 +60,8 @@ function clipSheetJuryHtml(jury) {
   const rounds = (jury.rounds || []).map((r) => sheetRow(`Tour ${r.round}`, Object.entries(r.judges || {}).map(([name, j]) =>
     `${esc(name)} : note ${sheetVal(j.score)}, confiance ${sheetVal(j.confidence)}${j.argument ? ` — ${esc(j.argument)}` : ""}`,
   ).join("<br>") || "inconnu")).join("");
-  return `${sheetRow("Confiance du jury", sheetVal(jury.confidence))}${judges}${rounds || sheetRow("Tours du jury", "inconnu")}`;
+  const confidence = jury.confidence == null ? `<span class="muted">non évaluée (pas de jury pour ce moment)</span>` : sheetVal(jury.confidence, " %");
+  return `${sheetRow("Confiance du jury", confidence)}${judges}${rounds || sheetRow("Tours du jury", "inconnu")}`;
 }
 
 function clipSheetScoresHtml(scores) {
@@ -111,18 +114,18 @@ function clipSheetHtml(sheet, accounts) {
   const { clip, video, jury, stats } = sheet;
   const s = clipStatus(clip);
   const qa = clip.qa_status ? `${esc(clip.qa_status)}${clipSheetIssuesHtml(clip.issues)}` : "inconnu";
+  const card = (title, body) => `<section class="card sheet-card"><header><h3>${esc(title)}</h3></header><section>${body}</section></section>`;
   return `
     <div class="sheet-head">
-      <span class="chip ${s.cls}">${esc(s.label)}</span>
+      <div class="sheet-head-row"><span class="chip ${s.cls}">${esc(s.label)}</span><a class="btn" data-variant="outline" data-size="sm" href="#/clips/${encodeURIComponent(clip.video_id)}/${encodeURIComponent(clip.clip_id)}">${icon("clapperboard", "i-sm")}Ouvrir dans Clips</a></div>
       <h2>${esc(clip.screen_title || clip.title || clip.clip_id)}</h2>
-      <p class="muted">${esc(video.title || clip.video_id)} · ${esc(clip.video_id)} / ${esc(clip.clip_id)}</p>
+      <p class="muted">${esc(video.title || clip.video_id)} · <span class="mono">${esc(clip.video_id)} / ${esc(clip.clip_id)}</span></p>
     </div>
     <div class="sheet-grid">
-      <section class="panel"><h3>Vidéo</h3>${clipSheetVideoHtml(video)}
+      ${card("Vidéo", `${clipSheetVideoHtml(video)}
         ${sheetRow("Passage source", sheetLink(video.passage_url, "Voir le passage"))}
-        ${sheetRow("Source", sheetLink(video.source_url, "Vidéo source"))}
-      </section>
-      <section class="panel"><h3>Clip</h3>
+        ${sheetRow("Source", sheetLink(video.source_url, "Vidéo source"))}`)}
+      ${card("Clip", `
         ${sheetRow("Titre d'écran", sheetVal(clip.screen_title))}
         ${sheetRow("Légende", sheetVal(clip.caption))}
         ${sheetRow("Score", sheetVal(clip.score))}
@@ -132,38 +135,38 @@ function clipSheetHtml(sheet, accounts) {
         ${sheetRow("Début / fin dans la VOD", clip.start == null ? "inconnu" : `${fr(clip.start, 1)} s → ${fr(clip.end, 1)} s`)}
         ${sheetRow("Durée", clip.duration == null ? "inconnu" : clipSeconds(clip.duration))}
         ${sheetRow("Format", sheetVal(clip.layout))}
-        ${sheetRow("Contrôle qualité", qa)}
-      </section>
-      <section class="panel"><h3>Jury</h3>${clipSheetJuryHtml(jury)}</section>
-      <section class="panel"><h3>Publication</h3>
+        ${sheetRow("Contrôle qualité", qa)}`)}
+      ${card("Jury", clipSheetJuryHtml(jury))}
+      ${card("Publication", `
         ${sheetRow("Compte", clipSheetAccountHtml(clip.account, accounts))}
         ${sheetRow("Statut", esc(s.label))}
         ${sheetRow("Créneau", clipSheetDate(clip.slot_at_paris))}
         ${sheetRow("Envoyé à TikTok le", clipSheetDate(clip.published_at_paris))}
         ${sheetRow("Lien du post", sheetLink(clip.post_url))}
-        ${clip.publish_error ? sheetRow("Erreur", esc(clip.publish_error)) : ""}
-      </section>
-      <section class="panel"><h3>Statistiques</h3>${clipSheetStatsHtml(stats, clip)}</section>
+        ${clip.publish_error ? sheetRow("Erreur", esc(clip.publish_error)) : ""}`)}
+      ${card("Statistiques", clipSheetStatsHtml(stats, clip))}
     </div>`;
 }
 
 Screens.clip = {
   render(body) {
+    const section = body.closest(".screen");
+    if (section && !section.classList.contains("v3")) section.classList.add("v3"); // écran migré (ADR-a308 §6)
     const target = clipSheetHashKey();
     if (!target) {
-      body.innerHTML = emptyState("circle-alert", "Clip introuvable", "Adresse de fiche incomplète : ouvre un clip depuis l'écran Clips.");
+      morph(body, emptyState("circle-alert", "Clip introuvable", "Adresse de fiche incomplète : ouvre un clip depuis l'écran Clips."));
       return;
     }
     const key = `${target.video}/${target.clip}`;
     if (clipSheetUi.key !== key || (Date.now() - clipSheetUi.at > CLIP_SHEET_STALE_MS && !clipSheetUi.loading)) loadClipSheet(target);
     if (clipSheetUi.error) {
-      body.innerHTML = emptyState("circle-alert", "Chargement impossible", String(clipSheetUi.error.message || clipSheetUi.error));
+      morph(body, emptyState("circle-alert", "Chargement impossible", String(clipSheetUi.error.message || clipSheetUi.error)));
       return;
     }
     if (!clipSheetUi.data) {
-      body.innerHTML = `<div class="skeleton skeleton-line"></div><div class="skeleton skeleton-card"></div>`;
+      morph(body, `<div class="skeleton sk-line"></div><div class="sheet-grid"><div class="skeleton sk-card"></div><div class="skeleton sk-card"></div></div>`);
       return;
     }
-    body.innerHTML = clipSheetHtml(clipSheetUi.data, clipSheetUi.accounts);
+    morph(body, clipSheetHtml(clipSheetUi.data, clipSheetUi.accounts));
   },
 };
