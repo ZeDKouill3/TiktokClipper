@@ -175,6 +175,14 @@ CONFIG_DEFAULTS: dict[str, object] = {
     # Un passage qui contient de la parole retenue est rejeté si le premier mot
     # retenu arrive plus de ce nombre de secondes après son début.
     "action_max_silent_start_s": 5,
+    # Amorce de gameplay : après la sélection, le début de chaque moment recule
+    # de ce nombre de secondes pour montrer l'action qui provoque la réaction.
+    # Le recul s'arrête à la fin de la phrase précédente + lead_in_margin_seconds,
+    # à 0 s et à la durée maximale de la grille ; la fin ne bouge jamais.
+    # 0 : aucun recul.
+    "lead_in_seconds": 0,
+    # Marge gardée entre la fin de la phrase précédente et le début reculé.
+    "lead_in_margin_seconds": 0.1,
 }
 
 CANDIDATES = ("transcript", "transcript+action")
@@ -1179,6 +1187,54 @@ def _select(
     return kept, [{**_public(c), "reason": reason} for c, reason in rejected if not c.get("exploration")], info
 
 
+def _lead_in_settings(settings: dict[str, Any]) -> tuple[float, float]:
+    """(amorce, marge) en secondes ; un reglage invalide est une MomentsError."""
+    lead, margin = settings["lead_in_seconds"], settings["lead_in_margin_seconds"]
+    if not _number(lead) or lead < 0:
+        raise MomentsError(f"[moments] lead_in_seconds invalide : {lead!r} (attendu : nombre >= 0)")
+    if not _number(margin) or margin < 0:
+        raise MomentsError(f"[moments] lead_in_margin_seconds invalide : {margin!r} (attendu : nombre >= 0)")
+    return float(lead), float(margin)
+
+
+def _lead_in_room(c: dict[str, Any], rubric: dict[str, Any]) -> float:
+    """Secondes qu'on peut ajouter au debut sans depasser la duree maximale de
+    la grille : single_max pour un clip unique, part_max pour la partie 1 d'une
+    serie (le total de la serie sans partie decoupee)."""
+    d = rubric["durations"]
+    if c["format"] == "single":
+        return d["single_max"] - (c["_end"] - c["_start"])
+    if c["parts"]:
+        return d["part_max"] - (c["parts"][0]["end"] - c["parts"][0]["start"])
+    return d["max_parts"] * d["part_max"] - (c["_end"] - c["_start"])
+
+
+def _apply_lead_in(
+    kept: list[dict[str, Any]], sents: list[Sentence], rubric: dict[str, Any], lead: float, margin: float,
+    video_id: str,
+) -> None:
+    """Recule le debut des moments retenus de ``lead`` s au plus (``_lead_in``,
+    ecrit ``lead_in_s``) : jamais dans une phrase precedente (fin + ``margin``),
+    sous 0, ni au-dela de la duree maximale de la grille. Aucun effet a 0."""
+    if lead <= 0:
+        return
+    for c in kept:
+        start = c["_start"]
+        floor = max(
+            [0.0]
+            + [s.end + margin for s in sents if s.end <= start + 1e-6]
+            + [s.start for s in sents if s.start < start - 1e-6 < s.end]
+        )
+        room = max(0.0, _lead_in_room(c, rubric))
+        back = max(0.0, min(lead, start - floor, room))
+        applied = math.floor(back * 100 + 1e-6) / 100
+        c["_lead_in"] = applied
+        log.info(
+            "%s : amorce de %.1f s avant [%.1f-%.1f] (demandee %.1f s)",
+            video_id, applied, start, c["_end"], lead,
+        )
+
+
 def _dispersion(c: dict[str, Any]) -> float:
     """Ecart entre le score le plus haut et le plus bas des juges, chacun a
     son dernier tour dans la trace du jury."""
@@ -1226,17 +1282,23 @@ def _origin(c: dict[str, Any]) -> dict[str, Any]:
 
 
 def _public(c: dict[str, Any]) -> dict[str, Any]:
+    lead = c.get("_lead_in")
+    start = c["_start"] - (lead or 0.0)
+    parts = c["parts"]
+    if lead and parts:
+        parts = [{**parts[0], "start": _round2(start)}, *parts[1:]]
     return {
-        "start": _round2(c["_start"]),
+        "start": _round2(start),
         "end": _round2(c["_end"]),
-        "duration": round(c["_end"] - c["_start"], 1),
+        "duration": round(c["_end"] - start, 1),
         "format": c["format"],
-        "parts": c["parts"],
+        "parts": parts,
         "scores": c["scores"],
         "bonus": c["bonus"],
         "final_score": c["final_score"],
         "justification": c["justification"],
         "hook_text": c["hook_text"],
+        **({"lead_in_s": lead} if lead is not None else {}),
         **({"jury": c["jury"]} if "jury" in c else {}),
         **({"exploration": True} if c.get("exploration") else {}),
         **_origin(c),
@@ -1471,6 +1533,7 @@ def run(
     selection = _selection(config, settings)
     exploration = _exploration(settings) if selection == "jury" else None
     connectors = _connectors(settings)
+    lead_in = _lead_in_settings(settings)
     rubric_path = resolve_rubric_path(settings["rubric_path"])
     rubric = load_rubric(rubric_path)
     short, short_min, short_max = _short_mode(settings, short_clips)
@@ -1555,6 +1618,7 @@ def run(
         c["final_score"] = final_score(c["scores"], rubric, c["bonus"]["total"])
 
     kept, rejected_scored, exploration_info = _select(candidates, rubric, meta, exploration)
+    _apply_lead_in(kept, sents, rubric, *lead_in, video_id)
 
     if selection == "jury":
         _log_jury_decisions(video_id, vetoed, rejected_scored, kept)
@@ -1599,6 +1663,12 @@ def _restore(
     arrondies au dixieme et creeraient de faux chevauchements). Le debut est
     celui de sa premiere phrase ou, connecteurs de tete retires, du mot qui
     les suit."""
+    # Debut avant l'amorce : le debut enregistre y a ajoute lead_in_s, que
+    # _apply_lead_in recalcule avec les reglages courants.
+    lead = entry.get("lead_in_s", 0.0)
+    entry = {**entry, "start": _round2(entry["start"] + lead)}
+    if lead and entry["parts"]:
+        entry["parts"] = [{**entry["parts"][0], "start": _floor1(entry["start"])}, *entry["parts"][1:]]
     if entry.get("source") == "action":
         # Bornes de passage d'action : telles qu'enregistrees, pas de frontiere de phrase exigee.
         return {
@@ -1671,6 +1741,7 @@ def _rescore(video_dir: Path, out: Path, settings: dict[str, Any]) -> Path:
     vision = _read_json(video_dir / "vision.json")
     sents = split_sentences(_read_json(video_dir / "transcript.json"))
     connectors = _connectors(settings)
+    lead_in = _lead_in_settings(settings)
     rubric_path = _recorded_rubric_path(previous, out)
     rubric = load_rubric(rubric_path)
 
@@ -1687,6 +1758,7 @@ def _rescore(video_dir: Path, out: Path, settings: dict[str, Any]) -> Path:
 
     exploration = _exploration(settings) if previous.get("selection") == "jury" else None
     kept, rejected_scored, exploration_info = _select(candidates, rubric, meta, exploration)
+    _apply_lead_in(kept, sents, rubric, *lead_in, video_dir.name)
     moments_out = [{"id": n, **_public(c)} for n, c in enumerate(kept)]
     ids = {id(c): n for n, c in enumerate(kept)}
     changed = []

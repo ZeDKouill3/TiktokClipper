@@ -5,7 +5,7 @@ slug: moments-amorce-de-gameplay-avant-la-r-action-lea
 title: "Moments : amorce de gameplay avant la réaction (lead_in_seconds), pour voir l'action qui la provoque"
 created: 2026-10-11T10:45:53Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/moments.py
   - tests/test_moments.py
@@ -15,6 +15,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/1eda5411c8bb@18181e6
+    tree: scope/3e0a21921502
+    criteria: 4df7c32edd73
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
