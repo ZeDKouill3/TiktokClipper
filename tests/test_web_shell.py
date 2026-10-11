@@ -28,6 +28,7 @@ MIGRATED = (
     "dashboard",
     "clips",
     "clip",
+    "videos",
 )
 STYLE_BLOCKS = tuple(n for n in ("dashboard", "videos", "review", "clips", "clip", "channels", "publish", "stats", "settings",
                                  "journal", "shared", "shell") if n not in MIGRATED)

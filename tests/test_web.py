@@ -1523,11 +1523,14 @@ def test_index_loads_the_videos_screen_script_after_the_shell_screens(tmp_path, 
     assert html.index("/static/screens.js") < html.index("/static/screens/videos.js") < html.index("/static/app.js")
 
 
-def test_videos_screen_has_add_form_with_channel_selector_and_action(tmp_path, isolated_cwd):
+def test_videos_screen_adds_through_the_global_dialog_whose_form_keeps_channel_and_action(tmp_path, isolated_cwd):
+    """Équivalent de l'ancien formulaire permanent : l'écran n'a plus de formulaire (data-add), le dialogue global d'app.js
+    garde le choix du style et la mise en file par /api/queue."""
     js = _videos_js(tmp_path)
-    for needle in ('name="url"', 'name="channel"', 'name="action"', "Sans style", 'api("/api/channels"',
-                   'value="run"', 'value="render"', '"/api/queue"', 'method: "POST"'):
-        assert needle in js, needle
+    assert "data-add-form" not in js and "data-add" in js
+    app = served(tmp_path, "/static/app.js")
+    for needle in ('name="url"', 'name="channel"', "Sans style", '"/api/queue"'):
+        assert needle in app, needle
 
 
 def test_videos_screen_lists_with_server_side_filters(tmp_path, isolated_cwd):
@@ -1535,17 +1538,17 @@ def test_videos_screen_lists_with_server_side_filters(tmp_path, isolated_cwd):
     assert "/api/videos?" in js
     for needle in ("channel", "status", "q"):
         assert f'.set("{needle}"' in js or f"{needle}:" in js or f'"{needle}"' in js, needle
-    assert 'name="q"' in js and 'name="filter-channel"' in js and 'name="filter-status"' in js
+    assert 'name="q"' in js and 'name="filter-channel"' in js and "data-status=" in js  # statut : boutons segmentés
 
 
-def test_videos_screen_detail_has_12_step_frise_log_and_actions(tmp_path, isolated_cwd):
+def test_videos_screen_detail_has_13_step_stepper_log_table_and_actions(tmp_path, isolated_cwd):
     js = _videos_js(tmp_path)
-    for needle in ("class=\"frise\"", "fstep", "/api/videos/${", "/events", "clipper:event",
+    for needle in ('class="stepper"', 'class="step ${st}"', "/api/videos/${", "/events", "clipper:event",
                    "/retry", "/cancel", "from_step", "confirmDialog(",
                    "Relancer depuis cette étape", "Annuler le traitement", "#/review/", "#/clips/",
-                   'class="log"', "STEP_LABELS"):
+                   'role="log"', "journalRow", "STEP_LABELS"):
         assert needle in js, needle
-    # la frise est faite des 12 etapes du pipeline, dans l'ordre
+    # le stepper est fait des étapes du pipeline, dans l'ordre (VIDEOS_STEPS = clés de STEP_LABELS)
     from clipper import pipeline
     app_text = "".join(p.read_text(encoding="utf-8") for p in STATIC.glob("*.js"))
     for step in pipeline.STEPS:
@@ -1560,9 +1563,14 @@ def test_videos_screen_confirms_before_retry_and_cancel(tmp_path, isolated_cwd):
         assert "confirmDialog(" in before, route
 
 
-def test_videos_screen_has_its_own_css_section(tmp_path, isolated_cwd):
-    css = served(tmp_path, "/static/style.css")
-    assert "/* ---------- Ecran Videos (TASK-157b) ---------- */" in css
+def test_videos_screen_css_lives_in_v3_css_and_left_style_css(tmp_path, isolated_cwd):
+    v3 = served(tmp_path, "/static/v3.css")
+    legacy = served(tmp_path, "/static/style.css")
+    assert "/* ---------- Videos (SPEC-7715 E2)" in v3 and ".v3 .stepper" in v3 and ".v3 .vlog" in v3
+    assert "/* ---------- Ecran Videos (TASK-157b) ---------- */" not in legacy and ">>> videos" not in legacy
+    assert ".vscreen" not in legacy and ".vjury" not in legacy and ".jr-retained" not in legacy
+
+
 # E1 : GET /api/dashboard (TASK-aad3, SPEC-c100 E1, T2, T8)
 # --------------------------------------------------------------------------
 
@@ -5159,7 +5167,8 @@ def test_video_sheet_offers_the_same_retry_and_dismiss_actions():
     videos = _static("screens", "videos.js")
 
     assert "data-retry-video" in videos and "data-dismiss-video" in videos
-    assert "wireActions(view)" in videos  # mêmes gestionnaires (app.js) que le tableau de bord
+    # mêmes gestionnaires (app.js) que le tableau de bord : renderCurrent branche wireActions sur le corps de l'écran
+    assert "wireActions(body)" in _static("app.js")
     assert "Relancer" in videos and "Retirer" in videos and "Rétablir" in videos
 
 
@@ -5222,8 +5231,8 @@ def test_video_thumbnails_are_lazy_images_with_a_neutral_fallback_everywhere():
         assert "videoThumb(" in src[src.index(marker):src.index(marker) + 1800], marker
     assert "videoThumb(" in _static("screens.js")[_static("screens.js").index("function queueRow"):_static("screens.js").index("const addVideoButton")]
     videos = _static("screens", "videos.js")
-    assert "videoThumb(" in videos[videos.index("function listRow"):videos.index("function paintList")]
-    assert "videoThumb(" in videos[videos.index("function paintDetail"):videos.index("function wireDetail")]
+    assert "videoThumb(" in videos[videos.index("function videoRow"):videos.index("const VIDEOS_HEAD")]
+    assert "videoThumb(" in videos[videos.index("function videosDetailView"):videos.index("/* ---------- Câblage")]
 
 
 def _stats_channels(tmp_path) -> None:
@@ -6938,11 +6947,11 @@ def test_radar_panel_without_debate_has_no_toggle_and_unavailable_is_explicit(ju
 
 
 def test_radar_css_is_themed_and_responsive():
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # le radar a suivi l'écran Vidéos dans v3.css (U4)
 
     assert ".jr-retained" in css and ".jr-zero" in css
-    assert css.count("--jr-c0:") == 2                     # défini en sombre et en clair
-    assert css.index("--jr-c0:", css.index('[data-theme="light"]')) > 0
+    assert css.count("--jr-c0:") == 2                     # défini en clair (.v3) et en sombre (.dark .v3)
+    assert css.index("--jr-c0:", css.index(".dark .v3 {")) > 0
     assert "@media (max-width: 900px)" in css[css.index(".vjury"):]  # mobile
 
 
@@ -7670,7 +7679,7 @@ def test_every_panel_screen_keeps_its_content_off_the_edges():
     (les panneaux sont alors à l'intérieur) ou ses lignes portent leur propre marge (liste des vidéos)."""
     page = (STATIC / "index.html").read_text(encoding="utf-8")
     css = "\n".join(p.read_text(encoding="utf-8") for p in [STATIC / "style.css", STATIC / "v3.css", *sorted((STATIC / "screens").glob("*.css"))])  # v3.css : écrans migrés (U5)
-    own_margin = {"videos"}  # .vadd, .vfilters et .job portent 16-24 px de marge
+    own_margin = set()  # Vidéos (v3) retire le cadre : #screen-videos [data-body] { background: none; padding: 0 }
     screens = re.findall(r'<section class="screen" id="screen-(\w+)".*?<div class="([^"]*)" data-body', page, re.S)
     assert {name for name, _ in screens} == {"dashboard", "veille", "videos", "review", "clips", "clip", "publish", "channels", "stats", "accounts", "settings", "journal"}
     for name, classes in screens:
@@ -9069,8 +9078,8 @@ def test_videos_screen_offers_resume_and_cancel_on_an_interrupted_video(tmp_path
 def test_purge_completed_shows_calculation_then_purge_state_on_the_button(tmp_path, isolated_cwd):
     js = _videos_js(tmp_path)
 
-    start = js.index("async function purgeCompleted")
-    body = js[start:js.index("/* ---------- Fiche d'une video", start)]
+    start = js.index("async function videosPurgeCompleted")
+    body = js[start:js.index("/* ---------- Fiche d'une vidéo", start)]
     assert "Calcul de l'espace libérable…" in body
     assert "Purge en cours…" in body
     assert body.index("Calcul de l'espace libérable…") < body.index('api("/api/purge-completed")')
@@ -9081,12 +9090,11 @@ def test_purge_completed_shows_calculation_then_purge_state_on_the_button(tmp_pa
 def test_purge_completed_disables_the_button_and_refuses_a_second_run(tmp_path, isolated_cwd):
     js = _videos_js(tmp_path)
 
-    start = js.index("async function purgeCompleted")
-    body = js[start:js.index("/* ---------- Fiche d'une video", start)]
-    assert "if (purgeBusy) return;" in body
-    assert "btn.disabled = true" in body
-    assert "btn.disabled = false" in body
-    assert body.count("finally") == 1 and "purgeBusy = false" in body[body.index("finally"):]
+    start = js.index("async function videosPurgeCompleted")
+    body = js[start:js.index("/* ---------- Fiche d'une vidéo", start)]
+    assert "if (s.purging) return;" in body  # une seule purge groupée à la fois
+    assert "data-purge-completed disabled>" in js  # le bouton est rendu désactivé tant que l'état est posé
+    assert body.count("finally") == 1 and "s.purging = null" in body[body.index("finally"):]
 
 
 # --------------------------------------------------------------------------
@@ -9233,7 +9241,7 @@ def test_videos_screen_has_purge_buttons_confirmations_and_disk_usage():
 
     assert "Purger les vidéos terminées" in js and "data-purge-video" in js and "data-purge-completed" in js
     assert "/api/purge/" in js and "/api/purge-completed" in js and "/api/disk" in js
-    assert "confirmDialog" in js[js.index("async function purgeVideo"):]
+    assert "confirmDialog" in js[js.index("async function videosPurge("):]
     assert "purged" in js and "source purgée" in js
     if shutil.which("node"):
         subprocess.run(["node", "--check", str(Path(web_app.__file__).parent / "static" / "screens" / "videos.js")],
