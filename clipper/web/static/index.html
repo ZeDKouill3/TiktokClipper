@@ -7,12 +7,16 @@
 <meta name="theme-color" content="#f6f4ef">
 <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
 <link rel="stylesheet" href="/static/fonts.css">
-<!-- Cascade pendant la migration (ADR-a308) : les feuilles des ecrans non migres vivent dans la couche « legacy »,
-     declaree avant celles de Basecoat (properties, theme, base, components, utilities), donc sous elles : sans cela
-     leurs regles non couchees (.btn, .input, .field, .i, button...) l'emporteraient sur `.v3 .btn` dans la coquille.
-     Entre elles, l'ordre et la specificite ne changent pas (meme couche, meme ordre qu'avant). v3.css reste hors
-     couche, au-dessus de tout. Les :root de Basecoat passent apres style.css : les jetons v3 sont donc sur .v3. -->
-<style>@layer legacy;</style>
+<!-- Cascade pendant la migration (ADR-a308). Basecoat est en couches Tailwind (properties, theme, base = jetons
+     :root et resets, components = .v3 .btn, .v3 .input..., utilities). Les feuilles des ecrans non migres vont dans
+     une couche « legacy » placee ENTRE base et components, declaree ici avant toute feuille (l'ordre des couches est
+     fixe par leur premiere apparition) :
+     - au-dessus de theme/base : les jetons :root de style.css (--muted, --accent, --font-mono, --ease-out... memes
+       noms chez Basecoat) et ses resets gardent la main dans les ecrans non migres, comme avant (pas un pixel) ;
+     - en dessous de components : dans la coquille, `.v3 .btn` l'emporte sur le `.btn` global de style.css.
+     Entre les feuilles legacy, ordre et specificite ne changent pas (meme couche, meme ordre). v3.css reste hors
+     couche, au-dessus de tout ; ses jetons sont sur .v3, jamais sur :root. -->
+<style>@layer properties, theme, base, legacy, components, utilities;</style>
 <link rel="stylesheet" href="/static/vendor/basecoat.cdn.min.css">
 <style>
   @import url("/static/style.css") layer(legacy);

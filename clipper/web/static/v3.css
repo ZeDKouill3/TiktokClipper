@@ -63,6 +63,19 @@
   -webkit-font-smoothing: antialiased;
 }
 
+/* >>> legacy-tokens */
+/* Jetons des ecrans non migres que Basecoat ecrase : son bloc :root / .dark est HORS couche (seuls theme, base,
+   components sont en @layer), donc il bat style.css, place dans la couche « legacy ». Cette feuille est hors couche
+   et chargee en dernier : elle remet les valeurs de style.css (memes valeurs, verifiees par tests/test_web_shell.py)
+   pour les seuls noms en collision. Les elements .v3 gardent leurs jetons (declares sur l'element). Retire a la
+   cloture (U14) avec style.css. */
+:root, :root[data-theme="dark"] { color-scheme: dark; --accent: #ff8a00; --muted: #8a877c; }
+:root[data-theme="light"] { color-scheme: light; --accent: #d96f00; --muted: #6f6b60; }
+/* Basecoat (couche base) pose html { scroll-behavior: smooth } : les ecrans non migres defilent sans lissage
+   (ancres #set-xxx, scrollIntoView), on garde ce comportement tant qu'ils restent. */
+html { scroll-behavior: auto; }
+/* <<< legacy-tokens */
+
 /* ---------- Base (sous .v3 seulement) ---------- */
 .v3 h1, .v3 h2, .v3 h3 { margin: 0; font-weight: 600; text-wrap: balance; }
 .v3 p { margin: 0; text-wrap: pretty; }
@@ -83,7 +96,9 @@
 .v3 .kv dt { color: var(--muted-foreground); margin: 0; display: flex; gap: 4px; align-items: center; flex-wrap: wrap; } .v3 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 
 /* ---------- Coquille : grille ---------- */
-.app { display: grid; grid-template-columns: var(--nav-w, 232px) minmax(0, 1fr); min-height: 100dvh; }
+/* 236 px tant que des ecrans non migres restent (largeur de la v2 : leur contenu ne bouge pas d'un pixel) ;
+   232 px (DIRECTION.md) a la cloture, U14. */
+.app { display: grid; grid-template-columns: var(--nav-w, 236px) minmax(0, 1fr); min-height: 100dvh; }
 html[data-nav="rail"] .app { --nav-w: 56px; }
 .main { min-width: 0; display: flex; flex-direction: column; }
 
@@ -145,7 +160,7 @@ html[data-nav="rail"] .sidenav .nav-rail .i { transform: rotate(180deg); }
 .pill.net.bad .i { color: var(--bad); }
 
 /* Bandeau connexion perdue (T3) */
-.conn-banner { display: flex; align-items: center; gap: 8px; padding: 8px 24px; background: var(--warn-soft); color: var(--warn); font-size: 13px; font-weight: 500; border-bottom: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); position: sticky; top: var(--top-h, 52px); z-index: 19; }
+.conn-banner { display: flex; align-items: center; gap: 8px; padding: 8px 24px; background: var(--warn-soft); color: var(--warn); font-size: 13px; line-height: 18px; font-weight: 500; border-bottom: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); position: sticky; top: var(--top-h, 52px); z-index: 19; }
 .conn-banner .i { width: 16px; height: 16px; }
 
 /* ---------- Barre d'onglets mobile ---------- */

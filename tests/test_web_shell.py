@@ -96,7 +96,7 @@ def test_index_keeps_nav_tabbar_screen_sections_and_script_order():
     assert positions == sorted(positions)
     # feuilles : couche « legacy » déclarée avant Basecoat (ses @layer la dominent alors), style.css et les feuilles
     # d'écran importées dans cette couche, v3.css hors couche en dernier
-    sheets = ["<style>@layer legacy;</style>", 'href="/static/vendor/basecoat.cdn.min.css"',
+    sheets = ["<style>@layer properties, theme, base, legacy, components, utilities;</style>", 'href="/static/vendor/basecoat.cdn.min.css"',
               '@import url("/static/style.css") layer(legacy);', '@import url("/static/screens/accounts.css") layer(legacy);',
               '@import url("/static/screens/veille.css") layer(legacy);', 'href="/static/v3.css"']
     offsets = [page.index(needle) for needle in sheets]
@@ -352,10 +352,12 @@ def test_v3_css_has_touch_targets_mobile_breakpoint_rail_and_scoped_tokens():
     assert "44px" in css and "@media (max-width: 900px)" in css
     assert 'html[data-nav="rail"]' in css
     assert "prefers-reduced-motion" in css
-    # jetons posés sur .v3 (jamais sur :root, dont les noms --muted/--accent/--sidebar sont ceux de style.css)
+    # jetons v3 posés sur .v3, jamais sur :root (les :root de v3.css ne portent que les jetons legacy restaurés,
+    # vérifiés par test_basecoat_unlayered_tokens_that_collide_with_style_css_are_restored_by_v3_css)
     root_blocks = re.findall(r"(?m)^:root[^{]*\{([^}]*)\}", css)
     for block in root_blocks:
-        assert "--muted:" not in block and "--accent:" not in block and "--sidebar:" not in block
+        for name in ("--background:", "--foreground:", "--primary:", "--sidebar:", "--border:", "--card:"):
+            assert name not in block, name
     assert re.search(r"(?m)^\.v3\s*\{[^}]*--background:\s*#f6f4ef", css)
     assert re.search(r"(?m)^\.dark \.v3\s*\{[^}]*--background:\s*#121210", css)
     assert "--color-background: var(--background)" in css   # Basecoat lit --color-*
@@ -407,6 +409,98 @@ def test_screen_content_rules_are_untouched_in_style_css():
                    ".skeleton { border-radius: var(--r);", ".empty { padding: 48px 24px;",
                    ".token-view {", ".screen[hidden] { display: none; }", ':root[data-theme="light"] {'):
         assert needle in css, needle
+
+
+# --- garde : les écrans non migrés ne changent pas d'un pixel (cascade Basecoat / legacy) --------------------------
+
+def _css_top_level(css: str):
+    """Règles de premier niveau d'une feuille : liste de (prélude, corps) ; les @layer gardent leur corps entier."""
+    out, depth, start, prelude, in_str, i = [], 0, 0, "", None, 0
+    while i < len(css):
+        c = css[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == in_str:
+                in_str = None
+        elif c in "\"'":
+            in_str = c
+        elif c == "{":
+            if depth == 0:
+                prelude, body_start = css[start:i].strip(), i + 1
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                out.append((prelude, css[body_start:i]))
+                start = i + 1
+        elif c == ";" and depth == 0:
+            out.append((css[start:i].strip(), None))
+            start = i + 1
+        i += 1
+    return out
+
+
+def _decls(body: str) -> dict:
+    return {k.strip(): v.strip() for k, v in (d.split(":", 1) for d in body.split(";") if ":" in d)}
+
+
+def test_legacy_layer_sits_between_basecoat_base_and_components():
+    """Basecoat (Tailwind v4) est en couches : ses jetons :root/.dark hors couche, theme/base/components en @layer.
+    style.css doit battre theme/base (ses --font-mono, --ease-out portent les mêmes noms) et perdre contre
+    components (`.v3 .btn` dans la coquille) : la couche legacy est déclarée entre les deux, avant toute feuille."""
+    page = _static("index.html")
+    vendor = _static("vendor", "basecoat.cdn.min.css")
+    layers = [p.split(None, 1)[1] for p, body in _css_top_level(vendor) if p.startswith("@layer") and body is not None]
+    assert "theme" in layers and "base" in layers and "components" in layers
+    stmt = re.search(r"<style>@layer ([a-z, ]+);</style>", page).group(1)
+    order = [x.strip() for x in stmt.split(",")]
+    assert order.index("base") < order.index("legacy") < order.index("components")
+    for name in layers:
+        assert name in order, f"couche Basecoat {name} absente de la déclaration d'ordre"
+    assert page.index("<style>@layer ") < page.index('href="/static/vendor/basecoat.cdn.min.css"')
+    for sheet in ("/static/style.css", "/static/screens/accounts.css", "/static/screens/veille.css"):
+        assert f'@import url("{sheet}") layer(legacy);' in page, sheet
+
+
+def test_basecoat_unlayered_tokens_that_collide_with_style_css_are_restored_by_v3_css():
+    """Les :root / .dark de Basecoat sont hors couche, donc au-dessus de la couche legacy : chaque nom qu'ils
+    partagent avec les :root de style.css est redéclaré hors couche dans v3.css, avec la valeur de style.css."""
+    vendor = _static("vendor", "basecoat.cdn.min.css")
+    basecoat = {}
+    for prelude, body in _css_top_level(vendor):
+        if prelude in (":root", ".dark") and body is not None:
+            basecoat.setdefault(prelude, {}).update(_decls(body))
+    assert basecoat[":root"] and basecoat[".dark"]
+    legacy = {}
+    for prelude, body in _css_top_level(re.sub(r"/\*.*?\*/", "", _static("style.css"), flags=re.S)):
+        if prelude.startswith(":root") and body is not None:
+            legacy[prelude] = _decls(body)
+    dark, light = legacy[':root, :root[data-theme="dark"]'], legacy[':root[data-theme="light"]']
+    colliding = sorted((set(basecoat[":root"]) | set(basecoat[".dark"])) & (set(dark) | set(light)))
+    assert colliding == ["--accent", "--muted", "color-scheme"]  # si la liste bouge, v3.css doit suivre
+    v3 = {prelude: _decls(body) for prelude, body in _css_top_level(re.sub(r"/\*.*?\*/", "", _static("v3.css"), flags=re.S))
+          if prelude.startswith(":root") and body}
+    restored_dark, restored_light = v3[':root, :root[data-theme="dark"]'], v3[':root[data-theme="light"]']
+    for name in colliding:
+        assert restored_dark[name] == dark[name], name
+        assert restored_light[name] == light[name], name
+    # et rien d'autre sur :root dans v3.css : les jetons v3 vivent sur .v3
+    assert set(restored_dark) == set(colliding) and set(restored_light) == set(colliding)
+    assert "/* >>> legacy-tokens */" in _static("v3.css") and "/* <<< legacy-tokens */" in _static("v3.css")
+
+
+def test_style_css_first_rule_is_the_legacy_token_block():
+    # Un commentaire d'en-tête mal fermé avait avalé ce bloc : la page perdait --font, --r, --topbar...
+    rules = [p for p, body in _css_top_level(re.sub(r"/\*.*?\*/", "", _static("style.css"), flags=re.S)) if body is not None]
+    assert rules[0] == ":root"
+    assert rules[1] == ':root, :root[data-theme="dark"]' and rules[2] == ':root[data-theme="light"]'
+
+
+def test_sidebar_keeps_the_v2_width_while_legacy_screens_remain():
+    css = _static("v3.css")
+    assert "var(--nav-w, 236px)" in css  # largeur v2 : le contenu des écrans non migrés ne bouge pas
 
 
 # --- heure de Paris --------------------------------------------------------------------------------------------

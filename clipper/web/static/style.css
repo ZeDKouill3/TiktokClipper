@@ -1,10 +1,10 @@
 /* Clipper, console de gestion : styles des ecrans non migres (coquille v3 dans v3.css, ADR-a308).
    Chaque ecran a son bloc entre les delimiteurs « >>> ecran » et « <<< ecran » : sa tache de migration le retire ;
    « shared » = regles communes a plusieurs ecrans, « shell » = restes de coquille, retires a la cloture (U14).
-/* >>> shared */
    Direction : regie de montage. Noir chaud, hairlines, accent orange du logo,
    chiffres en Barlow Condensed tabulaires, mono pour les durees et les ids.
    Echelle d'espacement fermee : 4 8 12 16 24 32 48 64. */
+/* >>> shared */
 
 :root {
   --font: "Barlow", "Bahnschrift", "Segoe UI", system-ui, sans-serif;
