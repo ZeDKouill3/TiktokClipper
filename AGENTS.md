@@ -102,6 +102,10 @@ Liste régénérée depuis `ank find --type adr --status accepted` et `ank find 
 - **ADR-ff87** — jury de juges IA pour les décisions de jugement du mode
   auto : au moins 3 juges indépendants et anonymes, débat ciblé sur les
   divergences, veto motivé du juge conformité.
+- **ADR-a308** — console v3 : composants Basecoat et Idiomorph copiés dans
+  `clipper/web/static/vendor/` (versions et sha256 épinglés, sélecteurs
+  préfixés `.v3` pendant la migration), aucune classe utilitaire ni build,
+  icônes Lucide et polices locales, thème clair par défaut.
 - **ADR-35b7** — console de gestion web v2 : worker séparé qui traite une
   vidéo à la fois, presets par chaîne en surcouche, SSE, jeton d'accès local.
 - **ADR-4e57** — candidats d'action pour les VOD gaming : étape `action`
@@ -168,8 +172,10 @@ Liste régénérée depuis `ank find --type adr --status accepted` et `ank find 
 - **SPEC-1548** — modèle de données de la console v2 : chaînes, file de
   traitement (un seul worker, reprises par la file), publication, surveillance,
   état vidéo étendu. Succède à SPEC-74e9.
-- **SPEC-c100** — règles de l'interface de gestion v2 : écrans, actions,
-  erreurs visibles, temps réel, raccourcis, accès.
+- **SPEC-7715** — règles de l'interface de gestion v3 : décision d'abord,
+  tiroirs et dialogues qui gardent le contexte, palette et raccourcis clavier,
+  temps réel par rapprochement du DOM, erreurs en place, thème clair par
+  défaut, mobile. Succède à SPEC-c100.
 - **SPEC-bdd9** — veille : réglages `[veille]`, fichiers sous `state/veille/`,
   sources, candidats, choix de Claude, actions Clipper/Ignorer, meilleurs
   clips du jour archivés, écran Veille.
