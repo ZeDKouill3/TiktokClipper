@@ -194,7 +194,8 @@ def test_v3_css_ends_with_the_stats_block_and_stays_within_budget():
     assert len(V3_CSS.encode("utf-8")) <= 124_162
     start = V3_CSS.index("/* >>> stats v3 */")
     assert V3_CSS.index("/* <<< stats v3 */") > start
-    assert V3_CSS.rstrip().endswith("/* <<< stats v3 */")
+    # bloc ferme, pas forcement le dernier : les ecrans migres ensuite ajoutent le leur a la suite
+    assert V3_CSS.index("/* >>> stats v3 */") < V3_CSS.index("/* <<< stats v3 */")
     block = V3_CSS[start:]
     for needle in (".v3.s3 ", ".v3 .kpi ", ".s3-card", "@media screen and (max-width: 900px)"):
         assert needle in block, needle
