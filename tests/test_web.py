@@ -12066,3 +12066,66 @@ def test_sse_hub_survives_a_scan_that_raises_once(tmp_path, isolated_cwd, monkey
 
     assert json.loads(chunk[len("data: "):])["kind"] == "queue"
     assert "dossier disparu pendant le scan" in caplog.text  # l'erreur est visible dans le journal
+
+
+# --------------------------------------------------------------------------
+# TASK-61002cfd243f : lecture-modification-ecriture d'un preset sous verrou
+# --------------------------------------------------------------------------
+
+
+def _hold_preset_lock_and_append(path, extra: str, ready, hold_s: float = 0.5):
+    """Autre ecrivain (le worker, un autre onglet) : prend le verrou du preset, lit, tarde, puis
+    reecrit le preset avec ``extra`` en plus, avant de relacher."""
+    import time
+    from clipper import channel as channel_mod
+
+    with channel_mod.file_lock(path):
+        content = path.read_text(encoding="utf-8")
+        ready.set()
+        time.sleep(hold_s)
+        path.write_text(content + extra, encoding="utf-8")
+
+
+def test_put_letterbox_layout_waits_for_the_preset_lock_and_keeps_the_other_writers_change(tmp_path, isolated_cwd):
+    import threading
+
+    _channels_setup(tmp_path)
+    path = Path("presets") / f"{CH}.toml"
+    c = client(tmp_path)
+    assert c.get(_LB_URL).status_code == 200                            # route chauffée : la lecture suit aussitôt le PUT
+    ready = threading.Event()
+    other = threading.Thread(target=_hold_preset_lock_and_append, args=(path, "\n[render]\ncrf = 20\n", ready, 1.0))
+    other.start()
+    assert ready.wait(5)
+
+    resp = c.put(_LB_URL, json={"letterbox_top": 470})
+    other.join(5)
+
+    assert resp.status_code == 200, resp.text
+    saved = _preset_of(tmp_path)
+    assert saved["render"]["crf"] == 20                                 # écriture de l'autre : pas écrasée
+    assert saved["reframe"]["letterbox_top"] == 470                     # la nôtre est là aussi
+
+
+def test_two_concurrent_letterbox_writes_on_different_keys_keep_both(tmp_path, isolated_cwd):
+    import threading
+
+    _channels_setup(tmp_path)
+    barrier = threading.Barrier(2)
+    statuses = []
+
+    def put(body):
+        c = client(tmp_path)
+        barrier.wait(5)
+        statuses.append(c.put(_LB_URL, json=body).status_code)
+
+    threads = [threading.Thread(target=put, args=(b,)) for b in ({"letterbox_top": 470}, {"cta_handle_gap": 14})]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+
+    assert statuses == [200, 200]
+    saved = _preset_of(tmp_path)
+    assert saved["reframe"]["letterbox_top"] == 470
+    assert saved["render"]["cta_handle_gap"] == 14

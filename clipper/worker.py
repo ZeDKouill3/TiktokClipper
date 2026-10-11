@@ -1584,26 +1584,27 @@ class Worker:
         watch = self.config.section("watch")
         presets_dir, base = watch["presets_dir"], watch["base_config"]
         path = Path(presets_dir) / f"{name}.toml"
-        try:
-            with path.open("rb") as f:
-                raw = tomllib.load(f)
-            channel_mod.load_channel(name, presets_dir=presets_dir, base=base)  # valide le preset
-        except (channel_mod.ChannelError, ConfigError, OSError, tomllib.TOMLDecodeError) as exc:
-            log.error("%s : synchronisation du mode de chaîne impossible : %s", name, exc)
-            return
-        explicit = str((raw.get("channel") or {}).get("mode") or "")
-        if explicit:
-            if raw.get("mode") == explicit:
+        with channel_mod.file_lock(path):  # meme verrou que l'API web : relecture et reecriture sans trou
+            try:
+                with path.open("rb") as f:
+                    raw = tomllib.load(f)
+                channel_mod.load_channel(name, presets_dir=presets_dir, base=base)  # valide le preset
+            except (channel_mod.ChannelError, ConfigError, OSError, tomllib.TOMLDecodeError) as exc:
+                log.error("%s : synchronisation du mode de chaîne impossible : %s", name, exc)
                 return
-            data = {**raw, "mode": explicit}
-        elif "mode" in raw:
-            data = {k: v for k, v in raw.items() if k != "mode"}
-        else:
-            return
-        try:
-            channel_mod.save_channel(name, data, presets_dir=presets_dir, base=base)
-        except (channel_mod.ChannelError, ConfigError, OSError) as exc:
-            log.error("%s : synchronisation du mode de chaîne impossible : %s", name, exc)
+            explicit = str((raw.get("channel") or {}).get("mode") or "")
+            if explicit:
+                if raw.get("mode") == explicit:
+                    return
+                data = {**raw, "mode": explicit}
+            elif "mode" in raw:
+                data = {k: v for k, v in raw.items() if k != "mode"}
+            else:
+                return
+            try:
+                channel_mod.save_channel(name, data, presets_dir=presets_dir, base=base, locked=True)
+            except (channel_mod.ChannelError, ConfigError, OSError) as exc:
+                log.error("%s : synchronisation du mode de chaîne impossible : %s", name, exc)
 
     def _launch_head(self) -> bool:
         """Lance la tete de file ``waiting`` ; le cycle relecture-lancement-

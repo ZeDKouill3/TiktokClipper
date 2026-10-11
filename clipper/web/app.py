@@ -1422,12 +1422,13 @@ def _refuse_legacy_keys(preset: dict[str, Any]) -> None:
                    "choisit à chaque publication, les créneaux se règlent sur le compte dans l'écran Comptes)")
 
 
-def _save_channel_preset(name: str, preset: dict[str, Any]) -> None:
+def _save_channel_preset(name: str, preset: dict[str, Any], *, locked: bool = False) -> None:
+    """``locked=True`` : l'appelant tient ``channel_mod.file_lock(<preset>)`` (cycle lecture-modification-ecriture)."""
     if "channel" not in preset:
         preset = {**preset, "channel": {}}  # sans [channel], le preset ne serait plus une chaine
     try:
         _validate_preset(name, preset)
-        channel_mod.save_channel(name, preset, presets_dir=_PRESETS_DIR, base=_BASE_CONFIG)
+        channel_mod.save_channel(name, preset, presets_dir=_PRESETS_DIR, base=_BASE_CONFIG, locked=locked)
     except ConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -1693,19 +1694,20 @@ def _layout_save(name: str, body: dict[str, Any]) -> None:
             detail=f"aucun rectangle à enregistrer (attendu : {', '.join(_LAYOUT_KEYS)}, ou badge_enabled)",
         )
     path = _channel_preset_path(name)
-    try:
-        preset = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise HTTPException(status_code=422, detail=f"preset illisible ({path.name}) : {exc}") from exc
-    preset["reframe"] = {**preset.get("reframe", {}), **given}
-    if badge_enabled is not None:
-        # seul [render] badge_enabled change : badge_dest et le reste du preset restent tels quels
-        preset["render"] = {**preset.get("render", {}), "badge_enabled": badge_enabled}
-    try:
-        _layout_check_geometry(name, preset)
-    except ConfigError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    _save_channel_preset(name, preset)
+    with channel_mod.file_lock(path):  # lecture-modification-ecriture : meme verrou que le worker
+        try:
+            preset = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=f"preset illisible ({path.name}) : {exc}") from exc
+        preset["reframe"] = {**preset.get("reframe", {}), **given}
+        if badge_enabled is not None:
+            # seul [render] badge_enabled change : badge_dest et le reste du preset restent tels quels
+            preset["render"] = {**preset.get("render", {}), "badge_enabled": badge_enabled}
+        try:
+            _layout_check_geometry(name, preset)
+        except ConfigError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _save_channel_preset(name, preset, locked=True)
 
 
 # Editeur d'agencement letterbox (TASK-3be3) : reglages existants du rendu
@@ -1773,28 +1775,29 @@ def _letterbox_write(name: str, body: dict[str, Any] | None) -> None:
     retire toutes les cles de l'editeur (« Revenir au standard »)."""
     path = _channel_preset_path(name)
     _load_channel(name)  # 404 si le style n'existe pas
-    try:
-        preset = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise HTTPException(status_code=422, detail=f"preset illisible ({path.name}) : {exc}") from exc
-    standard = _letterbox_standard()
-    for key, section in _LETTERBOX_KEYS.items():
-        table = dict(preset.get(section, {}))
-        if body is None or (key in body and body[key] == standard[key]):
-            table.pop(key, None)
-        elif key in body:
-            table[key] = body[key]
-        else:
-            continue
-        if table:
-            preset[section] = table
-        else:
-            preset.pop(section, None)
-    try:
-        _letterbox_check(name, preset)
-    except ConfigError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    _save_channel_preset(name, preset)
+    with channel_mod.file_lock(path):  # lecture-modification-ecriture : meme verrou que le worker
+        try:
+            preset = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=f"preset illisible ({path.name}) : {exc}") from exc
+        standard = _letterbox_standard()
+        for key, section in _LETTERBOX_KEYS.items():
+            table = dict(preset.get(section, {}))
+            if body is None or (key in body and body[key] == standard[key]):
+                table.pop(key, None)
+            elif key in body:
+                table[key] = body[key]
+            else:
+                continue
+            if table:
+                preset[section] = table
+            else:
+                preset.pop(section, None)
+        try:
+            _letterbox_check(name, preset)
+        except ConfigError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _save_channel_preset(name, preset, locked=True)
 
 
 def _png_from_multipart(content_type: str, body: bytes) -> bytes:

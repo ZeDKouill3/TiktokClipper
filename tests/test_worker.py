@@ -5067,3 +5067,42 @@ def test_a_changed_base_is_reread_under_the_loaded_config_file(tmp_path):
     w.tick()
     w.tick()
     assert seen[1:] == [["streamer_x"], ["streamer_x"]]
+
+
+def test_sync_channel_mode_waits_for_the_preset_lock_and_keeps_the_other_writers_change(tmp_path):
+    """TASK-61002cfd243f : la synchronisation du mode relit puis reecrit le preset sous le meme verrou
+    que l'API web ; une modification faite par l'autre pendant ce temps n'est jamais ecrasee."""
+    presets = tmp_path / "presets"
+    presets.mkdir()
+    base = tmp_path / "config.toml"
+    base.write_text('mode = "review"\n', encoding="utf-8")
+    preset_path = presets / "ma_chaine.toml"
+    preset_path.write_text('[channel]\nmode = "auto"\n', encoding="utf-8")
+    config = Config(
+        mode="review", workspace_dir=tmp_path / "workspace", output_dir=tmp_path / "output",
+        _sections={
+            "worker": {"queue_path": str(tmp_path / "state" / "queue.json")},
+            "watch": {"presets_dir": str(presets), "base_config": str(base)},
+        },
+    )
+    ready = threading.Event()
+
+    def other_writer():
+        with channel_mod.file_lock(preset_path):
+            content = preset_path.read_text(encoding="utf-8")
+            ready.set()
+            time.sleep(0.5)
+            preset_path.write_text(content + "\n[render]\ncrf = 20\n", encoding="utf-8")
+
+    other = threading.Thread(target=other_writer)
+    other.start()
+    assert ready.wait(5)
+
+    worker.Worker(config=config, spawner=FakeSpawner())._sync_channel_mode("ma_chaine")
+    other.join(5)
+
+    import tomllib
+
+    saved = tomllib.loads(preset_path.read_text(encoding="utf-8"))
+    assert saved["mode"] == "auto"
+    assert saved["render"]["crf"] == 20
