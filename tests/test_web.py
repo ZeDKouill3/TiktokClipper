@@ -1026,9 +1026,9 @@ def test_two_sse_clients_trigger_a_single_scan_per_interval(tmp_path, monkeypatc
     assert json.loads(ra[len("data: "):])["kind"] == "queue" and ra == rb
 
 
-def test_scan_tour_is_at_least_10x_faster_without_browser_profiles(tmp_path, isolated_cwd):
-    import time
-
+def test_scan_tour_is_at_least_10x_faster_without_browser_profiles(tmp_path, monkeypatch, isolated_cwd):
+    # Mesure le travail (entrées parcourues), pas le temps : un ratio de durées
+    # échoue sous charge alors que le parcours n'a pas changé.
     from clipper.web import app as web_app
 
     state = tmp_path / "state"
@@ -1038,20 +1038,29 @@ def test_scan_tour_is_at_least_10x_faster_without_browser_profiles(tmp_path, iso
         (state / "publish").mkdir(exist_ok=True)
         (state / "publish" / f"c{i}.json").write_text("{}", encoding="utf-8")
 
-    def tour_old() -> float:  # ancien comportement : rglob de toute la racine
-        t = time.perf_counter()
-        list(state.rglob("*.json"))
-        return time.perf_counter() - t
+    visited: list[Path] = []
+    real_rglob = Path.rglob
+    real_glob = Path.glob
 
-    def tour_new() -> float:
-        t = time.perf_counter()
-        web_app._scan_watched(tmp_path / "workspace", [(state, None)])
-        return time.perf_counter() - t
+    def spy_rglob(self, pattern):
+        for p in real_rglob(self, pattern):
+            visited.append(p)
+            yield p
 
-    old = min(tour_old() for _ in range(3))
-    new = min(tour_new() for _ in range(3))
-    print(f"MESURE tour scan : avant {old * 1000:.1f} ms, apres {new * 1000:.1f} ms")
-    assert old >= 10 * new
+    def spy_glob(self, pattern):
+        for p in real_glob(self, pattern):
+            visited.append(p)
+            yield p
+
+    monkeypatch.setattr(Path, "rglob", spy_rglob)
+    monkeypatch.setattr(Path, "glob", spy_glob)
+
+    old = len(list(state.rglob("*.json")))  # ancien comportement : rglob de toute la racine
+    visited.clear()
+    web_app._scan_watched(tmp_path / "workspace", [(state, None)])
+    new = len(visited)
+    print(f"MESURE tour scan : avant {old} entrees, apres {new} entrees")
+    assert new > 0 and old >= 10 * new
 
 
 # --------------------------------------------------------------------------
