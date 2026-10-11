@@ -216,9 +216,12 @@ def test_publish_screen_is_marked_v3_and_paints_with_morph_not_inner_html():
 def test_new_publication_and_series_use_the_native_dialog_never_the_legacy_panel():
     js = _static("screens", "publish.js")
     assert "openPanel(" not in js and "closeLayer(" not in js
+    assert "openDialog(html" in js[js.index("function pubDialog("):js.index("const pubCloseDialog")]
     for name in ("pubOpenForm", "pubOpenSeriesForm"):
         start = js.index(f"async function {name}")
-        assert "openDialog(" in js[start:js.index("\n}\n", start)], name
+        assert "pubDialog(" in js[start:js.index("\n}\n", start)], name
+    detail = js[js.index("function pubOpenDetail"):js.index("/* ---------- Glisser-deposer")]
+    assert "pubDialog(" in detail                                   # la fiche d'un post est aussi un dialogue natif
 
 
 def test_publish_blocks_left_style_css_for_v3_css():

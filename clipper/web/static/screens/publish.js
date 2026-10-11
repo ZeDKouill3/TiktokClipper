@@ -455,7 +455,7 @@ function repLineRow(d, account, row, editable) {
   const tools = editable ? `<div class="row wrap rep-tools">
       ${repClipSelect(d, account, String(row.index), pubKey(l))}
       <input type="datetime-local" class="input rep-time" data-rep-time="${esc(account.account)}|${row.index}" min="${esc(d.day)}T00:00" max="${esc(d.day)}T23:59" value="${esc(pubLocalInput(l.slot_at))}" aria-label="Changer l'heure" ${pubRep.busy ? "disabled" : ""}>
-      <button type="button" class="btn btn-xs btn-ghost" data-rep-remove="${esc(account.account)}|${row.index}" ${pubRep.busy ? "disabled" : ""}>Retirer</button></div>` : "";
+      <button type="button" class="btn" data-variant="ghost" data-size="sm" data-rep-remove="${esc(account.account)}|${row.index}" ${pubRep.busy ? "disabled" : ""}>Retirer</button></div>` : "";
   return `<div class="list-item rep-row" data-rep-row>
     <span class="rep-hour">${esc(repClock(l.slot_at))}</span>
     <div class="mini-clip">${l.thumbnail_url ? `<img loading="lazy" decoding="async" width="36" height="64" src="${esc(l.thumbnail_url)}" alt="">` : ""}</div>
@@ -712,9 +712,9 @@ function pubFormHtml(f) {
   const o = f.options, y = f.ytOptions;
   const editing = Boolean(f.edit);
   return `
-    <div class="modal-head"><h2>${editing ? "Modifier la publication" : "Nouvelle publication"}</h2>
-      <p class="muted" style="margin-top:4px">Valider approuve le clip et le met en file : aucun créneau de style n'est nécessaire.</p></div>
-    <div class="modal-body stack" style="gap:16px">
+    <header><h2>${editing ? "Modifier la publication" : "Nouvelle publication"}</h2>
+      <p>Valider approuve le clip et le met en file : aucun créneau de style n'est nécessaire.</p></header>
+    <section>
       ${editing ? "" : `<div class="field"><span class="field-label">Clip</span>
         <div class="row wrap" style="gap:8px">
           <input class="input" id="pub-form-search" type="search" placeholder="Rechercher (titre, description, identifiant)" aria-label="Rechercher un clip" style="flex:1 1 220px">
@@ -760,9 +760,9 @@ function pubFormHtml(f) {
           <span class="hint">Non par défaut (réponse obligatoire de YouTube Studio).</span></div>
       </div>
       <p class="reason bad" id="pub-form-error" hidden role="alert"></p>
-    </div>
-    <div class="modal-foot"><button type="button" class="btn btn-ghost" data-dismiss>Fermer</button><span class="grow"></span>
-      <button type="button" class="btn btn-primary" id="pub-form-submit">${editing ? "Enregistrer" : "Valider et publier"}</button></div>`;
+    </section>
+    <footer><button type="button" class="btn" data-variant="outline" data-dismiss>Fermer</button>
+      <button type="button" class="btn" id="pub-form-submit">${editing ? "Enregistrer" : "Valider et publier"}</button></footer>`;
 }
 
 function pubFormClipCards(f, d) {
@@ -854,18 +854,29 @@ async function pubFormSubmit(f, d) {
     err.textContent = e.message || String(e);
     if (e.body && e.body.next_at) { // plafond depasse : la raison est dite, la prochaine heure possible se prend en un clic
       const next = e.body.next_at;
-      err.innerHTML = `${esc(e.message)} <button type="button" class="btn btn-xs" id="pub-form-use-next">Programmer à ${esc(pubWhen(next))}</button>`;
+      err.innerHTML = `${esc(e.message)} <button type="button" class="btn" data-variant="outline" data-size="sm" id="pub-form-use-next">Programmer à ${esc(pubWhen(next))}</button>`;
       $("#pub-form-use-next", err).onclick = () => { $("#pub-form-later", d).checked = true; $("#pub-form-at", d).hidden = false; $("#pub-form-at", d).value = pubLocalInput(next); err.hidden = true; };
     }
     err.hidden = false;
     return;
   }
-  closeLayer();
+  pubCloseDialog(d);
   toast({ kind: "ok", title: f.edit ? "Publication modifiée" : (body.mode === "immediate" ? "Publication en file : le worker la publie dès qu'il est libre" : "Publication programmée"), body: f.edit ? pubTitle(f.edit) : "", ms: 3200 });
   pubPosts.at = 0;
   pubPostsLoad();
   if (typeof loadClips === "function") loadClips();
 }
+
+/* Dialogue natif des formulaires de l'écran (SPEC-7715 T10) : `html` = header / section / footer ; `onOpen` reçoit
+   le cadre du dialogue (là où vivent les champs), `pubCloseDialog(cadre)` le ferme. */
+function pubDialog(html, size, onOpen) {
+  return openDialog(html, { size, closeButton: true, onOpen: (dlg) => {
+    const box = dlg.firstElementChild;
+    box.classList.add("pub-dialog");
+    onOpen(box);
+  } });
+}
+const pubCloseDialog = (box) => { const dlg = box.closest("dialog"); if (dlg) dlg.close(); };
 
 /* ouvre le formulaire ; `preset` { video_id, clip_id } prerempli depuis l'ecran Clips ; `edit` : une publication a modifier */
 /* Heure proposée quand on clique « + » sur un jour : l'heure pleine d'après (+1 h de marge) aujourd'hui, midi
@@ -894,7 +905,7 @@ async function pubOpenForm(preset, edit, opts) {
     toastError("Ce clip ne peut pas être publié", new Error("Il n'est ni à valider ni approuvé (refusé, déjà publié ou déjà en file)."));
     return null;
   }
-  return openPanel("modal pub-modal pub-form", pubFormHtml(f), (d) => {
+  return pubDialog(pubFormHtml(f), "lg", (d) => {
     if (!edit) {
       ["#pub-form-search"].forEach((s) => ($(s, d).oninput = () => pubFormClipCards(f, d)));
       ["#pub-form-video", "#pub-form-channel"].forEach((s) => ($(s, d).onchange = () => pubFormClipCards(f, d)));
@@ -1047,9 +1058,9 @@ function pubSeriesSelectedRows(f, d) {
       <div class="li-main grow"><div class="li-title">${esc(pubSeriesUnitLabel(u))}</div><div class="li-sub muted">${esc(u.video_id)}</div>
         ${clipRows.filter((r) => r.unit === u).map((r) => pubSeriesClipDateHtml(r, u.clip_ids.length > 1)).join("")}</div>
       <div class="row" style="gap:4px">
-        <button type="button" class="btn btn-xs" data-pubs-up="${i}" aria-label="Monter"${i === 0 ? " disabled" : ""}>↑</button>
-        <button type="button" class="btn btn-xs" data-pubs-down="${i}" aria-label="Descendre"${i === last ? " disabled" : ""}>↓</button>
-        <button type="button" class="btn btn-xs btn-ghost" data-pubs-remove="${i}" aria-label="Retirer">${icon("x", "i-xs")}</button>
+        <button type="button" class="btn" data-variant="outline" data-size="icon-sm" data-pubs-up="${i}" aria-label="Monter"${i === 0 ? " disabled" : ""}>↑</button>
+        <button type="button" class="btn" data-variant="outline" data-size="icon-sm" data-pubs-down="${i}" aria-label="Descendre"${i === last ? " disabled" : ""}>↓</button>
+        <button type="button" class="btn" data-variant="ghost" data-size="icon-sm" data-pubs-remove="${i}" aria-label="Retirer">${icon("x", "i-xs")}</button>
       </div></div>`).join("") : `<p class="muted" style="padding:8px">Aucun clip sélectionné.</p>`;
   $$("[data-pubs-up]", box).forEach((b) => (b.onclick = () => { f.selected = pubSeriesMoveUnit(f.selected, Number(b.dataset.pubsUp), -1); pubSeriesRenderManual(f, d); }));
   $$("[data-pubs-down]", box).forEach((b) => (b.onclick = () => { f.selected = pubSeriesMoveUnit(f.selected, Number(b.dataset.pubsDown), 1); pubSeriesRenderManual(f, d); }));
@@ -1085,9 +1096,9 @@ function pubSeriesFormHtml(f) {
   const count = f.mode === "auto" ? (f.count || 0) : pubSeriesPostCount(f.selected);
   const available = f.available != null ? f.available : null;
   return `
-    <div class="modal-head"><h2>Programmer une série</h2>
-      <p class="muted" style="margin-top:4px">Publie plusieurs clips à un rythme régulier (une publication toutes les X heures), après un aperçu.</p></div>
-    <div class="modal-body stack" style="gap:16px">
+    <header><h2>Programmer une série</h2>
+      <p>Publie plusieurs clips à un rythme régulier (une publication toutes les X heures), après un aperçu.</p></header>
+    <section>
       <div class="field"><span class="field-label">Mode</span>
         <div class="row wrap" style="gap:16px">
           <label class="row" style="gap:6px"><input type="radio" name="pubs-mode" value="auto"${f.mode === "auto" ? " checked" : ""}> Automatique (les meilleurs clips)</label>
@@ -1120,10 +1131,10 @@ function pubSeriesFormHtml(f) {
       <p class="hint">${PUBS_WHEN_HINT}</p>
       <p class="reason bad" id="pubs-error" hidden role="alert"></p>
       <div id="pubs-preview"></div>
-    </div>
-    <div class="modal-foot"><button type="button" class="btn btn-ghost" data-dismiss>Fermer</button><span class="grow"></span>
-      <button type="button" class="btn" id="pubs-check">Aperçu</button>
-      <button type="button" class="btn btn-primary" id="pubs-submit" disabled>Valider</button></div>`;
+    </section>
+    <footer><button type="button" class="btn" data-variant="outline" data-dismiss>Fermer</button>
+      <button type="button" class="btn" data-variant="outline" id="pubs-check">Aperçu</button>
+      <button type="button" class="btn" id="pubs-submit" disabled>Valider</button></footer>`;
 }
 
 function pubSeriesBody(f, d) {
@@ -1257,7 +1268,7 @@ async function pubSeriesSubmit(f, d) {
   if (!(await netGuard())) return;
   try {
     const res = await api("/api/publications/series", jsonBody("POST", pubSeriesBody(f, d)));
-    closeLayer();
+    pubCloseDialog(d);
     toast({ kind: "ok", title: "Série programmée", body: `${res.created} publication${res.created > 1 ? "s" : ""}`, ms: 3200 });
     pubPosts.at = 0;
     pubPostsLoad();
@@ -1356,6 +1367,7 @@ function pubSeriesWire(f, d) {
 
 function pubSeriesRerender(f, d) {
   d.innerHTML = pubSeriesFormHtml(f);
+  $$("[data-dismiss]", d).forEach((b) => (b.onclick = () => pubCloseDialog(d)));
   pubSeriesWire(f, d);
 }
 
@@ -1372,7 +1384,7 @@ async function pubOpenSeriesForm() {
     afterLast: false, afterAt: null, afterAtParis: null,
     perClip: false, clipDates: {}, onChange: null,
   };
-  return openPanel("modal pub-modal pub-form", pubSeriesFormHtml(f), (d) => pubSeriesWire(f, d));
+  return pubDialog(pubSeriesFormHtml(f), "lg", (d) => pubSeriesWire(f, d));
 }
 
 /* ---------- Actions ---------- */
@@ -1513,9 +1525,9 @@ function pubDetailHtml(c) {
     : status === "failed" && c.to_verify ? "Programmation à vérifier : le post est peut-être déjà programmé sur TikTok (risque de doublon). Contrôle TikTok Studio : s'il y est, attends le prochain relevé (rapprochement automatique) ; s'il n'y est pas, « Réessayer »."
     : status === "failed" ? "La publication s'est arrêtée : regarde la capture, règle le problème dans le navigateur du compte, puis « Réessayer » (ou repasse le clip en attente pour le replanifier)." : "";
   return `
-    <div class="modal-head"><div class="row wrap" style="gap:8px">${pubChip(c)}<h2>${esc(pubTitle(c))}</h2></div>
-      <p class="muted" style="margin-top:4px">${c.slot_at ? esc(pubSlotLabel(c.slot_at)) : "Sans créneau"}${account ? ` · ${esc(pubAccountLabel(account))}` : ""}</p></div>
-    <div class="modal-body stack" style="gap:16px">
+    <header><h2>${esc(pubTitle(c))} ${pubChip(c)}</h2>
+      <p>${c.slot_at ? esc(pubSlotLabel(c.slot_at)) : "Sans créneau"}${account ? ` · ${esc(pubAccountLabel(account))}` : ""}</p></header>
+    <section>
       ${c.publish_error ? `<p class="reason bad">Publication en échec : ${esc(c.publish_error)}</p>` : ""}
       ${c.waiting_reason ? `<p class="reason warn" data-waiting-reason>En attente, non tentée : ${esc(c.waiting_reason)}</p>` : ""}
       ${pubAccountField(c)}
@@ -1527,37 +1539,36 @@ function pubDetailHtml(c) {
       ${status === "scheduled" && !inProgress ? `<p class="muted">« Déclarer publié » sert à un clip que tu as déjà publié toi-même, hors de Clipper : il ne sera pas publié par le worker.</p>` : ""}
       <div class="field"><span class="field-label">Description</span><div class="pub-caption">${esc(c.description || "")}</div></div>
       <div class="hashtags">${(c.hashtags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join("")}</div>
-    </div>
-    <div class="modal-foot">
-      <a class="btn btn-ghost" href="${esc(c.video_url)}" download="${esc(c.clip_id)}.mp4">${icon("download")}Télécharger</a>
-      <button type="button" class="btn btn-ghost" data-copy>${icon("copy")}Copier la description</button>
-      <span class="grow"></span>
-      ${status === "failed" ? `<button type="button" class="btn btn-primary" data-retry>${icon("rotate-ccw")}Réessayer</button>` : ""}
-      ${status === "scheduled" || (status === "failed" && !c.to_verify) ? `<button type="button" class="btn" data-unschedule>${icon("undo-2")}Repasser en attente</button>` : ""}
-      ${status === "published" ? `<button type="button" class="btn btn-ghost" data-removed title="Tu as supprimé ce post de la plateforme à la main">${icon("trash-2")}Supprimé de la plateforme</button>` : ""}
-      ${status === "approved" ? `<button type="button" class="btn btn-primary" data-publish-now>${icon("send")}Publier maintenant</button>` : ""}
-      ${status === "scheduled" && !inProgress ? `<button type="button" class="btn" data-published title="Pour un clip déjà publié hors de Clipper">${icon("check")}Déclarer publié (hors Clipper)</button>` : ""}
-    </div>`;
+    </section>
+    <footer>
+      <a class="btn" data-variant="ghost" href="${esc(c.video_url)}" download="${esc(c.clip_id)}.mp4">${icon("download")}Télécharger</a>
+      <button type="button" class="btn" data-variant="ghost" data-copy>${icon("copy")}Copier la description</button>
+      ${status === "failed" ? `<button type="button" class="btn" data-retry>${icon("rotate-ccw")}Réessayer</button>` : ""}
+      ${status === "scheduled" || (status === "failed" && !c.to_verify) ? `<button type="button" class="btn" data-variant="outline" data-unschedule>${icon("undo-2")}Repasser en attente</button>` : ""}
+      ${status === "published" ? `<button type="button" class="btn" data-variant="ghost" data-removed title="Tu as supprimé ce post de la plateforme à la main">${icon("trash-2")}Supprimé de la plateforme</button>` : ""}
+      ${status === "approved" ? `<button type="button" class="btn" data-publish-now>${icon("send")}Publier maintenant</button>` : ""}
+      ${status === "scheduled" && !inProgress ? `<button type="button" class="btn" data-variant="outline" data-published title="Pour un clip déjà publié hors de Clipper">${icon("check")}Déclarer publié (hors Clipper)</button>` : ""}
+    </footer>`;
 }
 
 function pubOpenDetail(key) {
   const c = pubFind(key);
   if (!c) return;
   if (c.missing) { toastError("Clip introuvable", new Error(`Le sidecar de ${c.video_id}/${c.clip_id} n'existe plus dans output/.`)); return; }
-  openPanel("modal pub-modal", pubDetailHtml(c), (d) => {
+  pubDialog(pubDetailHtml(c), null, (d) => {
     $("[data-copy]", d).onclick = () => copyText(pubCaptionText(c), "Description et hashtags");
     const acc = $("[data-pub-account]", d);
-    if (acc) acc.onchange = async () => { if (acc.value && acc.value !== c.account) { closeLayer(); await pubSetAccount(c, acc.value); } };
+    if (acc) acc.onchange = async () => { if (acc.value && acc.value !== c.account) { pubCloseDialog(d); await pubSetAccount(c, acc.value); } };
     const retry = $("[data-retry]", d);
-    if (retry) retry.onclick = async () => { closeLayer(); await pubRetry(c); };
+    if (retry) retry.onclick = async () => { pubCloseDialog(d); await pubRetry(c); };
     const un = $("[data-unschedule]", d);
-    if (un) un.onclick = async () => { closeLayer(); await pubUnschedule(c); };
+    if (un) un.onclick = async () => { pubCloseDialog(d); await pubUnschedule(c); };
     const removed = $("[data-removed]", d);
-    if (removed) removed.onclick = async () => { closeLayer(); await pubMarkRemoved(c); };
+    if (removed) removed.onclick = async () => { pubCloseDialog(d); await pubMarkRemoved(c); };
     const pub = $("[data-published]", d);
-    if (pub) pub.onclick = async () => { closeLayer(); await pubMarkPublished(c); };
+    if (pub) pub.onclick = async () => { pubCloseDialog(d); await pubMarkPublished(c); };
     const now = $("[data-publish-now]", d);
-    if (now) now.onclick = () => { closeLayer(); setTimeout(() => pubOpenForm({ video_id: c.video_id, clip_id: c.clip_id }), 340); };
+    if (now) now.onclick = () => { pubCloseDialog(d); pubOpenForm({ video_id: c.video_id, clip_id: c.clip_id }); };
   });
 }
 
