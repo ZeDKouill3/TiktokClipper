@@ -5,7 +5,7 @@ slug: webcam-du-stream-trouv-e-par-p-riode-garde-fous
 title: Webcam du stream trouvée par période, garde-fous locaux, recalage et contrôle QA (succède à SPEC-4a9b)
 created: 2026-10-09T01:08:56Z
 author: nicoc@zedk_ordi
-status: accepted
+status: superseded
 scope:
   - clipper/reframe.py
   - clipper/render.py
@@ -21,7 +21,7 @@ verified:
   - by: nicoc@zedk_ordi
     at: 2026-10-09T01:09:01Z
 schema: 4
-version: 2
+version: 3
 ---
 
 ## Objet

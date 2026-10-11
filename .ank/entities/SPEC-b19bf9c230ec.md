@@ -5,7 +5,7 @@ slug: webcam-du-stream-trouv-e-par-p-riode-garde-fous
 title: Webcam du stream trouvée par période, garde-fous locaux (jamais contre Claude sur une période unique), recalage, panneau caméra à l'arrondi près, planches vidées au recalcul et contrôle QA (succède à SPEC-5b9a)
 created: 2026-10-11T00:02:15Z
 author: nicoc@zedk_ordi
-status: proposed
+status: accepted
 scope:
   - clipper/reframe.py
   - clipper/render.py
@@ -16,8 +16,12 @@ scope:
   - clipper/web/static/**
 references: [ADR-b16b71007578, ADR-fb9bcb1e98f5, ADR-ad2e562b1810, ADR-b1c17749b528, SPEC-6a867ae54f94]
 supersedes: SPEC-5b9abfb68bfb
+ratified: 272dd37babb7
+verified:
+  - by: nicoc@zedk_ordi
+    at: 2026-10-11T00:02:57Z
 schema: 4
-version: 1
+version: 2
 ---
 
 ## Changements par rapport à SPEC-5b9a
