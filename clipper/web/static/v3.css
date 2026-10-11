@@ -786,6 +786,56 @@ html[data-nav="rail"] .sidenav .nav-rail .i { transform: rotate(180deg); }
 .v3 .jr-empty { padding: 16px; border: 1px dashed var(--border-2); border-radius: var(--radius); color: var(--foreground-2); }
 .v3 { --jr-c0: #2f5fc8; --jr-c1: #1f8a4f; --jr-c2: #a87a00; --jr-c3: #8a3fd1; --jr-c4: #0c7f87; --jr-c5: #c23a6b; }
 .dark .v3 { --jr-c0: #7fa9ff; --jr-c1: #5cc98a; --jr-c2: #e8bd4a; --jr-c3: #c78bff; --jr-c4: #4fd1d9; --jr-c5: #ff9fb8; }
+/* ---------- Comptes v3 (E10, SPEC-7715 E10) : table, menu « … » (une ligne = 3 boutons au plus), tiroir d'édition ----------
+   Ex-accounts.css, fusionné ici : classes acc-* ; l'écran porte « v3 » au premier rendu. */
+#screen-accounts [data-body] { background: none; border: 0; box-shadow: none; padding: 0; }
+.v3 .acc-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+.v3 .acc-table { table-layout: auto; }
+.v3 .acc-table th { white-space: nowrap; }
+.v3 .acc-table td { white-space: normal; overflow: visible; text-overflow: clip; vertical-align: top; padding: 12px; }
+.v3 .acc-table td.acc-act { white-space: nowrap; }
+.v3 .acc-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.v3 .acc-line { font-size: 12.5px; color: var(--muted-foreground); margin-top: 4px; overflow-wrap: anywhere; }
+.v3 .acc-line.bad { color: var(--bad); }
+.v3 .acc-line.faint { color: var(--muted-foreground); opacity: .8; }
+.v3 .acc-table .mono { font-family: var(--font-mono); }
+.v3 .acc-pass { letter-spacing: 0.04em; }
+.v3 .acc-login, .v3 .acc-ready { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.v3 .acc-check { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--foreground-2); }
+.v3 .acc-ready .acc-line { margin-top: 0; }
+.v3 .acc-ready .chip { height: auto; min-height: 22px; max-width: 100%; white-space: normal; padding: 2px 8px; line-height: 1.35; }
+.v3 .acc-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: nowrap; }
+.v3 .acc-menu-wrap { position: relative; }
+.v3 .acc-menu-wrap .vmenu { display: flex; flex-direction: column; right: 0; left: auto; min-width: 230px; }
+.v3 .acc-menu-wrap .vmenu[hidden] { display: none; }
+.v3 .acc-menu-wrap .vmenu button { width: 100%; display: flex; align-items: center; gap: 8px; }
+.v3 .acc-menu-wrap .vmenu button.bad { color: var(--bad); }
+.v3 .acc-gen { margin-top: 24px; }
+.v3 .acc-gen-body { padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 16px; }
+.v3 .acc-gen-opts { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.v3 .acc-gen-length { width: 140px; }
+.v3 .acc-gen-length label { display: flex; flex-direction: column; gap: 6px; }
+.v3 .acc-gen-out { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.v3 .acc-gen-out .input { flex: 1 1 240px; min-width: 0; }
+.v3 .acc-gen-inline { display: flex; flex-direction: column; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.v3 .acc-form { display: flex; flex-direction: column; gap: 16px; }
+.v3 .acc-copied { color: var(--ok); }
+@media (max-width: 900px) {
+  .v3 .acc-table thead { display: none; }
+  .v3 .acc-table, .v3 .acc-table tbody { display: block; width: 100%; }
+  .v3 .acc-table tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border); }
+  .v3 .acc-table tbody tr:first-child { border-top: 0; }
+  .v3 .acc-table td { padding: 0; border: 0; min-width: 0; }
+  .v3 .acc-table td:first-child { grid-column: 1 / -1; }
+  .v3 .acc-table td[data-l]::before { content: attr(data-l); display: block; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted-foreground); margin-bottom: 4px; }
+  .v3 .acc-table td.acc-act { grid-column: 1 / -1; }
+  .v3 .acc-actions { justify-content: flex-start; flex-wrap: wrap; }
+  .v3 .acc-actions .btn { min-height: 44px; }
+  .v3 .acc-toolbar .btn { min-height: 44px; }
+  .v3 .acc-gen-body { padding: 16px; }
+  .v3 .acc-menu-wrap .vmenu { left: 0; right: auto; }
+}
+
 @media (max-width: 900px) {
   .v3 .jr { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .v3 .jr-list { max-height: 280px; }

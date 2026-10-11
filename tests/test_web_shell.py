@@ -31,6 +31,7 @@ MIGRATED = (
     "publish",
     "videos",
     "review",
+    "accounts",
 )
 STYLE_BLOCKS = tuple(n for n in ("dashboard", "videos", "review", "clips", "clip", "channels", "publish", "stats", "settings",
                                  "journal", "shared", "shell") if n not in MIGRATED)
@@ -107,7 +108,7 @@ def test_index_keeps_nav_tabbar_screen_sections_and_script_order():
     # feuilles : couche « legacy » déclarée avant Basecoat (ses @layer la dominent alors), style.css et les feuilles
     # d'écran importées dans cette couche, v3.css hors couche en dernier
     sheets = ["<style>@layer properties, theme, base, legacy, components, utilities;</style>", 'href="/static/vendor/basecoat.cdn.min.css"',
-              '@import url("/static/style.css") layer(legacy);', '@import url("/static/screens/accounts.css") layer(legacy);',
+              '@import url("/static/style.css") layer(legacy);',
               '@import url("/static/screens/veille.css") layer(legacy);', 'href="/static/v3.css"']
     offsets = [page.index(needle) for needle in sheets]
     assert offsets == sorted(offsets)
@@ -479,7 +480,7 @@ def test_legacy_layer_sits_between_basecoat_base_and_components():
     for name in layers:
         assert name in order, f"couche Basecoat {name} absente de la déclaration d'ordre"
     assert page.index("<style>@layer ") < page.index('href="/static/vendor/basecoat.cdn.min.css"')
-    for sheet in ("/static/style.css", "/static/screens/accounts.css", "/static/screens/veille.css"):
+    for sheet in ("/static/style.css", "/static/screens/veille.css"):
         assert f'@import url("{sheet}") layer(legacy);' in page, sheet
 
 
