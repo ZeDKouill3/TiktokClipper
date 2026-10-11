@@ -79,6 +79,28 @@ def _render_mp4(path, *, colors, seg, size, silence, audio):
     return path
 
 
+def _rendered_once(render):
+    """Meme cache que ``make_mp4`` pour les generateurs ffmpeg qui renvoient la
+    duree : rendu une fois par processus et par arguments, chaque appel recoit
+    une COPIE (TASK-a0226252101a)."""
+    cache: dict[str, tuple[Path, object]] = {}
+
+    def wrapper(path, **kwargs):
+        key = repr(sorted(kwargs.items()))
+        if key not in cache:
+            name = hashlib.sha1(f"{render.__name__}{key}".encode()).hexdigest()[:16]
+            source = _MP4_CACHE_DIR / f"{name}.mp4"
+            cache[key] = (source, render(source, **kwargs))
+        source, total = cache[key]
+        shutil.copyfile(source, path)
+        return total
+
+    wrapper.__name__ = render.__name__
+    wrapper.__doc__ = render.__doc__
+    return wrapper
+
+
+@_rendered_once
 def make_mp4_with_black(path, *, black_seconds, segment_seconds=1.0, size="1080x1920"):
     """Video synthetique : un plan rouge, une plage noire de ``black_seconds``,
     un plan rouge, avec audio continu (pas de silence)."""
@@ -112,6 +134,7 @@ def write_black_clip(output_dir, *, black_seconds, segment_seconds=1.0, clip_id=
 LETTERBOX_RECT = {"x": 0, "y": 440, "w": 1080, "h": 790}
 
 
+@_rendered_once
 def make_letterbox_mp4(path, *, black_seconds, segment_seconds=1.0, size="1080x1920", video_rect=LETTERBOX_RECT):
     """Video synthetique letterbox : fond blanc (encadre du titre d'ecran
     compris) sur tout le cadre, avec un rectangle rouge/noir/rouge dessine
@@ -1045,6 +1068,7 @@ SPLIT_WEBCAM = {"x": 0, "y": 100, "w": 1080, "h": 700}
 SPLIT_GAME = {"x": 0, "y": 900, "w": 1080, "h": 800}
 
 
+@_rendered_once
 def make_split_mp4(path, *, black_panel=None, black_seconds=3.5, segment_seconds=1.0, size="1080x1920"):
     """Fond blanc, deux panneaux rouges (webcam, jeu) ; le panneau nomme par
     ``black_panel`` ("webcam" | "game") passe au noir pendant ``black_seconds``."""
