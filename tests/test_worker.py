@@ -5152,6 +5152,17 @@ def test_clean_exit_of_the_spawned_worker_leaves_no_refusal_marker(tmp_path, mon
     assert worker.read_heartbeat(config)["state"] == "active"
 
 
+@pytest.mark.parametrize("code", [3221225786, -1073741510, 130, -2])
+def test_ctrl_c_exit_of_the_spawned_worker_is_not_a_refusal(tmp_path, monkeypatch, code):
+    # 11/10 : un Ctrl+C dans la console de serve (STATUS_CONTROL_C_EXIT) etait pris pour un refus
+    config = _config(tmp_path)
+    _orphan_beat(config, monkeypatch)
+
+    worker.watch_spawned(_ExitedProc(code), config).join(5)
+
+    assert worker.read_heartbeat(config)["state"] == "active"
+
+
 def test_a_worker_that_takes_the_place_lifts_the_refusal(tmp_path, monkeypatch):
     config = _config(tmp_path)
     _orphan_beat(config, monkeypatch)

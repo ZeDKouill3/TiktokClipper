@@ -107,13 +107,18 @@ def note_refused(config: Config, exit_code: int) -> None:
                     encoding="utf-8")
 
 
+# Codes de sortie d'un processus arrete par Ctrl+C : STATUS_CONTROL_C_EXIT (Windows, non signe et signe),
+# 130 et -2 (SIGINT ailleurs). Le 11/10 un Ctrl+C a laisse croire a un worker refuse (« orphelin »).
+_CTRL_C_EXIT_CODES = frozenset({3221225786, -1073741510, 130, -2})
+
+
 def watch_spawned(proc: Any, config: Config) -> threading.Thread:
     """Fil de ``serve`` : attend le worker enfant ; une sortie non nulle laisse le marqueur ``note_refused``.
     Une sortie normale (arrêt de ``serve``) n'écrit rien."""
     def _watch() -> None:
         try:
             code = proc.wait()
-            if code:
+            if code and code not in _CTRL_C_EXIT_CODES:  # Ctrl+C dans la console de serve : arret, pas un refus
                 note_refused(config, int(code))
                 log.error("le worker lancé par serve est sorti (code %s) : voir son message ci-dessus", code)
         except Exception:  # noqa: BLE001 - le fil de surveillance ne doit jamais tuer serve
