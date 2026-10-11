@@ -6,6 +6,7 @@ la version courante est lue dans pyproject.toml."""
 
 from __future__ import annotations
 
+import hashlib
 import re
 import tomllib
 from pathlib import Path
@@ -21,7 +22,34 @@ REPO_URL = "https://github.com/ZeDKouill3/TiktokClipper"
 
 # Identifiants, noms de personnes ou de chaines reels (research/, hors scope git) :
 # ne doivent jamais fuiter dans un artefact versionne.
-LEAKED_TOKENS = ("madajel", "7VaA8XUKrAY", "ivl0nxa3C7o", "ClaudeRandom", "nicoc", "C:\\Users")
+LEAKED_TOKENS = ("7VaA8XUKrAY", "ivl0nxa3C7o", "C:\\Users")
+
+# Mots sensibles (pseudo d'une chaine amie, nom d'utilisateur Windows, dossier perso) : seules leurs empreintes
+# sha256 (du mot en minuscules) sont ecrites ici, couples (longueur, empreinte) ; les mots ne figurent en clair
+# nulle part dans les fichiers suivis. Le texte controle est cherche par fenetres glissantes de ces longueurs.
+SENSITIVE_SHA256 = (
+    (7, "4da6a20ea297d6aff097b64dae3fbbe64823bf35a8b760abcd535041ba3bfe09"),
+    (5, "bbb6fa51708957e6b8f72b02fbc5cfca676c5f01b45fe9d05c18aa5efe753d05"),
+    (12, "01fcdb58b2507fe5cb747317f4066135797057de7971612e6db0992e41d7bb82"),
+)
+
+
+def sensitive_hits(text: str, hashes=None) -> list[str]:
+    """Une entree « mot sensible N a la position P » par fenetre du texte dont l'empreinte est dans la liste."""
+    pairs = SENSITIVE_SHA256 if hashes is None else hashes
+    lowered = text.lower()
+    hits = []
+    for number, (length, digest) in enumerate(pairs, start=1):
+        for start in range(len(lowered) - length + 1):
+            if hashlib.sha256(lowered[start:start + length].encode("utf-8")).hexdigest() == digest:
+                hits.append(f"mot sensible {number} a la position {start}")
+    return hits
+
+
+def test_sensitive_guard_detects_a_word_by_its_hash_and_ignores_clean_text():
+    probe = ((5, hashlib.sha256(b"zorgl").hexdigest()),)
+    assert sensitive_hits("un texte avec le mot ZoRgL au milieu", probe) == ["mot sensible 1 a la position 21"]
+    assert sensitive_hits("un texte propre", probe) == []
 
 
 def _read(path: Path) -> str:
@@ -203,6 +231,7 @@ def test_release_docs_leak_no_real_identifier(path):
     text = _read(path)
     for token in LEAKED_TOKENS:
         assert token not in text, f"{token!r} dans {path.name}"
+    assert not sensitive_hits(text), f"{path.name} : {sensitive_hits(text)}"
 
 
 def test_versions_marks_the_current_version_published_with_its_content():

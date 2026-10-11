@@ -5,6 +5,7 @@ CHANGELOG. Le contenu redactionnel fin se lit a l'oeil."""
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -13,6 +14,34 @@ INSTALLATION = ROOT / "docs" / "INSTALLATION.md"
 README = ROOT / "README.md"
 VERSIONS = ROOT / "docs" / "versions.md"
 CHANGELOG = ROOT / "CHANGELOG.md"
+
+# Mots sensibles (pseudo d'une chaine amie, nom d'utilisateur Windows, dossier perso) : seules leurs empreintes
+# sha256 (du mot en minuscules) sont ecrites ici, couples (longueur, empreinte) ; les mots ne figurent en clair
+# nulle part dans les fichiers suivis. Le texte controle est cherche par fenetres glissantes de ces longueurs.
+SENSITIVE_SHA256 = (
+    (7, "4da6a20ea297d6aff097b64dae3fbbe64823bf35a8b760abcd535041ba3bfe09"),
+    (5, "bbb6fa51708957e6b8f72b02fbc5cfca676c5f01b45fe9d05c18aa5efe753d05"),
+    (12, "01fcdb58b2507fe5cb747317f4066135797057de7971612e6db0992e41d7bb82"),
+)
+
+
+def sensitive_hits(text: str, hashes=None) -> list[str]:
+    """Une entree « mot sensible N a la position P » par fenetre du texte dont l'empreinte est dans la liste."""
+    pairs = SENSITIVE_SHA256 if hashes is None else hashes
+    lowered = text.lower()
+    hits = []
+    for number, (length, digest) in enumerate(pairs, start=1):
+        for start in range(len(lowered) - length + 1):
+            if hashlib.sha256(lowered[start:start + length].encode("utf-8")).hexdigest() == digest:
+                hits.append(f"mot sensible {number} a la position {start}")
+    return hits
+
+
+def test_sensitive_guard_detects_a_word_by_its_hash_and_ignores_clean_text():
+    probe = ((5, hashlib.sha256(b"zorgl").hexdigest()),)
+    assert sensitive_hits("un texte avec le mot ZoRgL au milieu", probe) == ["mot sensible 1 a la position 21"]
+    assert sensitive_hits("un texte propre", probe) == []
+
 
 REQUIRED_SECTIONS_IN_ORDER = [
     "## Prérequis",
@@ -81,9 +110,8 @@ def test_installation_doc_troubleshooting_section_covers_required_cases():
 
 
 def test_installation_doc_has_no_real_person_or_channel_name():
-    text = _text(INSTALLATION).lower()
-    for name in ("madajel", "nicoc"):
-        assert name not in text, f"nom interdit dans docs/INSTALLATION.md : {name!r}"
+    text = _text(INSTALLATION)
+    assert not sensitive_hits(text), f"docs/INSTALLATION.md : {sensitive_hits(text)}"
 
 
 def test_readme_has_no_dev_tools_installation_section_before_developer_one():

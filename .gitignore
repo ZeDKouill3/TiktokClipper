@@ -17,3 +17,7 @@ research/
 # Presets de chaîne de l'utilisateur (local, comme config.toml)
 presets/
 Clipper.lnk
+
+# Sorties de build de l'installeur portable (uv build, tools/build_portable.py)
+build/
+dist/

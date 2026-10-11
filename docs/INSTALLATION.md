@@ -110,9 +110,9 @@ cache.
 
 ## Diagnostic : clipper doctor
 
-En cas de doute, lance `clipper doctor` dans un terminal ouvert dans ton
-dossier de données (`Documents\Clipper` par défaut). Il affiche
-une ligne par point vérifié (Python, ffmpeg, Claude et sa connexion, Chrome,
+En cas de doute, relance `Installer.bat` (double-clic, sans rien perdre) :
+sa dernière étape lance `clipper doctor` et affiche le rapport à l'écran, une
+ligne par point vérifié (Python, ffmpeg, Claude et sa connexion, Chrome,
 GPU, modèles, configuration, dossiers de données) et dit précisément ce qui
 manque.
 

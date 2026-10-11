@@ -46,10 +46,6 @@ if (-not (Test-Command "claude")) {
     Fail "Claude Code CLI ('claude') introuvable dans le PATH (backend LLM par defaut, ADR-b1c1)."
 }
 
-if (-not (Test-Command "ank")) {
-    Fail "ank introuvable dans le PATH (necessaire pour claim/log/done sur les taches de ce depot)."
-}
-
 if (Test-Command "nvidia-smi") {
     Write-Host "[setup] GPU NVIDIA detecte :"
     & nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
@@ -70,6 +66,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $env:Path = "$RepoRoot\.venv\Scripts;" + $env:Path
+
+if (-not (Test-Command "ank")) {
+    Write-Host "[setup] Avertissement : ank introuvable dans le PATH. Il n'est utile qu'aux agents (claim/log/done sur les taches de ce depot), pas pour utiliser clipper ; installe-le depuis https://github.com/haksolot/ank (binaire de release) si tu travailles sur les taches."
+}
 
 Write-Host "[setup] Verification des imports..."
 & python -c "import clipper; import fastapi; import uvicorn; import faster_whisper; import mediapipe; import scenedetect"
