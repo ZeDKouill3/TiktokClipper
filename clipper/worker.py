@@ -702,6 +702,7 @@ class Worker:
         *,
         config: Config | None = None,
         config_path: str | Path = "config.toml",
+        config_base: str | Path | None = None,
         spawner: Callable[[list[str]], Any] | None = None,
         watch_lister: Callable[[str], list[dict[str, Any]]] | None = None,
         publisher: Callable[..., dict[str, Any]] | None = None,
@@ -719,6 +720,7 @@ class Worker:
             self._popen = subprocess.Popen
         self.config = config or load_config()
         self._config_path = Path(config_path)
+        self._config_base = Path(config_base) if config_base is not None else None  # --config X : base config.toml
         self._config_mtime_ns = self._stat_config_mtime()  # reference : la config deja chargee
         self._repartition_config = self.config  # relue si config.toml change (plan du soir sans redemarrage)
         self.spawner = spawner
@@ -1118,18 +1120,20 @@ class Worker:
                 self._logged_learning_errors.add(message)
                 log.error("apprentissage impossible : %s", message)
 
-    def _stat_config_mtime(self) -> int | None:
+    def _stat_config_mtime(self) -> tuple[int, ...] | None:
+        """mtime du fichier charge et de sa base ; ``None`` si l'un des deux est illisible (rien a comparer)."""
+        paths = [self._config_path] + ([self._config_base] if self._config_base is not None else [])
         try:
-            return self._config_path.stat().st_mtime_ns
+            return tuple(p.stat().st_mtime_ns for p in paths)
         except OSError:
             return None
 
     def _reloaded_repartition_config(self) -> Config:
-        """Config du plan du soir : ``config.toml`` relu quand son mtime change (une erreur de lecture remonte,
-        la reference n'avance pas : le prochain tour retente, ADR-ad2e)."""
+        """Config du plan du soir : le fichier reellement charge (et sa base) relu quand un mtime change (une
+        erreur de lecture remonte, la reference n'avance pas : le prochain tour retente, ADR-ad2e)."""
         mtime = self._stat_config_mtime()
         if mtime is not None and mtime != self._config_mtime_ns:
-            self._repartition_config = load_config(self._config_path)
+            self._repartition_config = load_config(self._config_path, base=self._config_base)
             self._config_mtime_ns = mtime
         return self._repartition_config
 
