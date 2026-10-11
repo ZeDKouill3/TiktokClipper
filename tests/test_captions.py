@@ -1548,3 +1548,100 @@ def test_valid_title_repair_attempts_is_accepted(workspace, tmp_path, value):
 
     assert len(fake.calls) == 1
     assert by_id(read_captions(workspace), "00")["title"] == "Titre choc"
+
+
+# --------------------------------------------------------------------------
+# Termes a risque de moderation TikTok (TASK-bb165541918f)
+# --------------------------------------------------------------------------
+
+
+def _single(workspace):
+    write_moments(workspace, moment(0))
+    write_parts(workspace, parts_record(0, "single", 1, [part(1, 0.0, 3.9)]))
+
+
+def test_moderation_risk_terms_default_list():
+    from clipper.captions import CONFIG_DEFAULTS
+
+    terms = CONFIG_DEFAULTS["moderation_risk_terms"]
+    for expected in ("ban", "bannissement", "triche", "cheat", "hack", "macro", "exploit", "bot", "contourner"):
+        assert expected in terms
+
+
+def test_hashtag_with_a_risk_term_is_refused_then_a_clean_answer_is_accepted(workspace, tmp_path):
+    _single(workspace)
+
+    fake, _ = run(workspace, make_config(tmp_path),
+                  [answer(hashtags=["#Ban", "#jeu"]), answer(hashtags=["#jeu", "#drole"])])
+
+    assert "#Ban" in fake.calls[1].prompt
+    assert by_id(read_captions(workspace), "00")["hashtags"] == ["#jeu", "#drole"]
+
+
+def test_caption_with_a_risk_term_is_refused_then_repaired(workspace, tmp_path):
+    _single(workspace)
+
+    fake, _ = run(workspace, make_config(tmp_path),
+                  [answer(caption="Les bannissements arrivent."), answer(caption="Il explique sa methode.")])
+
+    assert "bannissements" in fake.calls[1].prompt
+    assert by_id(read_captions(workspace), "00")["caption"] == "Il explique sa methode."
+
+
+@pytest.mark.parametrize("caption", [
+    "Il evite les MACROS.", "Un joueur BANNI hier.", "Des logiciels externes interdits.",
+    "Un logiciel tiers est present.", "Il a ete BANNÎ hier.", "Il veut contourner la regle.",
+])
+def test_risk_terms_match_case_and_accent_insensitive_whole_words(workspace, tmp_path, caption):
+    _single(workspace)
+
+    with pytest.raises(llm.SchemaError, match="moderation"):
+        run(workspace, make_config(tmp_path), [answer(caption=caption)] * 4)
+
+
+def test_risk_terms_are_whole_words_only(workspace, tmp_path):
+    _single(workspace)
+
+    run(workspace, make_config(tmp_path),
+        [answer(caption="Une bande de banquiers et un abandon.", hashtags=["#bandit", "#botanique"])])
+
+    assert by_id(read_captions(workspace), "00")["hashtags"] == ["#bandit", "#botanique"]
+
+
+def test_persistent_risk_term_fails_without_silent_replacement(workspace, tmp_path):
+    _single(workspace)
+
+    with pytest.raises(llm.SchemaError, match="moderation"):
+        run(workspace, make_config(tmp_path), [answer(hashtags=["#Ban"])] * 6)
+    assert not (workspace / VIDEO_ID / "captions.json").exists()
+
+
+def test_risk_terms_list_is_configurable(workspace, tmp_path):
+    _single(workspace)
+
+    run(workspace, make_config(tmp_path, moderation_risk_terms=["pomme"]),
+        [answer(caption="Il evite les macros.", hashtags=["#Ban"])])
+    assert by_id(read_captions(workspace), "00")["hashtags"] == ["#Ban"]
+
+
+def test_custom_risk_term_is_refused(workspace, tmp_path):
+    _single(workspace)
+
+    with pytest.raises(llm.SchemaError, match="moderation"):
+        run(workspace, make_config(tmp_path, moderation_risk_terms=["pomme"]),
+            [answer(caption="Une pomme rouge.")] * 6)
+
+
+def test_screen_title_is_not_checked_for_risk_terms(workspace, tmp_path):
+    _single(workspace)
+
+    run(workspace, make_config(tmp_path), [answer(screen_title="Pas de macros ici")])
+    assert by_id(read_captions(workspace), "00")["screen_title"] == "Pas de macros ici"
+
+
+def test_prompt_asks_to_avoid_risk_terms_and_their_hashtags(workspace, tmp_path):
+    _single(workspace)
+
+    fake, _ = run(workspace, make_config(tmp_path), [answer()])
+
+    assert "bannissement" in fake.calls[0].prompt and "macro" in fake.calls[0].prompt

@@ -130,6 +130,22 @@ CONFIG_DEFAULTS: dict[str, object] = {
     # servant de metadonnee de recherche TikTok. A false, consigne strictement
     # identique a celle d'avant ce reglage.
     "caption_keywords_first": True,
+    # Moderation TikTok : un clip a ete restreint aux plus de 18 ans a cause de
+    # termes lies a la triche ou aux sanctions dans la legende et les
+    # hashtags. Insensible a la casse et aux accents, mot entier (une entree
+    # de plusieurs mots est une suite de mots). Une reponse qui en contient
+    # est renvoyee au modele, jamais corrigee en silence. Le titre d'ecran
+    # n'est pas concerne.
+    "moderation_risk_terms": [
+        "ban", "bans", "bannissement", "bannissements",
+        "banni", "bannie", "bannis", "bannies",
+        "triche", "tricher", "tricheur", "tricheurs", "tricheuse", "tricheuses",
+        "cheat", "cheats", "cheater", "cheaters", "cheating",
+        "hack", "hacks", "hacker", "hackers", "hacking",
+        "macro", "macros", "exploit", "exploits", "bot", "bots",
+        "contourner",
+        "logiciel tiers", "logiciels tiers", "logiciel externe", "logiciels externes",
+    ],
 }
 
 _EDGE = 0.1
@@ -341,6 +357,12 @@ def _prompt(
         "hashtags : chacun commence par #, jamais deux fois le meme, pertinents pour ce clip precis "
         f"(pas de generique inutile), {int(settings['hashtags_max'])} au plus."
     )
+    risk_terms = ", ".join(str(t) for t in settings["moderation_risk_terms"])
+    if risk_terms:
+        rules.append(
+            "moderation TikTok : la caption et les hashtags n'emploient jamais ces termes "
+            f"(ni un hashtag qui les reprend) : {risk_terms} ; reformule autrement."
+        )
     rules.append(
         f"hook_text : le texte affiche a l'ecran des le debut, viser "
         f"{_words_target(settings, 'hook_words_target', 'hook_words_max')} mots "
@@ -568,6 +590,28 @@ def _validate_screen_title_forbidden_words(screen_title: str, forbidden_words: l
             )
 
 
+def _normalized_words(text: str) -> list[str]:
+    return [_normalize_word(w) for w in re.findall(r"[^\W_]+", text, re.UNICODE)]
+
+
+def _validate_moderation_risk_terms(answer: dict[str, Any], risk_terms: list[str]) -> None:
+    """Caption et hashtags sans terme a risque de moderation TikTok : mot
+    entier (ou suite de mots), insensible a la casse et aux accents, le # d'un
+    hashtag etant ignore. Le titre d'ecran n'est pas controle."""
+    terms = [t for t in (_normalized_words(str(term)) for term in risk_terms) if t]
+    fields = [("caption", answer["caption"])] + [("hashtag", tag) for tag in answer["hashtags"]]
+    for name, text in fields:
+        words = _normalized_words(text)
+        for term in terms:
+            n = len(term)
+            if any(words[i:i + n] == term for i in range(len(words) - n + 1)):
+                raise llm.SchemaError(
+                    f"{name} contient un terme a risque de moderation TikTok "
+                    f"({' '.join(term)!r}) : {text!r} ; reformule sans ce terme "
+                    "ni hashtag equivalent"
+                )
+
+
 def _validate_screen_title(
     screen_title: str, max_words: int, forbidden_words: list[str], allow_emoji: bool,
     target_words: int | None = None,
@@ -592,6 +636,7 @@ def _check_answer(
     require_screen_title: bool = True,
     hook_words_target: int | None = None,
     screen_title_words_target: int | None = None,
+    moderation_risk_terms: list[str] | None = None,
 ):
     """Controle passe a llm.ask : ce qui le refuse est renvoye au modele
     pour correction, comme une reponse hors schema. ``require_screen_title``
@@ -600,6 +645,7 @@ def _check_answer(
 
     def check(answer: dict[str, Any]) -> None:
         _validate_hashtags(answer["hashtags"])
+        _validate_moderation_risk_terms(answer, moderation_risk_terms or [])
         _validate_hook_text(answer["hook_text"], hook_words_max, hook_words_target)
         _validate_sober_text_emoji(answer["caption"], "caption", caption_allow_emoji)
         _validate_sober_text_emoji(answer["hook_text"], "hook_text", caption_allow_emoji)
@@ -720,6 +766,7 @@ def _process_moment(
             hook_words_target=_words_target(settings, "hook_words_target", "hook_words_max"),
             screen_title_words_target=_words_target(
                 settings, "screen_title_words_target", "screen_title_words_max"),
+            moderation_risk_terms=list(settings["moderation_risk_terms"]),
         )
         text = _part_text(transcript, part["start"], part["end"])
         prompt = _prompt(language, video_title, source, part, parts_total, text, settings,
