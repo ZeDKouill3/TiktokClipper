@@ -117,9 +117,10 @@ Liste régénérée depuis `ank find --type adr --status accepted` et `ank find 
   jaquettes affichées par URL directe `images.igdb.com`, jamais stockées.
 - **ADR-05a4** — veille : Steam officiel (joueurs simultanés, joueurs par
   appid, abonnés via la page XML publique), plafonné et espacé.
-- **ADR-6e21** — veille : historique de tendance sur 30 jours pour tout jeu
+- **ADR-f29e** — veille : historique de tendance sur 30 jours pour tout jeu
   retenu (avis Steam, VOD Twitch sur un mois), relevés propres, rien d'estimé,
-  relevé dans un fil du worker qui ne bloque jamais la boucle.
+  relevé dans un fil du worker qui ne bloque jamais la boucle ; test d'accès
+  Twitch en parallèle borné (`twitch_access_workers`). Succède à ADR-6e21.
 - **ADR-1a58** — publication et statistiques TikTok par pilotage d'un vrai
   navigateur (Playwright, profils persistants), en attendant l'API officielle.
 - **ADR-58c0** — publication et statistiques YouTube (Shorts) par pilotage
@@ -131,12 +132,13 @@ Liste régénérée depuis `ank find --type adr --status accepted` et `ank find 
   emoji ni superlatif par défaut. Succède à SPEC-6a47 (reprise à l'identique
   pour le reste : format letterbox par défaut, `.mp4` + `.json` sidecar,
   appel à l'abonnement désactivé par défaut).
-- **SPEC-5b9a** — webcam du stream trouvée par période (rectangles candidats
+- **SPEC-b19b** — webcam du stream trouvée par période (rectangles candidats
   numérotés choisis par Claude, garde-fous locaux journalisés, recalage),
   visage exigé par clip sans bords réels, `empty_webcam` bloquant en
   `stream_split` ; reprend l'agencement `split` (webcam en haut, jeu en bas,
-  badge optionnel, sous-titres réglables). Succède à SPEC-4a9b (elle-même
-  successeur de SPEC-76dc).
+  badge optionnel, sous-titres réglables) ; sur une période unique, jamais de
+  garde-fou contre la réponse de Claude. Succède à SPEC-5b9a (lignée
+  SPEC-4a9b, SPEC-76dc).
 - **SPEC-4063** — grille de notation des moments v4 (plafond souple par heure
   avec plancher `min_moments_cap`). Succède à SPEC-53f3.
 - **SPEC-9216** — grille gaming embarquée (`builtin:gaming`), choisie par
@@ -145,9 +147,9 @@ Liste régénérée depuis `ank find --type adr --status accepted` et `ank find 
   seuil éliminatoire) et candidats d'action par passages, choisis par style.
 - **SPEC-73d0** — jury : chaque juge donne sa confiance par moment, prise en
   compte dans le débat et l'agrégation.
-- **SPEC-00db** — boucle d'apprentissage : rattachement post→clip après
-  relevé, métrique à maturité, recalibrage automatique, coach validé dans
-  l'interface.
+- **SPEC-040f** — boucle d'apprentissage : rattachement post→clip après
+  relevé (couples symétriques, posts supprimés exclus), métrique à maturité,
+  recalibrage automatique, coach validé dans l'interface. Succède à SPEC-00db.
 - **SPEC-1ed3** — publication pilotée depuis l'écran Publication : choisir le
   clip, le compte, maintenant ou programmé, et tous les réglages.
 - **SPEC-6076** — TikTok par navigateur v2 : aucun compte dans un preset, le
@@ -163,16 +165,17 @@ Liste régénérée depuis `ank find --type adr --status accepted` et `ank find 
 - **SPEC-f348** — comptes = comptes de publication : connexion vérifiée,
   « prêt à publier » automatique, pause manuelle d'un compte, compte choisi
   par publication.
-- **SPEC-74e9** — modèle de données de la console v2 : chaînes, file de
-  traitement, publication, surveillance, état vidéo étendu.
+- **SPEC-1548** — modèle de données de la console v2 : chaînes, file de
+  traitement (un seul worker, reprises par la file), publication, surveillance,
+  état vidéo étendu. Succède à SPEC-74e9.
 - **SPEC-c100** — règles de l'interface de gestion v2 : écrans, actions,
   erreurs visibles, temps réel, raccourcis, accès.
 - **SPEC-bdd9** — veille : réglages `[veille]`, fichiers sous `state/veille/`,
   sources, candidats, choix de Claude, actions Clipper/Ignorer, meilleurs
   clips du jour archivés, écran Veille.
-- **SPEC-85a0** — veille : historique de tendance sur 30 jours, séries à
-  trous jamais estimées, test d'accès Twitch par jeu, relevé dans un fil du
-  worker avec échéance globale.
+- **SPEC-8797** — veille : historique de tendance sur 30 jours, séries à
+  trous jamais estimées, test d'accès Twitch par jeu (parallèle borné), relevé
+  dans un fil du worker avec échéance globale. Succède à SPEC-85a0.
 - **SPEC-8a45** — veille : un relevé rejoué le même jour remplace la liste des
   propositions du jour, décidées comprises.
 - **SPEC-df51** — veille : calendrier des sorties de jeux (IGDB, J-15..J+14),
