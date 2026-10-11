@@ -142,7 +142,7 @@ CONFIG_DEFAULTS: dict[str, object] = {
         "triche", "tricher", "tricheur", "tricheurs", "tricheuse", "tricheuses",
         "cheat", "cheats", "cheater", "cheaters", "cheating",
         "hack", "hacks", "hacker", "hackers", "hacking",
-        "macro", "macros", "exploit", "exploits", "bot", "bots",
+        "macro", "macros", "exploit", "exploits",
         "contourner",
         "logiciel tiers", "logiciels tiers", "logiciel externe", "logiciels externes",
     ],

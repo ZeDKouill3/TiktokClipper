@@ -1564,8 +1564,9 @@ def test_moderation_risk_terms_default_list():
     from clipper.captions import CONFIG_DEFAULTS
 
     terms = CONFIG_DEFAULTS["moderation_risk_terms"]
-    for expected in ("ban", "bannissement", "triche", "cheat", "hack", "macro", "exploit", "bot", "contourner"):
+    for expected in ("ban", "bannissement", "triche", "cheat", "hack", "macro", "exploit", "contourner"):
         assert expected in terms
+    assert "bot" not in terms  # « bot » = voie du bas en LoL, trop courant
 
 
 def test_hashtag_with_a_risk_term_is_refused_then_a_clean_answer_is_accepted(workspace, tmp_path):
