@@ -25,7 +25,7 @@ vrai modèle ou du vrai Claude est un test optionnel, sauté par défaut via
 explicitement, ex. `CLIPPER_CLAUDE_INTEGRATION=1`, `CLIPPER_REAL_MODELS=1`) —
 jamais lancé en CI ni par défaut en local.
 
-Test réel de l'installeur portable (SPEC-38f7 R9) : construit le vrai zip,
+Test réel de l'installeur portable (SPEC-54ed R9) : construit le vrai zip,
 l'installe en CPU dans un dossier temporaire sous `research/installer-real/`
 (jamais `%LOCALAPPDATA%\Clipper` ni le Bureau), vérifie `clipper doctor`, une
 mise à jour, puis la désinstallation complète. Plusieurs minutes et ~700 Mo
@@ -85,7 +85,7 @@ Liste régénérée depuis `ank find --type adr --status accepted` et `ank find 
   exception, une liste fermée de fonctions pures de validation de config des
   étapes (`moments.resolve_rubric_path`, `reframe._settings`,
   `render.check_cta_handle_gap`...). Succède à ADR-09ad.
-- **ADR-e1da** / **SPEC-38f7** — installeur portable Windows : zip
+- **ADR-e1da** / **SPEC-54ed** (succède à SPEC-38f7) — installeur portable Windows : zip
   d'amorçage (`uv.exe` + wheel + `installer/`) construit par
   `tools/build_portable.py` ; programme sous `%LOCALAPPDATA%\Clipper\app`
   (jetable, refait à chaque mise à jour), données sous `Documents\Clipper`
