@@ -510,7 +510,7 @@ html[data-nav="rail"] .sidenav .nav-rail .i { transform: rotate(180deg); }
 .v3 .pub-nav { display: inline-flex; align-items: center; gap: 4px; }
 .v3 .pub-range { font-size: 14px; min-width: 10ch; text-align: center; }
 .v3 .pub-subbar { margin-bottom: 12px; font-size: 12px; color: var(--muted-foreground); }
-.v3 .legend { display: flex; gap: 14px; align-items: center; }
+.v3 .legend { display: flex; gap: 14px; align-items: center; color: var(--foreground-2); }.v3 .legend span { color: var(--foreground-2); opacity: 1; }
 .v3 .legend i.pub-leg { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
 .v3 .pub-leg.info { background: var(--info); } .v3 .pub-leg.ok { background: var(--ok); } .v3 .pub-leg.bad { background: var(--bad); }
 .v3 .cal-wrap { overflow-x: auto; }
@@ -600,6 +600,11 @@ html[data-nav="rail"] .sidenav .nav-rail .i { transform: rotate(180deg); }
 .v3 .pub-row .mini-clip { width: 32px; }
 /* Dialogues « Nouvelle publication », « Série » et fiche d'un post */
 .v3 .dialog > [data-size="lg"] section { max-height: min(70dvh, 640px); }
+.v3 .pub-dialog section { grid-template-columns: minmax(0, 1fr); }
+.v3 .pub-dialog .field, .v3 .pub-dialog .stack { min-width: 0; }
+.v3 .pub-dialog .input, .v3 .pub-dialog .pubf-clips, .v3 .pub-dialog textarea { max-width: 100%; min-width: 0; box-sizing: border-box; }
+.v3 .pub-dialog .row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+.v3 .pub-dialog .row .input { width: auto; flex: 1 1 140px; }
 .v3 .pub-dialog .choices { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
 .v3 .pub-dialog .choices label, .v3 .pub-dialog .check { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; }
 .v3 .pub-dialog .hint { font-size: 12px; color: var(--muted-foreground); }
