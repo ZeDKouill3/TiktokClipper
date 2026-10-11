@@ -5,7 +5,7 @@ slug: download-un-fichier-jug-incomplet-est-ret-l-char
 title: "Download : un fichier jugé incomplet est retéléchargé, message juste"
 created: 2026-10-11T00:54:30Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/download.py
   - clipper/pipeline.py
@@ -17,6 +17,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: diagnose
+proof:
+  - type: test
+    ref: local/e97348e6a5e0@c2c5913
+    tree: scope/335eff35fe58
+    criteria: 09f5e7d946e3
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
