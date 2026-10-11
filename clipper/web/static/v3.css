@@ -809,3 +809,136 @@ html[data-nav="rail"] .sidenav .nav-rail .i { transform: rotate(180deg); }
   .v3 .vlog tr { display: grid; grid-template-columns: auto auto 1fr; gap: 2px 10px; }
   .v3 .vlog td:last-child { grid-column: 1 / -1; }
 }
+
+/* >>> channels */
+/* ---------- Styles (U9) : liste, formulaire par sections, aperçu des sous-titres, éditeurs d'agencement ----------
+   Jetons v3 seulement. Le libellé français porte la ligne, la clé technique reste en mono discret. */
+#screen-channels [data-body] { background: none; border: 0; box-shadow: none; padding: 0; }
+.v3 .vmenu[hidden] { display: none; }
+.v3 .vmenu button { display: flex; align-items: center; gap: 8px; }
+.v3 .vmenu button.danger { color: var(--bad); }
+.v3 .field-error { font-size: 12px; color: var(--bad); }
+.v3 .field-error:empty { display: none; }
+.v3 .hint { display: block; font-size: 12px; color: var(--muted-foreground); max-width: 70ch; }
+.v3 .channels { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+.v3 .ch-card { display: flex; flex-direction: column; gap: 12px; padding: 16px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: none; }
+.v3 .ch-avatar { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: var(--primary); color: var(--primary-foreground); font: 600 20px var(--font-display); }
+.v3 .ch-body { display: flex; flex-direction: column; gap: 12px; flex: 1; min-width: 0; }
+.v3 .ch-name { font-size: 16px; font-weight: 600; line-height: 1.2; }
+.v3 .ch-handle { font-size: 12px; color: var(--muted-foreground); margin-top: 2px; }
+.v3 .ch-props { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 13px; margin: 0; }
+.v3 .ch-props dt { color: var(--muted-foreground); }
+.v3 .ch-props dd { margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.v3 .ch-actions { display: flex; flex-direction: column; gap: 8px; }
+.v3 .ch-actions .btn { justify-content: flex-start; }
+.v3 .ch-foot { display: flex; gap: 8px; margin-top: auto; }
+.v3 .chan-url { overflow-wrap: anywhere; }
+.v3 .chan-edit > .toolbar { position: sticky; top: var(--topbar, 52px); z-index: 5; margin: 0 0 16px; padding: 8px 0; background: var(--background); }
+.v3 .chan-title { font-size: 20px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.v3 .chan-intro { margin: 0 0 16px; font-size: 13px; max-width: 70ch; }
+.v3 .chan-sections { display: flex; flex-direction: column; gap: 16px; }
+.v3 .chan-sec { padding: 0; overflow: hidden; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: none; }
+.v3 .chan-sec > summary { display: flex; align-items: center; gap: 16px; padding: 16px 24px; cursor: pointer; list-style: none; }
+.v3 .chan-sec > summary::-webkit-details-marker { display: none; }
+.v3 .chan-sec > summary > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.v3 .chan-sec > summary h3 { font-size: 15px; }
+.v3 .chan-sec[open] > summary { border-bottom: 1px solid var(--border); }
+.v3 .chan-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px 24px; padding: 20px 24px; }
+.v3 .chan-more > summary { padding: 12px 24px; cursor: pointer; font-size: 13px; color: var(--muted-foreground); border-top: 1px solid var(--border); }
+.v3 .chan-head { display: flex; align-items: baseline; gap: 8px; min-height: 28px; flex-wrap: wrap; }
+.v3 .chan-head label { font-size: 13px; font-weight: 500; color: var(--foreground); }
+.v3 .chan-key { font-size: 11px; color: var(--muted-foreground); }
+.v3 .chan-origin { font-size: 12px; color: var(--muted-foreground); }
+.v3 .chan-field.inherited .input, .v3 .chan-field.inherited [role="switch"] { opacity: .55; }
+.v3 .chan-field.inherited .input { color: var(--muted-foreground); background: var(--muted); }
+.v3 .chan-field.invalid .input { border-color: var(--bad); }
+.v3 .chan-field .input:disabled { cursor: not-allowed; }
+.v3 .chan-field.direct .chan-head { margin-bottom: 4px; }
+.v3 .chan-field .input { width: 100%; }
+.v3 .chan-sec-error { padding: 12px 24px 0; }
+.v3 .chan-json { height: auto; min-height: 44px; padding: 8px 12px; resize: vertical; }
+.v3 .chan-logo { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.v3 .chan-rubric { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+.v3 .chan-rubric [hidden] { display: none; }
+.v3 .chan-help { margin-top: 2px; }
+.v3 .chan-help > summary { cursor: pointer; font-size: 12px; color: var(--muted-foreground); }
+.v3 .chan-help > p { margin: 4px 0 0; }
+.v3 .chan-models { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; }
+.v3 .chan-models legend { font-size: 13px; font-weight: 500; padding: 0; margin-bottom: 8px; }
+.v3 .chan-model { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
+.v3 .chan-model:has(input:checked) { border-color: var(--primary); }
+.v3 .chan-model input { margin-top: 3px; }
+.v3 .chan-preview { display: grid; grid-template-columns: minmax(140px, 220px) 1fr; gap: 24px; padding: 0 24px 16px; align-items: start; }
+.v3 .chan-preview-frame { position: relative; aspect-ratio: 9 / 16; border-radius: var(--radius-lg); overflow: hidden; background: var(--muted); border: 1px solid var(--border); display: grid; place-items: center; }
+.v3 .chan-preview-frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.v3 .chan-preview-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.v3 .chan-preview.invalid .chan-preview-frame { opacity: .45; }
+/* Éditeurs d'agencement stream split (TASK-525f) et letterbox (TASK-3be3) : la scène 1080x1920 garde ses couleurs fixes */
+.v3 .ly-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; align-items: start; }
+.v3 .ly-main { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); }
+.v3 .ly-tools { display: flex; gap: 8px 16px; flex-wrap: wrap; justify-content: center; font-size: 13px; max-width: 100%; }
+.v3 .ly-check { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; cursor: pointer; }
+.v3 .ly-check input { flex: none; width: 16px; height: 16px; }
+.v3 .ly-outer { position: relative; flex: none; overflow: hidden; border-radius: 10px; box-shadow: 0 0 0 1px var(--border-2); }
+.v3 .ly-stage { position: absolute; left: 0; top: 0; width: 1080px; height: 1920px; transform-origin: top left; background: #000; overflow: hidden; }
+.v3 .ly-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scale(1.15); filter: blur(28px) brightness(.6); }
+.v3 .ly-zone { position: absolute; outline: 2px dashed rgba(255, 255, 255, .4); outline-offset: -2px; cursor: move; user-select: none; touch-action: none; transition: outline-color 160ms ease; }
+.v3 .ly-zone.sel { outline: 4px solid var(--primary); outline-offset: -4px; }
+.v3 .ly-z-badge, .v3 .ly-z-subs { z-index: 3; }
+.v3 .ly-zone.off { display: none; }
+.v3 .ly-values.off { opacity: .55; }
+.v3 .ly-crop { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.v3 .ly-fill { position: absolute; inset: 0; background: #333; }
+.v3 .ly-z-cam .ly-fill { background: #2b2b3a; }
+.v3 .ly-badge { position: absolute; inset: 0; display: flex; border-radius: 10px; overflow: hidden; background: #000; }
+.v3 .ly-badge-ico { height: 100%; aspect-ratio: 1; display: grid; place-items: center; background: #9658ff; color: #fff; }
+.v3 .ly-badge-ico svg { width: 55%; height: 55%; }
+.v3 .ly-badge-nm { flex: 1; display: grid; place-items: center; color: #fff; font: 800 40px var(--font-sans); }
+.v3 .ly-subs { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: #fff; font: 800 64px var(--font-sans); line-height: 1.05; text-shadow: 0 0 6px #000, 0 0 6px #000, 3px 3px 0 #000, -3px -3px 0 #000; pointer-events: none; }
+.v3 .ly-tag { position: absolute; left: 0; top: 0; transform: translateY(-100%); padding: 4px 12px; border-radius: 8px 8px 0 0; background: var(--primary); color: var(--primary-foreground); font: 600 28px var(--font-sans); white-space: nowrap; opacity: 0; transition: opacity 160ms ease; z-index: 5; }
+.v3 .ly-zone.sel .ly-tag { opacity: 1; }
+.v3 .ly-hdl { position: absolute; width: 44px; height: 44px; border: 4px solid #111; border-radius: 10px; background: var(--primary); opacity: 0; transition: opacity 160ms ease; z-index: 5; touch-action: none; }
+.v3 .ly-zone.sel .ly-hdl { opacity: 1; }
+.v3 .ly-hdl.nw { left: -22px; top: -22px; cursor: nwse-resize; } .v3 .ly-hdl.ne { right: -22px; top: -22px; cursor: nesw-resize; }
+.v3 .ly-hdl.sw { left: -22px; bottom: -22px; cursor: nesw-resize; } .v3 .ly-hdl.se { right: -22px; bottom: -22px; cursor: nwse-resize; }
+.v3 .ly-safe { position: absolute; border: 6px dashed rgba(255, 90, 80, .8); pointer-events: none; z-index: 6; opacity: 0; transition: opacity 200ms ease; }
+.v3 .ly-safe.show { opacity: 1; }
+.v3 .ly-guide { position: absolute; top: 0; bottom: 0; left: 540px; border-left: 4px dashed #ffd84a; pointer-events: none; z-index: 7; opacity: 0; transition: opacity 120ms ease; }
+.v3 .ly-guide.show { opacity: 1; }
+.v3 .ly-note { font-size: 12px; margin: 0; text-align: center; }
+.v3 .ly-side { display: flex; flex-direction: column; gap: 12px; position: sticky; top: calc(var(--topbar, 52px) + 24px); }
+.v3 .ly-values { display: flex; flex-direction: column; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); }
+.v3 .ly-values.sel { border-color: var(--primary); background: var(--primary-soft); }
+.v3 .ly-values-head { display: flex; align-items: center; gap: 8px; min-height: 32px; text-align: left; font-size: 14px; }
+.v3 .ly-values-head .mono { margin-left: auto; font-size: 11px; }
+.v3 .ly-coords { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.v3 .ly-coords label { display: flex; flex-direction: column; gap: 4px; font: 11px var(--font-mono); text-transform: uppercase; color: var(--muted-foreground); }
+.v3 .ly-coords .input { height: 36px; padding: 0 4px; text-align: center; width: 100%; font-family: var(--font-mono); font-size: 13px; }
+.v3 .ly-dirty { font-size: 13px; }
+.v3 .lb-z-video { overflow: hidden; z-index: 1; }
+.v3 .lb-z-title, .v3 .lb-z-subs { z-index: 3; }
+.v3 .lb-z-pseudo { z-index: 4; cursor: pointer; outline-style: dotted; }
+.v3 .lb-net { position: absolute; top: 0; height: 100%; max-width: none; pointer-events: none; }
+.v3 .lb-title { position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: center; pointer-events: none; }
+.v3 .lb-title-box { padding: 16px 28px; border-radius: 22px; background: #fff; color: #000; font: 800 64px/1.25 var(--font-sans); white-space: nowrap; }
+.v3 .lb-pseudo-txt { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font: 800 32px/1 var(--font-sans); text-shadow: 0 0 3px #000, 2px 2px 0 #000, -2px -2px 0 #000; pointer-events: none; }
+.v3 .lb-part { position: absolute; z-index: 2; display: grid; place-items: center; color: rgba(255, 255, 255, .7); font: 800 40px var(--font-sans); outline: 2px dotted rgba(255, 255, 255, .3); outline-offset: -2px; pointer-events: none; }
+.v3 .lb-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.v3 .lb-wide { text-transform: none; }
+.v3 .lb-hint { margin: 0; font-size: 12px; }
+@media screen and (max-width: 900px) {
+  .v3 .chan-fields { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+  .v3 .chan-sec > summary { padding: 12px 16px; }
+  .v3 .chan-field .btn, .v3 .chan-field .input { min-height: 44px; }
+  .v3 .ly-grid { grid-template-columns: minmax(0, 1fr); }
+  .v3 .ly-side { position: static; }
+  .v3 .ly-coords .input, .v3 .ly-values-head, .v3 .ly .btn { min-height: 44px; }
+  .v3 .chan-edit > .toolbar { position: static; }
+}
+@media (max-width: 600px) {
+  .v3 .channels { grid-template-columns: minmax(0, 1fr); }
+  .v3 .chan-preview { grid-template-columns: 1fr; }
+  .v3 .chan-preview-frame { max-width: 220px; }
+}
+@media (prefers-reduced-motion: reduce) { .v3 .ly-zone, .v3 .ly-tag, .v3 .ly-hdl, .v3 .ly-safe, .v3 .ly-guide { transition: none; } }
+/* <<< channels */

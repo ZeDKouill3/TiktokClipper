@@ -5,7 +5,7 @@ slug: ui-v3-u9-styles-v3-formulaire-libell-s-menus
 title: "UI v3 U9 : Styles v3 (formulaire, libellés, menus)"
 created: 2026-10-11T03:59:36Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/web/static/screens/channels.js
   - clipper/web/static/screens/layout.js
@@ -20,6 +20,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/ef9156443ae6@1783b26
+    tree: scope/977ea9f0ba21
+    criteria: 13cb6f6df172
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---

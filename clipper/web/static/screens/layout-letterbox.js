@@ -111,11 +111,11 @@ function lbHtml() {
     ? `<p class="muted ly-note">Aperçu sur une image clé d'une vidéo du style : fond flou, vidéo nette au zoom réglé.</p>`
     : `<p class="reason bad ly-note" role="alert">${esc(lyUi.frameError || "Aucune image clé disponible.")}</p>`;
   return `<div class="ly">
-    <div class="toolbar"><a class="btn btn-sm btn-ghost" href="#/styles/${encodeURIComponent(lyUi.name)}">${icon("chevron-left", "i-xs")}Retour au style</a>
+    <div class="toolbar"><a class="btn" data-variant="ghost" data-size="sm" href="#/styles/${encodeURIComponent(lyUi.name)}">${icon("chevron-left", "i-xs")}Retour au style</a>
       <h2 class="chan-title">Éditeur d'agencement <span class="mono muted">${esc(lyUi.name)} · letterbox</span></h2><span class="grow"></span>
       <span class="muted ly-dirty" data-ly-dirty></span>
-      <button type="button" class="btn btn-sm btn-ghost" data-lb-standard>${icon("rotate-ccw", "i-xs")}Revenir au standard</button>
-      <button type="button" class="btn btn-primary" data-lb-save>Enregistrer</button></div>
+      <button type="button" class="btn" data-variant="ghost" data-size="sm" data-lb-standard>${icon("rotate-ccw", "i-xs")}Revenir au standard</button>
+      <button type="button" class="btn" data-lb-save>Enregistrer</button></div>
     <p class="reason bad" data-ly-error role="alert" hidden></p>
     <div class="ly-grid">
       <div class="ly-main">
