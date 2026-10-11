@@ -3556,7 +3556,7 @@ def test_get_publish_corrupt_file_of_a_styleless_video_is_a_500(tmp_path, isolat
 def test_publish_screen_is_wired_with_calendar_queue_and_actions():
     page = (STATIC / "index.html").read_text(encoding="utf-8")
     js = (STATIC / "screens" / "publish.js").read_text(encoding="utf-8")
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    css = (STATIC / "style.css").read_text(encoding="utf-8") + (STATIC / "v3.css").read_text(encoding="utf-8")  # CSS publication : v3.css depuis U6
 
     assert "/static/screens/publish.js" in page
     assert page.index("/static/screens.js") < page.index("/static/screens/publish.js") < page.index("/static/app.js")
@@ -3581,21 +3581,21 @@ def test_publish_screen_is_wired_with_calendar_queue_and_actions():
     assert "undo" in js                                                    # toast « Annuler »
     assert "toastError" in js                                              # un conflit 409 s'affiche
     assert "Aucune publication en attente" in js                           # état vide
-    for sel in (".cal", ".cal-c", ".post", "TASK-503d"):
+    for sel in (".cal", ".cal-c", ".cal-post", "TASK-503d"):
         assert sel in css, sel
 
 
 def test_publish_calendar_css_scales_day_boxes_and_never_overflows_the_page():
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U6 : le CSS publication vit dans v3.css, prefixe .v3
 
     for sel in (".cal-day", ".cal-day.compact", ".cal-day.mini", ".cal-month", ".pub-day-list", ".cal-mini-row", ".cal-month-count"):
         assert sel in css, sel
     assert ".cal-day.dense" not in css                                  # palier retire (TASK-460904227d2f)
     assert ".cal-more" not in css                                       # plus de « +N autres » (TASK-39bbe20b3284)
-    body = css[css.index(".cal-day {"):css.index(".cal-day {") + css[css.index(".cal-day {"):].index("}")]
+    body = css[css.index(".v3 .cal-day {"):css.index(".v3 .cal-day {") + css[css.index(".v3 .cal-day {"):].index("}")]
     assert "overflow-y" not in body and "max-height" not in body        # la case s'agrandit, ni defilement ni coupure
-    assert "max-height" not in css[css.index(".cal-month .cal-day.small"):].split("\n", 1)[0]
-    assert "overflow-y" not in css[css.index("@media (max-width: 900px) {\n  .cal-day"):]
+    assert "max-height" not in css[css.index(".v3 .cal-month .cal-day.small"):].split("\n", 1)[0]
+    assert not re.search(r"\.v3 \.cal-day[^{]*\{[^}]*(overflow-y|max-height)", css)  # ni defilement ni coupure d une case
 
 
 # --------------------------------------------------------------------------
@@ -7398,7 +7398,7 @@ def test_publication_layout_always_shows_the_calendar_with_a_single_pending_list
       return {{ withSlots, noSlots, loading }};
     }})()""")
     html = out["withSlots"]
-    grid = html[html.index('class="grid g-side pub-grid"'):]
+    grid = html[html.index('class="pub-layout"'):]
     assert grid.index("data-pub-new") < grid.index('id="pub-cal"')                  # Nouvelle publication à gauche, calendrier à droite, dans la même grille
     assert "À publier" not in html and "En attente" in html                         # une seule liste (plus de section « À publier » en double)
     assert "14:15" in grid and "Manuel" in grid                                      # une publication manuelle entre les créneaux est au calendrier, à l'heure de Paris
@@ -7530,10 +7530,10 @@ def test_publish_legend_dots_use_three_distinct_colors_reused_from_the_calendar_
     assert '<i class="pub-leg info">' in toolbar
     assert '<i class="pub-leg ok">' in toolbar
     assert '<i class="pub-leg bad">' in toolbar
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
-    assert ".pub-leg.info { background: var(--info)" in css
-    assert ".pub-leg.ok { background: var(--ok)" in css
-    assert ".pub-leg.bad { background: var(--bad)" in css
+    css = (STATIC / "v3.css").read_text(encoding="utf-8")
+    assert ".v3 .pub-leg.info { background: var(--info)" in css
+    assert ".v3 .pub-leg.ok { background: var(--ok)" in css
+    assert ".v3 .pub-leg.bad { background: var(--bad)" in css
 
 
 @_NODE
@@ -7883,24 +7883,25 @@ def test_radar_panel_shows_cut_rejected_distinct_from_a_real_retained(tmp_path, 
 
 def test_calendar_card_has_full_title_attribute_and_two_line_clamp():
     js = (STATIC / "screens" / "publish.js").read_text(encoding="utf-8")
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    css = (STATIC / "v3.css").read_text(encoding="utf-8")  # U6 : carte du calendrier = .cal-post, CSS dans v3.css
 
-    card = js[js.index("function pubPost"):js.index("function pubCalendar")]
+    card = js[js.index("function calPostHtml"):js.index("function pubCalendar")]
     assert 'title="${esc(pubTitle(c))}"' in card               # titre complet en info-bulle sur la carte
     import re
-    rules = re.findall(r"\.cal \.post \.pt\s*\{([^}]*)\}", css)
-    assert rules, "règle .cal .post .pt absente de style.css"
+    rules = re.findall(r"\.v3 \.cal-post \.ttl\s*\{([^}]*)\}", css)
+    assert rules, "règle .v3 .cal-post .ttl absente de v3.css"
     assert "-webkit-line-clamp: 2" in rules[-1] and "overflow-wrap" in rules[-1]
     assert "line-clamp: 2" in rules[-1].replace("-webkit-line-clamp", "")
 
 
 def test_calendar_card_layout_gives_the_title_the_width():
-    css = (STATIC / "style.css").read_text(encoding="utf-8")
+    css = (STATIC / "v3.css").read_text(encoding="utf-8")
     import re
-    post = " ".join(re.findall(r"\.cal \.post\s*\{([^}]*)\}", css))
-    assert "flex-wrap: wrap" in post                           # la pastille de compte passe à la ligne
-    assert re.search(r"\.cal \.post \.mini-clip\s*\{[^}]*display: none", css)  # pas de miniature de 18 px
-    assert re.search(r"\.cal \.post \.pt\s*\{[^}]*flex: 1 1 100%", css)
+    post = " ".join(re.findall(r"\.v3 \.cal-post\s*\{([^}]*)\}", css))
+    assert "display: grid" in post                             # titre, compte et heure empilés : le titre a toute la largeur
+    js = (STATIC / "screens" / "publish.js").read_text(encoding="utf-8")
+    assert "mini-clip" not in js[js.index("function calPostHtml"):js.index("function pubCalendar")]  # pas de miniature de 18 px
+    assert re.search(r"\.v3 \.cal-post \.ttl\s*\{[^}]*overflow-wrap: anywhere", css)
 
 
 # --------------------------------------------------------------------------
@@ -11805,11 +11806,14 @@ const pubChip = (c) => `<span class="chip">${esc(c.publish_status)}</span>`;
 const pubSlotLabel = (iso) => String(iso);
 const pubAccountField = (c) => "";
 const pubServiceName = (c) => "TikTok";
+const pubStatusOf = (c) => ({ label: c.publish_status, cls: "info" });
+const pubPostState = (c) => "scheduled";
+const pubTime = (iso) => String(iso).slice(11, 16);
 """
 
 
 def _pub_js(expr):
-    return _run_js([("screens/publish.js", ["pubAccountLabel", "pubKey", "pubTitle", "pubPost", "pubDetailHtml"])],
+    return _run_js([("screens/publish.js", ["pubAccountLabel", "pubKey", "pubTitle", "calPostHtml", "pubDetailHtml"])],
                    expr, preamble=_PUB_JS_STUBS)
 
 
@@ -11821,7 +11825,7 @@ def test_publish_screen_makes_a_to_verify_post_not_draggable_and_without_the_uns
         video_url: '/media/clip/v1/01', thumbnail_url: '/media/clip/v1/01/thumb', screen_title: 'Titre 01' };
       const plain = Object.assign({}, base, { to_verify: false, publish_error: 'captcha détecté' });
       const verify = Object.assign({}, base, { to_verify: true });
-      return { plainPost: pubPost(plain), verifyPost: pubPost(verify),
+      return { plainPost: calPostHtml(plain), verifyPost: calPostHtml(verify),
                plainDetail: pubDetailHtml(plain), verifyDetail: pubDetailHtml(verify) };
     })()""")
     assert 'draggable="true"' in out["plainPost"]
