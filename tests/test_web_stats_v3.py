@@ -38,6 +38,7 @@ let currentScreen = 'stats';
 let painted = null;
 const morph = (el, html) => { painted = html; };
 const emptyState = (ic, title, text) => `<div class="empty"><h3>${title}</h3><p>${text}</p></div>`;
+const localStorage = { m: {}, getItem(k) { return k in this.m ? this.m[k] : null; }, setItem(k, v) { this.m[k] = String(v); } };
 const toasts = [], errors = [];
 const toast = (o) => toasts.push(o);
 const toastError = (title, err) => errors.push({ title, message: String(err && err.message || err) });
@@ -182,6 +183,55 @@ def test_screen_without_account_is_painted_by_morph_too():
 
 def test_stats_js_has_no_manual_inner_html_rendering():
     assert not re.search(r"body\.innerHTML\s*=", STATS_JS)
+
+
+# --- compte affiché par défaut (revue 11/10) ----------------------------------------------------------------------
+
+DEFAULT_SETUP = (
+    "location.hash = '#/stats';"
+    "const alpha = { ...ACCOUNT, account: 'compte_alpha' }, beta = { ...ACCOUNT, account: 'compte_beta' }, gamma = { ...ACCOUNT, account: 'compte_gamma' };"
+    "const withViews = (account, n) => ({ ...OVERVIEW, account, tiles: { ...TILES, views: { value: n, change_pct: null, history_change_pct: null } } });"
+    "responses = { '/api/stats/tiktok/compte_alpha': withViews('compte_alpha', 0), '/api/stats/tiktok/compte_beta': withViews('compte_beta', 40),"
+    " '/api/stats/tiktok/compte_gamma': withViews('compte_gamma', 7), '/api/stats/tiktok': { accounts: [alpha, beta, gamma] }, '/api/learning': LEARNING, '/api/measures': MEASURES };"
+)
+
+
+@NODE
+def test_default_account_is_the_first_one_with_views_not_the_first_alphabetically():
+    out = _run("statsAccount().account", DEFAULT_SETUP + "await statsLoad();")
+    assert out == "compte_beta"
+
+
+@NODE
+def test_default_account_is_the_last_one_consulted_when_it_still_exists():
+    out = _run("statsAccount().account", DEFAULT_SETUP + "localStorage.setItem('clipper-stats-account', 'compte_gamma'); await statsLoad();")
+    assert out == "compte_gamma"
+
+
+@NODE
+def test_consulting_an_account_by_the_address_remembers_it_for_next_time():
+    out = _run("[localStorage.getItem('clipper-stats-account'), (location.hash = '#/stats', statsAccount().account)]",
+               DEFAULT_SETUP + "location.hash = '#/stats/compte_gamma'; await statsLoad();")
+    assert out == ["compte_gamma", "compte_gamma"]
+
+
+@NODE
+def test_default_account_is_the_first_one_when_none_has_views():
+    out = _run("statsAccount().account", DEFAULT_SETUP.replace("withViews('compte_beta', 40)", "withViews('compte_beta', 0)").replace("withViews('compte_gamma', 7)", "withViews('compte_gamma', 0)") + "await statsLoad();")
+    assert out == "compte_alpha"
+
+
+# --- en-tête de page identique sur tous les écrans (revue 11/10) ----------------------------------------------------
+
+def test_every_screen_header_has_the_same_shape_and_a_section_eyebrow():
+    page = (STATIC / "index.html").read_text(encoding="utf-8")
+    sections = re.findall(r'<section class="screen[^"]*" id="screen-(\w+)"[^>]*>(.*?)</section>', page, flags=re.S)
+    heads = {name: re.search(r'<div class="eyebrow">([^<]*)</div><h1>([^<]*)</h1><p class="sub">', body) for name, body in sections if 'class="page-head' in body}
+    assert len(heads) == 11, sorted(heads)
+    for name, match in heads.items():
+        assert match, f"{name} : en-tête hors gabarit (sur-titre, titre, sous-titre)"
+        assert match.group(1) in ("Production", "Configuration"), (name, match.group(1))
+    assert heads["stats"].group(1) == "Configuration"
 
 
 # --- CSS : bloc retiré de style.css, ajouté en fin de v3.css, budget -------------------------------------------------

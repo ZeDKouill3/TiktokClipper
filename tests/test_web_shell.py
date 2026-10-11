@@ -98,7 +98,7 @@ def test_index_keeps_nav_tabbar_screen_sections_and_script_order():
     assert re.search(r'<nav class="nav"[^>]*id="nav"', page)
     assert re.search(r'<nav class="tabbar[^"]*"[^>]*id="tabbar"', page)
     for screen in SCREENS:
-        assert f'<section class="screen" id="screen-{screen}"' in page, screen  # aucun écran migré par U2
+        assert f'<section class="screen v3" id="screen-{screen}"' in page, screen  # tous migrés (U14) : même en-tête partout
     order = ["/static/vendor/idiomorph.min.js", "/static/vendor/basecoat.all.min.js", "/static/icons.js",
              "/static/ui.js", "/static/screens.js", "/static/screens/jury-radar.js", "/static/screens/videos.js",
              "/static/screens/dashboard.js", "/static/screens/review.js", "/static/screens/clips.js",
@@ -152,7 +152,7 @@ def test_shell_pieces_carry_v3_but_never_an_ancestor_of_a_screen():
     assert any(tag == "nav" and "tabbar" in cls and v3(cls) for tag, cls, _ in tree.found)
     for tag, cls, ancestors in tree.found:
         if tag == "section" and "screen" in cls.split():
-            assert not v3(cls), "U2 ne migre aucun écran"
+            assert v3(cls), "écran migré sans v3 : en-tête et composants hors gabarit"
             assert not any(v3(a) for a in ancestors), f"un ancêtre de #{cls} porte v3 : Basecoat restylerait l'écran"
     # dialogues, toaster et tiroir : sous un conteneur .v3 (un <dialog class="v3"> ne reçoit pas .v3 .dialog)
     for tag, cls, ancestors in tree.found:

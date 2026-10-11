@@ -7688,7 +7688,7 @@ def test_every_panel_screen_keeps_its_content_off_the_edges():
     page = (STATIC / "index.html").read_text(encoding="utf-8")
     css = "\n".join(p.read_text(encoding="utf-8") for p in [STATIC / "style.css", STATIC / "v3.css", *sorted((STATIC / "screens").glob("*.css"))])  # v3.css : écrans migrés (U5)
     own_margin = set()  # Vidéos (v3) retire le cadre : #screen-videos [data-body] { background: none; padding: 0 }
-    screens = re.findall(r'<section class="screen" id="screen-(\w+)".*?<div class="([^"]*)" data-body', page, re.S)
+    screens = re.findall(r'<section class="screen(?: v3)?" id="screen-(\w+)".*?<div class="([^"]*)" data-body', page, re.S)
     assert {name for name, _ in screens} == {"dashboard", "veille", "videos", "review", "clips", "clip", "publish", "channels", "stats", "accounts", "settings", "journal"}
     for name, classes in screens:
         if "panel" not in classes.split() or name in own_margin:

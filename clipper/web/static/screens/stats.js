@@ -90,11 +90,36 @@ function statsHref(account, tab, post) {
   return base;
 }
 
-/* Compte affiche : celui de l'adresse s'il existe, sinon le premier. */
+/* Compte affiche : celui de l'adresse s'il existe, sinon le dernier consulte (s'il existe encore), sinon le
+   premier qui a des vues (cherche au chargement, statsPickDefault), sinon le premier. */
+const STATS_LAST_KEY = "clipper-stats-account";
+
+function statsLastConsulted() {
+  try { return localStorage.getItem(STATS_LAST_KEY) || ""; } catch (err) { return ""; } // stockage indisponible : pas de memoire
+}
+
 function statsAccount() {
   const accounts = statsUi.accounts || [];
+  const find = (id) => accounts.find((a) => a.account === id);
+  return find(statsRoute().account) || find(statsLastConsulted()) || find(statsUi.defaultAccount) || accounts[0] || null;
+}
+
+/* Memorise le compte consulte (adresse explicite seulement : le choix par defaut n'est pas une consultation). */
+function statsRemember() {
   const wanted = statsRoute().account;
-  return accounts.find((a) => a.account === wanted) || accounts[0] || null;
+  if (!wanted || !(statsUi.accounts || []).some((a) => a.account === wanted)) return;
+  try { localStorage.setItem(STATS_LAST_KEY, wanted); } catch (err) { /* stockage indisponible : le choix ne sera pas retenu */ }
+}
+
+/* Aucun compte demande ni retenu : le premier dont la vue d'ensemble compte des vues (releves de TikTok Studio). */
+async function statsPickDefault() {
+  const accounts = statsUi.accounts || [];
+  if (statsRoute().account || accounts.some((a) => a.account === statsLastConsulted())) return;
+  for (const a of accounts) {
+    const overview = await api(`/api/stats/tiktok/${encodeURIComponent(a.account)}?period=${statsUi.period}`);
+    if (overview.tiles && overview.tiles.views && overview.tiles.views.value > 0) { statsUi.defaultAccount = a.account; return; }
+  }
+  statsUi.defaultAccount = "";
 }
 
 /* ---------- chargement ---------- */
@@ -111,6 +136,8 @@ function statsLoad() {
   statsUi.loading = (async () => {
     try {
       statsUi.accounts = (await api("/api/stats/tiktok")).accounts;
+      statsRemember();
+      if (statsUi.defaultAccount === undefined) await statsPickDefault();
       try { statsUi.learning = await api("/api/learning"); statsUi.learningError = null; } catch (err) { statsUi.learningError = err; }
       try { statsUi.measures = await api("/api/measures"); statsUi.measuresError = null; } catch (err) { statsUi.measuresError = err; }
       const account = statsAccount();
