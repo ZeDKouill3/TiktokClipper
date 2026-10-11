@@ -22,9 +22,15 @@ NODE = pytest.mark.skipif(shutil.which("node") is None, reason="node absent du P
 SCREENS = ("dashboard", "veille", "videos", "review", "clips", "clip", "channels", "publish", "stats",
            "accounts", "settings", "journal")
 # Écrans qui ont (encore) un bloc dans style.css : chaque tâche d'écran retire le sien entre ses délimiteurs.
-# U5 (TASK-1679e58d021b) a retire les blocs « clips » et « clip » : leurs regles vivent dans v3.css.
-STYLE_BLOCKS = ("dashboard", "videos", "review", "channels", "publish", "stats", "settings",
-                "journal", "shared", "shell")
+# Écrans migrés (U3 dashboard, U5 clips/clip) : leurs règles vivent dans v3.css, plus de bloc legacy.
+# Une tâche d'écran ajoute son nom ici (une ligne par écran, pour limiter les conflits de fusion).
+MIGRATED = (
+    "dashboard",
+    "clips",
+    "clip",
+)
+STYLE_BLOCKS = tuple(n for n in ("dashboard", "videos", "review", "clips", "clip", "channels", "publish", "stats", "settings",
+                                 "journal", "shared", "shell") if n not in MIGRATED)
 
 
 def _static(*parts: str) -> str:
@@ -365,7 +371,11 @@ def test_v3_css_has_touch_targets_mobile_breakpoint_rail_and_scoped_tokens():
     assert "--primary: #c25f00" in css and "--primary: #ff8a00" in css
     stripped = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
     assert stripped.count("{") == stripped.count("}")
-    assert len(css.encode("utf-8")) <= 40 * 1024  # objectif ADR-a308
+    # objectif ADR-a308 : la coquille (tout ce qui precede le premier bloc d'ecran) tient en 40 Ko ; le fichier
+    # entier, ecrans migres compris, ne depasse jamais le style.css v2 (124 162 octets) qu'il remplace a terme.
+    shell = re.split(r"/\* >>> (?!legacy-tokens)", css, maxsplit=1)[0]
+    assert len(shell.encode("utf-8")) <= 40 * 1024
+    assert len(css.encode("utf-8")) <= 124_162
 
 
 def test_v3_css_styles_the_dialog_and_its_backdrop_under_the_v3_container():
@@ -383,9 +393,11 @@ def test_style_css_has_balanced_delimiters_for_every_screen_and_lost_its_shell_b
     closes = re.findall(r"/\* <<< ([a-z-]+) \*/", css)
     assert opens and sorted(opens) == sorted(closes)
     assert set(opens) <= set(STYLE_BLOCKS), set(opens) - set(STYLE_BLOCKS)
-    for name in ("dashboard", "videos", "review", "channels", "publish", "stats", "settings", "journal"):
-        assert name in opens, f"aucun bloc /* >>> {name} */"
-    assert "clips" not in opens and "clip" not in opens  # ecrans migres par U5 : plus de bloc legacy
+    for name in ("dashboard", "videos", "review", "clips", "clip", "channels", "publish", "stats", "settings", "journal"):
+        if name in MIGRATED:
+            assert name not in opens, f"le bloc {name} est passé dans v3.css"
+        else:
+            assert name in opens, f"aucun bloc /* >>> {name} */"
     # un délimiteur ouvert est fermé avant le suivant du même nom, et les blocs ne se chevauchent pas
     depth = None
     for kind, name in re.findall(r"/\* (>>>|<<<) ([a-z-]+) \*/", css):
