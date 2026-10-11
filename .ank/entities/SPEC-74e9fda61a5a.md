@@ -5,7 +5,7 @@ slug: mod-le-de-donn-es-de-la-console-v2-cha-nes-chann
 title: "Modèle de données de la console v2 : chaînes ([channel]), file de traitement, publication, surveillance, état vidéo étendu (scope complet)"
 created: 2026-10-01T10:55:26Z
 author: nicoc@zedk_ordi
-status: accepted
+status: superseded
 scope:
   - clipper/config.py
   - clipper/pipeline.py
@@ -21,7 +21,7 @@ verified:
   - by: nicoc@zedk_ordi
     at: 2026-10-01T10:56:28Z
 schema: 4
-version: 2
+version: 3
 ---
 
 Successeur de SPEC-fc0c156a8684 : règles identiques, scope étendu aux modules qui portent ce modèle de données (clipper/channel.py, clipper/worker.py, clipper/publish.py, clipper/watch.py), oubliés à la ratification.
