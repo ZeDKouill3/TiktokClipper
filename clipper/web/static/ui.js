@@ -1,4 +1,6 @@
-/* Briques d'interface partagees : format, icones, toasts avec « Annuler », modale de confirmation. */
+/* Briques d'interface partagees : format, icones, rapprochement du DOM (morph), toasts Basecoat avec
+   « Annuler », dialogues natifs (openDialog, confirmDialog), tiroir (drawer), et l'ancien openPanel garde
+   pour les ecrans non migres (ADR-a308 : un ecran retire ses appels en migrant). */
 "use strict";
 
 const $ = (sel, root) => (root || document).querySelector(sel);
@@ -28,35 +30,57 @@ function hydrateIcons(root) {
   });
 }
 
-/* ---------- Toasts ---------- */
+/* ---------- Rapprochement du DOM (ADR-a308 §3) ----------
+   Remplace `el.innerHTML = html` : Idiomorph rapproche le DOM existant du HTML calcule, donc focus, defilement,
+   lecteur video et hauteurs survivent a un evenement SSE. Idiomorph est vendored et charge avant ce script :
+   son absence est une erreur de la page, jamais un repli silencieux (ADR-ad2e). */
+function morph(el, html) {
+  if (typeof Idiomorph === "undefined") throw new Error("Idiomorph absent : /static/vendor/idiomorph.min.js n'est pas chargé");
+  Idiomorph.morph(el, html, { morphStyle: "innerHTML" });
+}
+
+/* ---------- Toasts (Basecoat .toaster, API toast() conservee) ----------
+   Le markup est le notre (classes Basecoat) et porte data-toast-initialized : basecoat.all.min.js laisse alors la
+   minuterie, le survol et la fermeture a cette fonction (son toaster.toast() attend des onclick en chaine). */
+const TOAST_CATEGORY = { ok: "success", bad: "error", warn: "warning", info: "info" };
+const TOAST_ICON = { ok: "circle-check", bad: "circle-x", warn: "triangle-alert", info: "info" };
+
+function toastHtml(o) {
+  const cat = TOAST_CATEGORY[o.kind] || "info";
+  const undo = o.undo ? `<button type="button" class="btn" data-size="sm" data-toast-cancel>${icon("undo-2", "i-xs")}Annuler</button>` : "";
+  const act = o.action ? `<button type="button" class="btn" data-variant="outline" data-size="sm" data-toast-action>${esc(o.action.label)}</button>` : "";
+  return `<div class="toast" role="${o.kind === "bad" ? "alert" : "status"}" aria-atomic="true" data-category="${cat}" data-duration="${o.ms}" data-toast-initialized="true">
+    <div class="toast-content">${icon(TOAST_ICON[o.kind] || "info")}
+      <section><h2>${esc(o.title)}</h2>${o.body ? `<p>${esc(o.body)}</p>` : ""}</section>
+      <footer>${undo}${act}<button type="button" class="btn" data-variant="ghost" data-size="icon-sm" data-close aria-label="Fermer">${icon("x", "i-xs")}</button></footer>
+    </div></div>`;
+}
+
 function toast(opts) {
   const o = Object.assign({ kind: "info", title: "", body: "", undo: null, action: null, ms: 5200 }, opts);
   if (o.undo) o.ms = UNDO_MS;
-  const ico = { ok: "circle-check", bad: "circle-x", warn: "triangle-alert", info: "info" }[o.kind] || "info";
-  const el = document.createElement("div");
-  el.className = `toast ${o.kind}`;
-  el.setAttribute("role", o.kind === "bad" ? "alert" : "status");
-  el.innerHTML = `<span class="t-ico">${icon(ico)}</span>
-    <div><div class="t-title">${esc(o.title)}</div>${o.body ? `<div class="t-body">${esc(o.body)}</div>` : ""}</div>
-    <div class="t-act">
-      ${o.undo ? `<button type="button" class="btn btn-xs btn-ghost" data-undo>${icon("undo-2", "i-xs")}Annuler</button>` : ""}
-      ${o.action ? `<button type="button" class="btn btn-xs btn-ghost" data-act>${esc(o.action.label)}</button>` : ""}
-      <button type="button" class="icon-btn" style="width:26px;height:26px" data-close aria-label="Fermer">${icon("x", "i-xs")}</button>
-    </div>
-    <span class="t-timer" style="animation-duration:${o.ms}ms"></span>`;
-  $("#toasts").appendChild(el);
+  const tpl = document.createElement("template");
+  tpl.innerHTML = toastHtml(o).trim();
+  const el = tpl.content.firstElementChild;
+  const host = $("#toaster");
+  host.appendChild(el);
   let timer = setTimeout(close, o.ms);
+  let closed = false;
   function close() {
+    if (closed) return;
+    closed = true;
     clearTimeout(timer);
-    el.classList.add("out");
-    setTimeout(() => el.remove(), 220);
+    el.setAttribute("aria-hidden", "true"); // Basecoat replie le toast en transition, puis on le retire
+    const gone = () => el.remove();
+    el.addEventListener("transitionend", gone, { once: true });
+    setTimeout(gone, 400);
   }
-  el.addEventListener("mouseenter", () => { clearTimeout(timer); el.querySelector(".t-timer").style.animationPlayState = "paused"; });
+  el.addEventListener("mouseenter", () => clearTimeout(timer));
   el.addEventListener("mouseleave", () => { timer = setTimeout(close, 2000); });
   el.querySelector("[data-close]").onclick = close;
-  if (o.undo) el.querySelector("[data-undo]").onclick = () => { o.undo(); close(); };
-  if (o.action) el.querySelector("[data-act]").onclick = () => { o.action.run(); close(); };
-  const all = $$("#toasts .toast");
+  if (o.undo) el.querySelector("[data-toast-cancel]").onclick = () => { o.undo(); close(); };
+  if (o.action) el.querySelector("[data-toast-action]").onclick = () => { o.action.run(); close(); };
+  const all = $$(".toast:not([aria-hidden=\"true\"])", host);
   if (all.length > 4) all[0].remove();
   return close;
 }
@@ -71,7 +95,89 @@ function toastError(title, err) {
   });
 }
 
-/* ---------- Overlay et modale ---------- */
+/* ---------- Dialogues natifs (<dialog>, SPEC-7715 T10) ----------
+   openDialog(html, opts) cree un <dialog class="dialog"> dans #layers (le conteneur .v3 : `.v3 .dialog` est un
+   selecteur descendant), l'ouvre en modal et le retire du DOM a la fermeture. Fermeture : Echap (natif), clic sur
+   le fond, tout bouton [data-dismiss], form method="dialog". `html` = header / section / footer (markup Basecoat) ;
+   un `html` qui est lui-meme un <form> devient le cadre du dialogue (ses header / section / footer gardent leur mise en page). */
+function openDialog(html, opts) {
+  const o = Object.assign({ size: null, role: null, label: null, closeButton: true, onOpen: null, onClose: null }, opts);
+  const dlg = document.createElement("dialog");
+  dlg.className = "dialog";
+  if (o.role) dlg.setAttribute("role", o.role);
+  if (o.label) dlg.setAttribute("aria-label", o.label);
+  dlg.innerHTML = html;
+  if (!(dlg.children.length === 1 && dlg.firstElementChild.tagName === "FORM")) dlg.innerHTML = `<div>${html}</div>`;
+  const box = dlg.firstElementChild;
+  if (o.size) box.dataset.size = o.size;
+  if (o.closeButton) box.insertAdjacentHTML("beforeend", `<button type="button" class="btn" data-variant="ghost" data-size="icon-sm" data-dismiss aria-label="Fermer">${icon("x")}</button>`);
+  $("#layers").appendChild(dlg);
+  $$("[data-dismiss]", dlg).forEach((b) => (b.onclick = () => dlg.close()));
+  dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); }); // clic sur le fond (hors du cadre)
+  dlg.addEventListener("close", () => {
+    if (o.onClose) o.onClose(dlg);
+    dlg.remove();
+  });
+  dlg.showModal();
+  if (o.onOpen) {
+    try { o.onOpen(dlg); } catch (err) { toastError("Fenêtre incomplète", err); }
+  }
+  return dlg;
+}
+
+/* Confirmation d'une action destructive ou coûteuse sans inverse (T4).
+   Retourne une promesse : true si l'utilisateur confirme, false sinon (Échap, fond, Annuler). */
+function confirmDialog(opts) {
+  const o = Object.assign({ title: "Confirmer ?", body: "", confirmLabel: "Confirmer", danger: true }, opts);
+  return new Promise((resolve) => {
+    let answered = false;
+    const answer = (v) => { if (!answered) { answered = true; resolve(v); } };
+    const dlg = openDialog(`
+      <header><h2>${esc(o.title)}</h2>${o.body ? `<p>${esc(o.body)}</p>` : ""}</header>
+      <footer>
+        <button type="button" class="btn" data-variant="outline" data-dismiss>Annuler</button>
+        <button type="button" class="btn"${o.danger ? ' data-variant="destructive"' : ""} data-confirm>${esc(o.confirmLabel)}</button>
+      </footer>`, { size: "sm", role: "alertdialog", closeButton: false, onClose: () => answer(false) });
+    $("[data-confirm]", dlg).onclick = () => { answer(true); dlg.close(); };
+    setTimeout(() => $("[data-confirm]", dlg).focus(), 30);
+  });
+}
+
+/* ---------- Tiroir (T10 : fiche ouverte par-dessus la liste, l'ecran garde son contexte) ----------
+   drawer.open(html, { onOpen }) rapproche #drawer du HTML (drawer-head / drawer-body / drawer-foot), l'affiche avec
+   son fond ; Echap (app.js), clic sur le fond et tout [data-drawer-close] ferment. La fermeture emet
+   « clipper:drawer-close » pour que l'ecran remette son URL (#/...) en ordre. */
+const drawer = {
+  open(html, opts) {
+    const o = Object.assign({ onOpen: null }, opts);
+    const el = $("#drawer");
+    el.hidden = false;
+    morph(el, html);
+    hydrateIcons(el);
+    $("#drawer-scrim").classList.add("show");
+    el.classList.add("show");
+    $$("[data-drawer-close]", el).forEach((b) => (b.onclick = () => drawer.close()));
+    $("#drawer-scrim").onclick = () => drawer.close();
+    if (o.onOpen) {
+      try { o.onOpen(el); } catch (err) { toastError("Fiche incomplète", err); }
+    }
+    setTimeout(() => { const f = $("[data-drawer-close]", el); if (f) f.focus(); }, 60);
+    return el;
+  },
+  close() {
+    if (!drawer.isOpen()) return;
+    $("#drawer-scrim").classList.remove("show");
+    const el = $("#drawer");
+    el.classList.remove("show");
+    setTimeout(() => { if (!el.classList.contains("show")) el.hidden = true; }, 240);
+    document.dispatchEvent(new CustomEvent("clipper:drawer-close"));
+  },
+  isOpen() { return $("#drawer").classList.contains("show"); },
+};
+
+/* ---------- Ancien chemin : overlay et panneau en <div> (ecrans non migres) ----------
+   Garde tel quel le temps de la migration : le contenu injecte vient des ecrans (clips, publication, styles,
+   comptes) et reste style par style.css. Chaque ecran remplace ses appels par openDialog / drawer en migrant. */
 let closeCurrent = null;
 function showOverlay(onClose) {
   const ov = $("#overlay");
@@ -94,6 +200,9 @@ function openPanel(cls, html, onOpen) {
   el.className = cls;
   el.setAttribute("role", "dialog");
   el.setAttribute("aria-modal", "true");
+  // basecoat.all.min.js attache son composant « drawer » (prevu pour un <dialog>) a tout .drawer ajoute au DOM :
+  // marque comme deja initialise, il le laisse tranquille.
+  el.dataset.drawerInitialized = "true";
   el.innerHTML = html;
   document.body.appendChild(el);
   showOverlay(() => { el.classList.remove("show"); setTimeout(() => el.remove(), 320); });
@@ -107,28 +216,6 @@ function openPanel(cls, html, onOpen) {
   return el;
 }
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && closeCurrent) closeLayer(); });
-
-/* Confirmation modale d'une action destructive ou coûteuse sans inverse (T4).
-   Retourne une promesse : true si l'utilisateur confirme, false sinon. */
-function confirmDialog(opts) {
-  const o = Object.assign({ title: "Confirmer ?", body: "", confirmLabel: "Confirmer", danger: true }, opts);
-  return new Promise((resolve) => {
-    let answered = false;
-    const answer = (v) => { if (!answered) { answered = true; resolve(v); } };
-    const el = openPanel("modal modal-confirm", `
-      <div class="modal-head"><h2>${esc(o.title)}</h2></div>
-      <div class="modal-body"><p class="muted">${esc(o.body)}</p></div>
-      <div class="modal-foot">
-        <button type="button" class="btn btn-ghost" data-dismiss>Annuler</button>
-        <button type="button" class="btn ${o.danger ? "btn-bad" : "btn-primary"}" data-confirm>${esc(o.confirmLabel)}</button>
-      </div>`);
-    // Toute fermeture (Échap, clic sur le fond, Annuler) vaut refus.
-    const prev = closeCurrent;
-    closeCurrent = () => { prev(); answer(false); };
-    $("[data-confirm]", el).onclick = () => { answer(true); closeLayer(); };
-    setTimeout(() => $("[data-confirm]", el).focus(), 60);
-  });
-}
 
 /* ---------- Garde réseau au clic (TASK-120a) ----------
    Une seule source : la dernière valeur de /api/network relevée par app.js (paintNetwork -> setNetLast).

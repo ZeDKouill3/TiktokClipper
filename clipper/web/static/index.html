@@ -1,34 +1,52 @@
 <!DOCTYPE html>
-<html lang="fr" data-theme="dark">
+<html lang="fr" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Clipper · Console</title>
-<meta name="theme-color" content="#0e0e0c">
+<meta name="theme-color" content="#f6f4ef">
 <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
 <link rel="stylesheet" href="/static/fonts.css">
-<link rel="stylesheet" href="/static/style.css">
-<link rel="stylesheet" href="/static/screens/accounts.css">
-<link rel="stylesheet" href="/static/screens/veille.css">
+<!-- Cascade pendant la migration (ADR-a308). Basecoat est en couches Tailwind (properties, theme, base = jetons
+     :root et resets, components = .v3 .btn, .v3 .input..., utilities). Les feuilles des ecrans non migres vont dans
+     une couche « legacy » placee ENTRE base et components, declaree ici avant toute feuille (l'ordre des couches est
+     fixe par leur premiere apparition) :
+     - au-dessus de theme/base : les jetons :root de style.css (--muted, --accent, --font-mono, --ease-out... memes
+       noms chez Basecoat) et ses resets gardent la main dans les ecrans non migres, comme avant (pas un pixel) ;
+     - en dessous de components : dans la coquille, `.v3 .btn` l'emporte sur le `.btn` global de style.css.
+     Entre les feuilles legacy, ordre et specificite ne changent pas (meme couche, meme ordre). v3.css reste hors
+     couche, au-dessus de tout ; ses jetons sont sur .v3, jamais sur :root. -->
+<style>@layer properties, theme, base, legacy, components, utilities;</style>
+<link rel="stylesheet" href="/static/vendor/basecoat.cdn.min.css">
+<style>
+  @import url("/static/style.css") layer(legacy);
+  @import url("/static/screens/accounts.css") layer(legacy);
+  @import url("/static/screens/veille.css") layer(legacy);
+</style>
+<link rel="stylesheet" href="/static/v3.css">
 <script>
-  // Theme avant le premier rendu : choix memorise, sinon preference du systeme.
+  // Theme avant le premier rendu : clair par defaut, sombre seulement s'il a ete choisi (SPEC-7715 T12).
+  // Meme regle que chooseTheme() dans app.js ; data-theme reste pose le temps de la migration (style.css).
+  // La barre laterale reduite (rail) est restauree ici aussi, pour que la grille ne saute pas au chargement.
   (function () {
-    var t = null;
-    try { t = localStorage.getItem("clipper-theme"); } catch (e) { /* stockage indisponible */ }
-    if (t !== "light" && t !== "dark") {
-      t = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-    }
-    document.documentElement.dataset.theme = t;
+    var saved = null, nav = null;
+    try { saved = localStorage.getItem("clipper-theme"); nav = localStorage.getItem("clipper-nav"); } catch (e) { /* stockage indisponible */ }
+    var theme = saved === "dark" ? "dark" : "light";
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    if (nav === "rail") document.documentElement.dataset.nav = "rail";
   })();
 </script>
 </head>
 <body>
 <div class="app" id="app">
 
-  <aside class="sidebar" aria-label="Navigation principale">
+  <!-- Coquille v3 : chaque piece porte « v3 » (jamais un ancetre des sections .screen, que Basecoat restylerait).
+       La barre s'appelle .sidenav : basecoat.all.min.js prend le controle de tout .sidebar. -->
+  <aside class="sidenav v3" id="sidenav" aria-label="Navigation principale">
     <a class="brand" href="#/dashboard">
-      <img src="/static/logo.svg" alt="" width="32" height="32">
-      <span class="brand-name">Clipper</span>
+      <img src="/static/logo.svg" alt="" width="28" height="28">
+      <b class="brand-name">Clipper</b>
       <span class="brand-env">local</span>
     </a>
     <nav class="nav" id="nav">
@@ -46,21 +64,22 @@
       <a href="#/settings" data-screen="settings"><span data-icon="settings"></span><span>Réglages</span><span class="count" data-count-for="settings" hidden></span></a>
       <a href="#/journal" data-screen="journal"><span data-icon="activity"></span><span>Journal</span><span class="count" data-count-for="journal" hidden></span></a>
     </nav>
+    <div class="nav-foot"><button class="nav-rail" id="btn-rail" type="button" aria-pressed="false" aria-label="Réduire la barre latérale"><span data-icon="chevron-left"></span><span>Réduire</span></button></div>
   </aside>
 
   <div class="main">
-    <header class="topbar">
-      <button class="icon-btn only-mobile" id="btn-menu" type="button" aria-label="Menu"><span data-icon="menu"></span></button>
-      <div class="crumbs" id="crumbs"><span class="cur" id="crumb-title">Tableau de bord</span></div>
-      <div class="top-actions">
-        <span class="net-pill unknown" id="net-pill" role="status" title="Pays de l'IP publique"><span class="net-dot"></span><span id="net-label">IP…</span></span>
-        <span class="live" id="live" title="Progression en temps réel"><span class="live-dot"></span><span class="live-label" id="live-label">En direct</span></span>
-        <button class="icon-btn" id="btn-theme" type="button" aria-label="Changer de thème"></button>
-        <button class="icon-btn notif-btn" id="btn-notif" type="button" aria-label="Notifications du navigateur" aria-pressed="false"><span data-icon="bell"></span></button>
-        <button class="btn btn-primary" id="btn-add" type="button"><span data-icon="plus"></span><span class="lbl">Ajouter une vidéo</span></button>
-      </div>
+    <header class="topbar v3">
+      <button class="btn-icon menu-btn" id="btn-menu" type="button" aria-label="Menu"><span data-icon="menu"></span></button>
+      <div class="crumbs" id="crumbs"><span class="crumb-group" id="crumb-group">Production</span><span class="sep">/</span><span class="cur" id="crumb-title">Tableau de bord</span></div>
+      <span class="spacer"></span>
+      <button class="search-btn" id="btn-palette" type="button" aria-label="Palette de commandes : aller à un écran, ouvrir une vidéo, agir"><span data-icon="search"></span><span class="lbl">Aller à, chercher, agir</span><kbd class="kbd">Ctrl K</kbd></button>
+      <span class="pill live" id="live" role="status" title="Progression en temps réel"><span class="dot"></span><span class="lbl" id="live-label">En direct</span></span>
+      <span class="pill net unknown" id="net-pill" role="status" title="Pays de l'IP publique"><span data-icon="shield-check"></span><span class="mono" id="net-label">IP…</span></span>
+      <button class="btn-icon" id="btn-theme" type="button" aria-label="Changer de thème"></button>
+      <button class="btn-icon notif-btn" id="btn-notif" type="button" aria-label="Notifications du navigateur" aria-pressed="false"><span data-icon="bell"></span></button>
+      <button class="btn" data-size="sm" id="btn-add" type="button"><span data-icon="plus"></span><span class="lbl">Ajouter une vidéo</span></button>
     </header>
-    <div class="conn-banner" id="conn-banner" role="status" hidden><span data-icon="triangle-alert"></span>Connexion perdue : les données sont actualisées toutes les 5 secondes.</div>
+    <div class="conn-banner v3" id="conn-banner" role="status" hidden><span data-icon="triangle-alert"></span>Connexion perdue : les données sont actualisées toutes les 5 secondes.</div>
 
     <main class="view" id="view" tabindex="-1">
     <section class="screen" id="screen-dashboard" data-title="Tableau de bord" hidden>
@@ -146,7 +165,7 @@
     </main>
   </div>
 
-  <nav class="tabbar" id="tabbar" aria-label="Navigation mobile">
+  <nav class="tabbar v3" id="tabbar" aria-label="Navigation mobile">
     <a href="#/dashboard" data-screen="dashboard"><span data-icon="layout-dashboard"></span><span>Accueil</span><span class="count" data-count-for="dashboard" hidden></span></a>
     <a href="#/veille" data-screen="veille"><span data-icon="trending-up"></span><span>Veille</span><span class="count" data-count-for="veille" hidden></span></a>
     <a href="#/review" data-screen="review"><span data-icon="sparkles"></span><span>Revue</span><span class="count" data-count-for="review" hidden></span></a>
@@ -166,9 +185,38 @@
   </form>
 </div>
 
-<div class="toasts" id="toasts" aria-live="polite"></div>
 <div class="overlay" id="overlay" hidden></div>
 
+<!-- Couche v3 : toasts Basecoat, dialogues natifs, tiroir, palette. Le conteneur porte « v3 » pour que les
+     selecteurs descendants `.v3 .dialog` / `.v3 .toaster` s'appliquent (un <dialog class="v3"> seul ne recevrait rien). -->
+<div class="v3" id="layers">
+  <div class="toaster" id="toaster" data-align="end" aria-live="polite"></div>
+  <div class="drawer-scrim" id="drawer-scrim"></div>
+  <aside class="drawer-panel" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden></aside>
+  <dialog class="dialog palette" id="palette" aria-label="Palette de commandes"><div>
+    <input type="text" id="palette-q" placeholder="Aller à un écran, ouvrir une vidéo, lancer une action…" autocomplete="off" spellcheck="false" aria-label="Palette de commandes" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+    <ul id="palette-list" role="listbox" aria-label="Résultats"></ul>
+  </div></dialog>
+  <dialog class="dialog" id="shortcuts" aria-labelledby="shortcuts-title"><div>
+    <header><h2 id="shortcuts-title">Raccourcis clavier</h2><p>Valables sur tous les écrans, hors champs de saisie.</p></header>
+    <section>
+      <dl class="kv">
+        <dt><kbd class="kbd">Ctrl</kbd> <kbd class="kbd">K</kbd></dt><dd>Palette : aller à un écran, ouvrir une vidéo, agir</dd>
+        <dt><kbd class="kbd">g</kbd> puis <kbd class="kbd">d</kbd> <kbd class="kbd">v</kbd> <kbd class="kbd">c</kbd> <kbd class="kbd">p</kbd> <kbd class="kbd">s</kbd></dt><dd>Tableau de bord, Vidéos, Clips, Publication, Statistiques</dd>
+        <dt><kbd class="kbd">/</kbd></dt><dd>Chercher dans la liste de l'écran</dd>
+        <dt><kbd class="kbd">n</kbd></dt><dd>Ajouter une vidéo</dd>
+        <dt><kbd class="kbd">j</kbd> <kbd class="kbd">k</kbd> <kbd class="kbd">Entrée</kbd></dt><dd>Ligne suivante, précédente, ouvrir</dd>
+        <dt><kbd class="kbd">a</kbd> <kbd class="kbd">r</kbd></dt><dd>Approuver, refuser (fiche clip, revue)</dd>
+        <dt><kbd class="kbd">Échap</kbd></dt><dd>Fermer le tiroir ou le dialogue</dd>
+        <dt><kbd class="kbd">?</kbd></dt><dd>Cette liste</dd>
+      </dl>
+    </section>
+    <footer><button class="btn" data-variant="outline" type="button" data-dismiss>Fermer</button></footer>
+  </div></dialog>
+</div>
+
+<script src="/static/vendor/idiomorph.min.js"></script>
+<script src="/static/vendor/basecoat.all.min.js"></script>
 <script src="/static/icons.js"></script>
 <script src="/static/ui.js"></script>
 <script src="/static/screens.js"></script>

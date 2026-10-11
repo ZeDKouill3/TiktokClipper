@@ -1158,10 +1158,10 @@ def test_index_has_navigation_to_the_eight_screens(tmp_path, isolated_cwd):
 def test_index_has_a_mobile_tab_bar(tmp_path, isolated_cwd):
     html = served(tmp_path, "/")
     assert 'name="viewport"' in html
-    tabbar = html[html.index('<nav class="tabbar"'):html.index("</nav>", html.index('<nav class="tabbar"'))]
+    tabbar = html[html.index('<nav class="tabbar'):html.index("</nav>", html.index('<nav class="tabbar'))]
     for screen in TAB_SCREENS:
         assert f'href="#/{screen}"' in tabbar, screen
-    css = served(tmp_path, "/static/style.css")
+    css = served(tmp_path, "/static/v3.css")  # coquille v3 (ADR-a308) : la barre d'onglets vit dans v3.css
     assert ".tabbar" in css and "@media (max-width: 900px)" in css
     assert "44px" in css  # zones de toucher (T6)
 
@@ -1247,25 +1247,28 @@ def test_every_route_called_by_app_js_exists_in_the_app(tmp_path, isolated_cwd):
 
 
 def test_toasts_with_undo_and_confirm_modal(tmp_path, isolated_cwd):
+    # Coquille v3 (ADR-a308) : toasts dans le toaster Basecoat, confirmation en <dialog> natif ; l'overlay et
+    # .modal restent pour l'ancien openPanel des ecrans non migres.
     js = "".join(served(tmp_path, f"/static/{n}") for n in ("ui.js", "app.js"))
-    assert "function toast(" in js and "data-undo" in js and "Annuler" in js
+    assert "function toast(" in js and "data-toast-cancel" in js and "Annuler" in js
     assert "UNDO_MS = 5000" in js
-    assert "function confirmDialog(" in js and 'role", "dialog"' in js
+    assert "function confirmDialog(" in js and "showModal()" in js and 'role", "dialog"' in js
     html = served(tmp_path, "/")
-    assert 'id="toasts"' in html and 'id="overlay"' in html
-    css = served(tmp_path, "/static/style.css")
-    assert ".toast" in css and ".modal" in css
+    assert 'id="toaster"' in html and 'id="overlay"' in html
+    assert ".toast" in served(tmp_path, "/static/v3.css") and ".modal" in served(tmp_path, "/static/style.css")
 
 
-def test_theme_follows_system_with_remembered_toggle(tmp_path, isolated_cwd):
+def test_theme_is_light_by_default_with_remembered_toggle(tmp_path, isolated_cwd):
+    # SPEC-7715 T12 : clair par defaut, sombre memorise par navigateur, jamais la preference du systeme
+    # (remplace test_theme_follows_system_with_remembered_toggle).
     html = served(tmp_path, "/")
     js = served(tmp_path, "/static/app.js")
     assert 'id="btn-theme"' in html
-    assert "prefers-color-scheme" in html and "prefers-color-scheme" in js
-    assert "localStorage" in html and "localStorage" in js
-    assert "data-theme" in html or "dataset.theme" in html
+    assert "prefers-color-scheme" not in html and "prefers-color-scheme" not in js
+    assert "localStorage" in html and "localStorage" in js and "clipper-theme" in js
+    assert '<html lang="fr" data-theme="light">' in html and 'classList.toggle("dark"' in html
     css = served(tmp_path, "/static/style.css")
-    assert ':root[data-theme="light"]' in css and ':root[data-theme="dark"]' in css
+    assert ':root[data-theme="light"]' in css and ':root[data-theme="dark"]' in css  # ecrans non migres
 
 
 def test_token_page_sets_cookie_and_replays_on_401(tmp_path, isolated_cwd):
@@ -9261,12 +9264,12 @@ def test_settings_refuses_a_bad_country_code(tmp_path, isolated_cwd, value):
 
 def test_topbar_has_a_network_pill_wired_to_the_api_every_60s(tmp_path, isolated_cwd):
     html = served(tmp_path, "/")
-    top = html[html.index('<header class="topbar"'):html.index("</header>")]
+    top = html[html.index('<header class="topbar'):html.index("</header>")]
     assert 'id="net-pill"' in top
     js = served(tmp_path, "/static/app.js")
     assert "/api/network" in js and "60000" in js and "visibilitychange" in js
     assert "IP hors " in js and "pays inconnu" in js
-    assert ".net-pill" in served(tmp_path, "/static/style.css")
+    assert ".pill.net" in served(tmp_path, "/static/v3.css")  # coquille v3 : pastille compacte (SPEC-7715 T13)
 
 
 def test_settings_screen_has_a_country_choice(tmp_path, isolated_cwd):
