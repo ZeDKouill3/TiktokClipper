@@ -26,8 +26,6 @@ output_dir = "output"
 # letterbox_zoom = 1.3     # fenetre centrale de largeur source_w / zoom
 # layout = "stream_auto"   # letterbox (defaut) | stream_auto (facecam detectee, SPEC-3a88)
 # stream_variant = "split" # top (defaut, inchange) | split (SPEC-76dc, webcam haut/jeu bas)
-# split_gameplay_align = "exclude_webcam" # split : exclude_webcam (defaut) | center (jeu centre sur l image entiere)
-# title_split_center_y = 0 # [render] split : ordonnee (px) ou centrer le titre d ecran, ex. 640 ; 0 = placement actuel
 # # Webcam du stream trouvee par periode (Just Chatting puis jeu), TASK-5745 : rectangles candidats
 # # numerotes dessines sur une planche, Claude (usage [llm.usages.facecam], modele rapide par defaut)
 # # repond un numero ou « aucun ». Valeurs par defaut de CONFIG_DEFAULTS, a ne changer que si besoin :
