@@ -2112,7 +2112,12 @@ def _facecam_prompt(candidates: list[dict[str, Any]], start: float, end: float) 
         "candidat, une ligne par numero, sur plusieurs images de la periode.\n"
         f"Rectangles candidats :\n{listing}\n"
         "Reponds le numero du rectangle qui est la webcam du streamer, ou null si aucun ne l'est "
-        "(widget, alerte, chat, camera de jeu, zone de l'interface du jeu, personne a l'ecran). "
+        "(widget, alerte, chat, camera de jeu, mini-carte, zone de l'interface du jeu, personne a l'ecran). "
+        "null est la bonne reponse quand aucun rectangle ne montre la personne du streamer elle-meme, "
+        "meme si la webcam est visible ailleurs sur l'image (la liste des candidats peut l'avoir manquee) : "
+        "un rectangle seulement proche de la webcam, decale, partiel, ou qui ne montre que du decor "
+        "n'est pas la webcam. Ne choisis jamais le moins mauvais rectangle : en cas de doute "
+        "entre un rectangle approximatif et rien, reponds null. "
         "Ne donne jamais de coordonnees : seulement le numero. Explique en une phrase dans reason."
     )
 
