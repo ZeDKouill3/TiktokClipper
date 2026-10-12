@@ -66,7 +66,7 @@ def test_for_each_ref_local_and_remote():
     assert names == {("main", False), ("task/TASK-7aca-ank-viz", False), ("origin/main", True)}
     main = next(r for r in refs if r["name"] == "main")
     assert main["sha"] == "ec791ef"
-    assert main["subject"] == "ratify SPEC-08c28e46a632"
+    assert main["subject"] == "ratify SPEC-810f91e2fdba"
     assert main["date"] == "2026-09-25T10:44:16+01:00"
     assert main["ref"] == "refs/heads/main"
 
