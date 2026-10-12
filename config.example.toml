@@ -37,6 +37,7 @@ output_dir = "output"
 #
 # [captions]
 # screen_title_allow_emoji = false   # SPEC-6a86 (defaut) : titre d'ecran sobre, sans emoji
+# screen_title_style = "citation"    # SPEC-08c2 : "citation" (defaut) ou "promesse" (annonce l'enjeu sans reveler la chute)
 #
 # [tiktok]   # releves de statistiques (SPEC-47e2) : seulement quand on se sert de Clipper
 # stats_stale_min = 60      # ecran Statistiques : releve a l'ouverture si le dernier a plus de N minutes (0 = jamais)
