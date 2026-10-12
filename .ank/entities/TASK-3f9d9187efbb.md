@@ -5,7 +5,7 @@ slug: split-twitch-jeu-centr-sur-l-image-enti-re-r-gla
 title: "Split twitch : jeu centré sur l'image entière (réglage) et titre d'écran sur la ligne de séparation webcam/jeu"
 created: 2026-10-12T10:21:18Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/reframe.py
   - clipper/render.py
@@ -21,6 +21,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/336a3a86a9f3@9a59a1b
+    tree: scope/94dbfe23c897
+    criteria: c0deb613f0f0
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 2
+version: 4
 ---

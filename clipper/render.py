@@ -205,6 +205,13 @@ CONFIG_DEFAULTS: dict[str, object] = {
     # Défaut True = comportement inchangé. False : aucun titre, sur aucun
     # layout ; text_zones.title n'est alors plus requis.
     "title_enabled": True,
+    # Ordonnée de sortie (px, canevas 1080x1920) sur laquelle centrer le titre
+    # d'écran des clips stream_split (ex. 640 = ligne de séparation
+    # webcam/jeu), centré horizontalement sur l'image. 0 (défaut) = placement
+    # actuel (zone title de reframe). Le titre ne doit chevaucher ni les
+    # sous-titres ni le badge (badge_enabled) : collision = RenderError.
+    # Sans effet sur les clips letterbox / stream / blur.
+    "title_split_center_y": 0,
     # Affiche le badge de chaîne (logo et nom) entre la webcam et le jeu ; agencement stream split seulement.
     # Badge de chaîne (SPEC-76dc, agencement stream split seulement : la
     # zone badge n'existe que dans reframe/<clip_id>.json en stream_split,
@@ -547,9 +554,13 @@ def layout_pseudo(text: str, zone_width: int, settings: dict[str, Any]) -> Pseud
     )
 
 
-def layout_title(text: str, zone: dict[str, Any], settings: dict[str, Any]) -> TitleLayout:
+def layout_title(
+    text: str, zone: dict[str, Any], settings: dict[str, Any], center_y: int | None = None
+) -> TitleLayout:
     """Mesure ``text`` avec les vraies polices et place l'encadre blanc dans
-    ``zone`` : centre horizontalement, colle en bas. Une ligne, puis deux,
+    ``zone`` : centre horizontalement, colle en bas (``title_lift``), ou, avec
+    ``center_y``, centre verticalement sur cette ordonnee de sortie (agencement
+    split, ``title_split_center_y``) ; RenderError s'il sort de la zone. Une ligne, puis deux,
     puis une taille plus petite par paliers ; RenderError s'il ne tient pas a
     la taille minimale."""
     words = text.split()
@@ -574,7 +585,7 @@ def layout_title(text: str, zone: dict[str, Any], settings: dict[str, Any]) -> T
         raise RenderError(f"title_lift doit etre >= 0, recu {title_lift} (reglage [render] title_lift)")
 
     zx0, zy0, zx1, zy1 = _zone(zone)
-    zone_w, zone_h = zx1 - zx0, zy1 - zy0 - title_lift
+    zone_w, zone_h = zx1 - zx0, zy1 - zy0 - (title_lift if center_y is None else 0)
     pad_x, pad_y = int(settings["title_pad_x"]), int(settings["title_pad_y"])
 
     for size in _font_sizes(settings):
@@ -619,7 +630,15 @@ def layout_title(text: str, zone: dict[str, Any], settings: dict[str, Any]) -> T
             if box_w > zone_w or box_h > zone_h:
                 continue
             bx0 = zx0 + (zone_w - box_w) // 2
-            by0 = zy1 - title_lift - box_h
+            if center_y is None:
+                by0 = zy1 - title_lift - box_h
+            else:
+                by0 = center_y - box_h // 2
+                if by0 < zy0 or by0 + box_h > zy1:
+                    raise RenderError(
+                        f"titre d'ecran centre sur y={center_y} hors du cadre ({zy0}..{zy1}) : "
+                        "[render] title_split_center_y"
+                    )
             cap = -font.getbbox("H", anchor="ls")[1]
             layout = TitleLayout(
                 font_size=size,
@@ -648,10 +667,12 @@ def layout_title(text: str, zone: dict[str, Any], settings: dict[str, Any]) -> T
     )
 
 
-def title_png(text: str, zone: dict[str, Any], settings: dict[str, Any], path: Path) -> TitleLayout:
+def title_png(
+    text: str, zone: dict[str, Any], settings: dict[str, Any], path: Path, center_y: int | None = None
+) -> TitleLayout:
     """Ecrit dans ``path`` le titre d'ecran en PNG transparent de la taille
     de ``zone`` (a incruster en (x0, y0) de la zone) ; renvoie sa mise en page."""
-    layout = layout_title(text, zone, settings)
+    layout = layout_title(text, zone, settings, center_y)
     zx0, zy0, zx1, zy1 = _zone(zone)
     img = Image.new("RGBA", (zx1 - zx0, zy1 - zy0), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -853,6 +874,26 @@ def check_cta_handle_gap(settings: dict[str, Any]) -> None:
     gap = settings["cta_handle_gap"]
     if not isinstance(gap, int) or isinstance(gap, bool) or gap < 0:
         raise RenderError(f"[render] cta_handle_gap doit etre un entier >= 0, recu {gap!r}")
+
+
+def _check_split_title_collision(
+    box: tuple[int, int, int, int], below: int, zones: dict[str, Any], badge_enabled: bool,
+    center_y: int, clip_id: str,
+) -> None:
+    """Le titre centre sur ``title_split_center_y`` (encadre + pseudo dessous,
+    ``below`` px) ne doit chevaucher ni les sous-titres ni le badge actif :
+    RenderError, jamais de deplacement silencieux (ADR-ad2e)."""
+    bx0, by0, bx1, by1 = box
+    by1 += below
+    names = ["subtitles"] + (["badge"] if badge_enabled else [])
+    for name in names:
+        zx0, zy0, zx1, zy1 = _zone(zones[name])
+        if bx0 < zx1 and zx0 < bx1 and by0 < zy1 and zy0 < by1:
+            raise RenderError(
+                f"[render] title_split_center_y={center_y} : le titre de {clip_id} "
+                f"({bx0},{by0})-({bx1},{by1}) chevauche la zone {name} ({zx0},{zy0})-({zx1},{zy1}) : "
+                "changer title_split_center_y, raccourcir le titre ou deplacer la zone"
+            )
 
 
 def _draw_pseudo(
@@ -1263,6 +1304,9 @@ def render(
                 f"[render] cta_seconds doit etre > 0, recu {cta_seconds_setting}"
             )
         check_cta_handle_gap(settings)
+    split_center_y = settings["title_split_center_y"]
+    if isinstance(split_center_y, bool) or not isinstance(split_center_y, int) or split_center_y < 0:
+        raise RenderError(f"[render] title_split_center_y doit etre un entier >= 0, recu {split_center_y!r}")
     if badge_enabled:
         # ADR-ad2e : jamais de badge a moitie active.
         if not str(settings["badge_logo"]).strip():
@@ -1313,6 +1357,7 @@ def render(
     letterbox = layout in _TEXT_LAYOUTS
     rects: dict[str, dict[str, int]] = {}
     zones: dict[str, Any] | None = None
+    split_title = False
     if letterbox:
         zones = reframe_data.get("text_zones")
         if not isinstance(zones, dict) or not {"subtitles", "part"} <= set(zones):
@@ -1320,7 +1365,8 @@ def render(
                 f"reframe/{clip_id}.json est en {layout} sans text_zones (subtitles, part) : "
                 "relancer reframe --force"
             )
-        if title_enabled and "title" not in zones:
+        split_title = title_enabled and layout == "stream_split" and split_center_y > 0
+        if title_enabled and not split_title and "title" not in zones:
             raise RenderError(
                 f"reframe/{clip_id}.json ({layout}) n'a pas de zone title : [render] title_enabled=true "
                 "la requiert (la desactiver, ou pour l'agencement split remonter split_webcam_dest.y pour "
@@ -1384,7 +1430,17 @@ def render(
             # Titre d'ecran pendant tout le clip, pas d'accroche de 2 s (SPEC-6127,
             # letterbox comme stream) -- sauf title_enabled = false (SPEC-76dc).
             if title_enabled:
-                title_zone = reframe_data["text_zones"]["title"]
+                if split_title:
+                    # Zone = tout le cadre : l'encadre est centre sur
+                    # title_split_center_y, hors de la zone title de reframe.
+                    title_zone = {
+                        "x0": 0, "y0": 0,
+                        "x1": int(reframe_data["output"]["width"]), "y1": int(reframe_data["output"]["height"]),
+                    }
+                    # en memoire seulement : l'incrustation ffmpeg lit text_zones.title
+                    reframe_data["text_zones"]["title"] = dict(title_zone)
+                else:
+                    title_zone = reframe_data["text_zones"]["title"]
                 if handle_shown:
                     # Le pseudo se place sous l'encadre du titre : on reserve
                     # la place en remontant le titre (title_lift effectif plus
@@ -1397,7 +1453,14 @@ def render(
                 else:
                     title_settings = settings
                 png = scratch_dir / "title.png"
-                title_layout = title_png(screen_title, title_zone, title_settings, png)
+                title_layout = title_png(
+                    screen_title, title_zone, title_settings, png, split_center_y if split_title else None
+                )
+                if split_title:
+                    below = (int(settings["cta_handle_gap"]) + pseudo.height) if handle_shown else 0
+                    _check_split_title_collision(
+                        title_layout.box, below, zones, badge_enabled, split_center_y, clip_id
+                    )
                 if handle_shown:
                     _draw_pseudo(png, title_zone, title_layout, str(settings["cta_handle"]), pseudo, settings)
                 extra_inputs = extra_inputs + (png,)
