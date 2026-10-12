@@ -1678,7 +1678,7 @@ def test_promesse_prompt_asks_for_the_stake_without_revealing_the_outcome(worksp
     prompt = _single_prompt(workspace, tmp_path, screen_title_style="promesse")
 
     assert "enjeu" in prompt
-    assert "sans reveler" in prompt
+    assert "ni resumer l'issue" in prompt
     assert "se realise dans le clip" in prompt
     assert "de preference une phrase reellement prononcee dans ce clip" not in prompt
     assert "choc" in prompt and "aucun emoji" in prompt  # sobriete inchangee
@@ -1690,7 +1690,7 @@ def test_promesse_schema_screen_title_description_carries_the_same_instructions(
     schema = response_schema({**CONFIG_DEFAULTS, "screen_title_style": "promesse"})
 
     description = schema["properties"]["screen_title"]["description"]
-    assert "enjeu" in description and "sans reveler" in description
+    assert "enjeu" in description and "ni resumer l'issue" in description
     assert "se realise dans le clip" in description
     assert "AUCUN emoji" in description
 
@@ -1702,8 +1702,8 @@ def test_promesse_is_sent_to_the_llm_in_prompt_and_schema(workspace, tmp_path):
     fake, _ = run(workspace, make_config(tmp_path, screen_title_style="promesse"), [answer()])
 
     schema_text = json.dumps(fake.calls[0].schema, ensure_ascii=False)
-    assert "sans reveler" in fake.calls[0].prompt
-    assert "sans reveler" in schema_text
+    assert "ni resumer l'issue" in fake.calls[0].prompt
+    assert "ni resumer l'issue" in schema_text
 
 
 def test_unknown_screen_title_style_is_an_explicit_error_naming_the_key(workspace, tmp_path):
@@ -1724,3 +1724,17 @@ def test_unknown_screen_title_style_also_fails_in_response_schema():
 
     with pytest.raises(CaptionsError, match="screen_title_style"):
         response_schema({**CONFIG_DEFAULTS, "screen_title_style": "x"})
+
+
+def test_promesse_prompt_and_schema_vary_the_form_and_forbid_revealing_the_outcome(workspace, tmp_path):
+    from clipper.captions import CONFIG_DEFAULTS, response_schema
+
+    prompt = _single_prompt(workspace, tmp_path, screen_title_style="promesse")
+    description = response_schema({**CONFIG_DEFAULTS, "screen_title_style": "promesse"})[
+        "properties"]["screen_title"]["description"]
+
+    for text in (prompt, description):
+        assert "au plus 1 titre sur 2 en question" in text
+        assert "situation en suspens" in text
+        assert "Dernière carte, tout ou rien" in text
+        assert "jamais reveler ni resumer l'issue" in text

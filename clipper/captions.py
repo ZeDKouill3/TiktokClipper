@@ -307,14 +307,17 @@ def response_schema(
 # SPEC-08c2 : consignes du style "promesse", reprises a l'identique dans le
 # prompt et dans la description du champ du schema (le schema prime).
 _PROMESSE_SCHEMA_HINT = (
-    "annonce l'enjeu ou la chute du clip sans reveler l'issue (question ou situation "
-    "en suspens, ex. « Le craft va-t-il passer ? ») ; la promesse se realise dans le clip : "
+    "annonce l'enjeu du clip, jamais reveler ni resumer l'issue ; varier la forme : au plus 1 titre "
+    "sur 2 en question, sinon une situation en suspens (« Il tente le boss seul », "
+    "« Dernière carte, tout ou rien ») ; la promesse se realise dans le clip : "
     "aucun fait, nom ou chiffre absent du transcript ou de la justification du moment ;"
 )
 _PROMESSE_PROMPT_RULE = (
-    "il tient le spectateur en haleine : il annonce l'enjeu ou la chute du clip sans reveler "
-    "l'issue (une question ou une situation en suspens, ex. « Le craft va-t-il passer ? », "
-    "« Il tente le boss seul »), pas une citation ; la promesse se realise dans le clip : "
+    "il tient le spectateur en haleine : il annonce l'enjeu du clip, jamais reveler ni resumer l'issue "
+    "(un titre qui dit ce qui s'est passe, ex. « Il refuse de répondre aux stats », est refuse) ; "
+    "varier la forme : au plus 1 titre sur 2 en question, sinon une situation en suspens "
+    "(« Il tente le boss seul », « Dernière carte, tout ou rien »), pas une citation ; "
+    "la promesse se realise dans le clip : "
     "aucun fait, nom ou chiffre absent du transcript ou de la justification du moment"
 )
 
