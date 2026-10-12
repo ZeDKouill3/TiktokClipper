@@ -5,7 +5,7 @@ slug: retitrer-le-stock-aion-en-promesse-sans-toucher
 title: Retitrer le stock AION en promesse sans toucher caption/hashtags
 created: 2026-10-12T13:14:22Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - tools/retitle_stock.py
   - tests/test_retitle_stock.py
@@ -15,8 +15,15 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/38506ea682d5@6c48daa
+    tree: scope/1ce18f266e70
+    criteria: 1d7d502cf22f
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 ## But
