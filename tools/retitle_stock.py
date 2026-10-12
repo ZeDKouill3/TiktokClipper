@@ -230,6 +230,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    # Les titres promesse_emoji contiennent des emojis : une console ou un fichier en cp1252 plantait l'affichage
+    # apres le patch de la premiere video.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
     base = load_config(args.config)
     workspace = Path(args.workspace) if args.workspace else Path(base.workspace_dir)
