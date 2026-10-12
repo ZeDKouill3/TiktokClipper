@@ -907,6 +907,24 @@ def check_cta_handle_gap(settings: dict[str, Any]) -> None:
         raise RenderError(f"[render] cta_handle_gap doit etre un entier >= 0, recu {gap!r}")
 
 
+_SCREEN_TITLE_STYLES = ("citation", "promesse", "promesse_emoji")  # SPEC-810f, comme captions.SCREEN_TITLE_STYLES
+
+
+def _screen_title_style(config: Any) -> str:
+    """Style du titre d'ecran de la video, lu dans la section ``[captions]`` effective ; hors domaine : RenderError
+    (ADR-ad2e). Ecrit dans le sidecar avec ``title_shown`` pour que la repartition sache ce qui est dessine."""
+    if config is None:
+        from clipper.config import load_config
+
+        config = load_config()
+    value = config.section("captions")["screen_title_style"]
+    if value not in _SCREEN_TITLE_STYLES:
+        raise RenderError(
+            f"[captions] screen_title_style doit valoir {' ou '.join(repr(v) for v in _SCREEN_TITLE_STYLES)}, "
+            f"recu {value!r}")
+    return value
+
+
 def _check_split_title_collision(
     box: tuple[int, int, int, int], below: int, zones: dict[str, Any], badge_enabled: bool,
     center_y: int, clip_id: str,
@@ -1322,6 +1340,7 @@ def render(
     cta_enabled = bool(settings["cta_enabled"])
     title_enabled = bool(settings["title_enabled"])
     badge_enabled = bool(settings["badge_enabled"])
+    screen_title_style = _screen_title_style(config)
     if cta_enabled:
         # ADR-ad2e : jamais de CTA a moitie active (verification independante
         # du clip, avant toute lecture de fichier).
@@ -1573,7 +1592,8 @@ def render(
         "layout": reframe_data["layout"],
         "cta": cta_applies,
         # ce qui a reellement ete dessine (la qa ne relit pas la config courante)
-        "title_shown": letterbox and title_enabled,
+        "screen_title_style": screen_title_style,  # style [captions] effectif de la video (test A/B, SPEC-6d1f)
+        "title_shown": title_input is not None,
         "badge_shown": letterbox and badge_enabled,
         "cta_handle_shown": handle_shown,
         "qa": dict(_QA_DEFAULT),

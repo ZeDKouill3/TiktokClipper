@@ -178,10 +178,81 @@ def test_llm_failure_is_named_and_video_untouched(ws, tmp_path):
     assert (d / "captions.json").read_bytes() == before
 
 
-def test_style_must_be_promesse(ws, tmp_path):
+def _fake_run(seen):
+    """captions.run simule : releve le style de la config recue, ecrit des titres neufs dans le dossier temporaire."""
+    def run(video_id, workspace, *, config, force):
+        seen.append(retitle_stock.captions.screen_title_style(config.section("captions")))
+        path = Path(workspace) / video_id / "captions.json"
+        clips = [{**c, "screen_title": f"neuf {c['id']}"} for c in OLD_CLIPS]
+        path.write_text(json.dumps({"video_id": video_id, "clips": clips}), encoding="utf-8")
+        return path
+    return run
+
+
+@pytest.mark.parametrize("style", ["citation", "promesse", "promesse_emoji"])
+def test_style_option_overrides_the_preset_style_for_the_generation(ws, tmp_path, monkeypatch, style):
     make_video(ws)
-    with pytest.raises(retitle_stock.RetitleError, match="promesse"):
-        run_retitle(ws, tmp_path, [], cfg=config(tmp_path, screen_title_style="citation"))
+    seen = []
+    monkeypatch.setattr(retitle_stock.captions, "run", _fake_run(seen))
+
+    retitle_stock.retitle_video(VIDEO_ID, workspace=ws, config=config(tmp_path, screen_title_style="citation"
+                                if style != "citation" else "promesse"),
+                                backup_root=tmp_path / "backup", style=style)
+
+    assert seen == [style]
+
+
+def test_default_style_is_promesse_whatever_the_preset_says(ws, tmp_path, monkeypatch):
+    make_video(ws)
+    seen = []
+    monkeypatch.setattr(retitle_stock.captions, "run", _fake_run(seen))
+
+    retitle_stock.retitle_video(VIDEO_ID, workspace=ws, config=config(tmp_path, screen_title_style="citation"),
+                                backup_root=tmp_path / "backup")
+
+    assert seen == ["promesse"]
+
+
+def test_unknown_style_is_a_named_error_and_nothing_is_touched(ws, tmp_path, monkeypatch):
+    d = make_video(ws)
+    before = (d / "captions.json").read_bytes()
+    monkeypatch.setattr(retitle_stock.captions, "run", _fake_run([]))
+
+    with pytest.raises(retitle_stock.RetitleError, match="chaotique"):
+        retitle_stock.retitle_video(VIDEO_ID, workspace=ws, config=config(tmp_path), backup_root=tmp_path / "backup",
+                                    style="chaotique")
+    assert (d / "captions.json").read_bytes() == before
+
+
+def test_patch_records_the_style_in_pipeline_json_so_the_render_draws_it(ws, tmp_path, monkeypatch):
+    d = make_video(ws)
+    monkeypatch.setattr(retitle_stock.captions, "run", _fake_run([]))
+
+    report = retitle_stock.retitle_video(VIDEO_ID, workspace=ws, config=config(tmp_path),
+                                         backup_root=tmp_path / "backup", style="promesse_emoji")
+
+    state = json.loads((d / "pipeline.json").read_text(encoding="utf-8"))
+    assert state["title_style"] == "promesse_emoji" and state["channel"] == "twitch-gaming"
+    assert report["style"] == "promesse_emoji"
+    assert (Path(report["backup"]) / "pipeline.json").exists()
+
+
+def test_dry_run_leaves_pipeline_json_untouched(ws, tmp_path, monkeypatch):
+    d = make_video(ws)
+    before = (d / "pipeline.json").read_bytes()
+    monkeypatch.setattr(retitle_stock.captions, "run", _fake_run([]))
+
+    retitle_stock.retitle_video(VIDEO_ID, workspace=ws, config=config(tmp_path), backup_root=tmp_path / "backup",
+                                dry_run=True, style="citation")
+
+    assert (d / "pipeline.json").read_bytes() == before
+
+
+def test_cli_style_option_is_parsed_and_validated():
+    assert retitle_stock.parse_args(["--style", "citation"]).style == "citation"
+    assert retitle_stock.parse_args([]).style == "promesse"
+    with pytest.raises(SystemExit):
+        retitle_stock.parse_args(["--style", "chaotique"])
 
 
 def test_guard_rejects_any_other_field_change():

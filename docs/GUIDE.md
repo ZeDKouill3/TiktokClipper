@@ -425,6 +425,27 @@ avertissement le signale), **Refuser** la met de côté ; dans les deux cas la
 proposition est marquée avec la date et `web`, et ne peut plus être décidée
 une seconde fois. Rien n'est modifié dans `clipper/jury.py` ni dans les poids.
 
+### Test A/B des titres par compte (`[repartition] title_ab_*`)
+
+Chaque compte TikTok listé dans `title_ab_accounts` a UN style de titre d'écran par jour
+(`citation`, `promesse`, `promesse_emoji`, SPEC-810f), et le style tourne chaque semaine pour que
+chaque compte essaie chaque style. Le titre est incrusté dans la vidéo : un clip ne peut donc partir
+que sur un compte dont le style du jour est le sien.
+
+- Réglages : `title_ab_enabled` (faux par défaut), `title_ab_start` (jour 1 de la semaine 1, heure de
+  Paris), `title_ab_accounts` et `title_ab_styles` (listes ordonnées). Style du compte de rang `i` la
+  semaine `w` (0 pour la première, 7 jours chacune) : `title_ab_styles[(i + w) % n]`. Une valeur
+  invalide (style inconnu, compte en double, date illisible) est une erreur nommée.
+- Le rendu écrit dans le `.json` du clip `screen_title_style` et `title_shown` (titre réellement
+  dessiné). Un clip sans l'un des deux n'est éligible à aucun compte du test, jamais deviné.
+- Le plan du soir ne place sur un compte du test que les clips de son style ; chaque refus (style
+  différent, style inconnu) est listé dans le plan (`title_ab.refused`) et l'écran Publication affiche
+  le style du compte et celui de chaque clip. Les comptes hors liste ne changent pas.
+- Une vidéo nouvelle reçoit, à l'étape captions, le style qui a le moins de clips disponibles ; il est
+  écrit dans son `pipeline.json` (`title_style`) et gardé à la relance.
+- `python tools/retitle_stock.py --video <id> --style promesse_emoji` retitre une vidéo du stock dans
+  un style donné (défaut `promesse`) ; relancer ensuite le rendu depuis `reframe`.
+
 ### Surveillance des VOD
 
 Avec `watch = true` dans `[channel]`, le worker interroge la `source_url` du

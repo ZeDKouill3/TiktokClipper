@@ -450,10 +450,14 @@ function repClipSelect(d, account, key, usedKey) {
   return `<select class="input rep-clip" data-rep-clip="${esc(account.account)}|${esc(key)}" aria-label="Changer le clip" ${pubRep.busy ? "disabled" : ""}><option value="">Changer le clip</option>${options}</select>`;
 }
 
+/* Test A/B des titres (SPEC-6d1f) : libellés français des styles de titre, seule présentation côté page. */
+const REP_STYLE_LABELS = { citation: "citation", promesse: "promesse", promesse_emoji: "promesse + emoji" };
+const repStyleLabel = (style) => REP_STYLE_LABELS[style] || style;
+
 function repLineRow(d, account, row, editable) {
   const l = row.line;
   const where = l.game_name ? esc(l.game_name) : "jeu inconnu : VOD";
-  const badges = `${l.exploration ? `<span class="chip info">exploration</span>` : ""}${l.prime ? `<span class="chip">soir</span>` : ""}`;
+  const badges = `${l.exploration ? `<span class="chip info">exploration</span>` : ""}${l.prime ? `<span class="chip">soir</span>` : ""}${l.title_style ? `<span class="chip">titre : ${esc(repStyleLabel(l.title_style))}</span>` : ""}`;
   const tools = editable ? `<div class="row wrap rep-tools">
       ${repClipSelect(d, account, String(row.index), pubKey(l))}
       <input type="datetime-local" class="input rep-time" data-rep-time="${esc(account.account)}|${row.index}" min="${esc(d.day)}T00:00" max="${esc(d.day)}T23:59" value="${esc(pubLocalInput(l.slot_at))}" aria-label="Changer l'heure" ${pubRep.busy ? "disabled" : ""}>
@@ -480,7 +484,7 @@ function repAccountHtml(d, account, editable) {
   const can = editable && !locked;
   const rows = repRows(account).map((row) => (row.line ? repLineRow(d, account, row, can) : repEmptyRow(d, account, row, can))).join("");
   const notes = (account.notes || []).map((n) => `<p class="li-sub muted">${esc(n)}</p>`).join("");
-  return `<div class="rep-account"><div class="rep-account-title">${esc(account.label || account.account)}${locked ? ` <span class="chip ok">publications créées</span>` : ""}</div>
+  return `<div class="rep-account"><div class="rep-account-title">${esc(account.label || account.account)}${account.title_style ? ` <span class="chip info">titres du jour : ${esc(repStyleLabel(account.title_style))}</span>` : ""}${locked ? ` <span class="chip ok">publications créées</span>` : ""}</div>
     <div class="panel">${rows || `<p class="muted" style="padding:10px">aucun créneau</p>`}</div>${notes}</div>`;
 }
 

@@ -2805,3 +2805,59 @@ def test_forced_rerender_with_a_broken_old_sidecar_is_an_explicit_error(
 
     assert path.read_text(encoding="utf-8") == "{cassé"  # etat de publication jamais ecrase
     assert fake_ffmpeg == []  # echec avant tout encodage
+
+
+# --------------------------------------------------------------------------
+# Test A/B des titres (SPEC-6d1f + SPEC-810f) : le sidecar dit le style du titre reellement dessine
+# --------------------------------------------------------------------------
+
+
+def _ab_config(captions=None, **render_settings):
+    sections = {"render": render_settings, **({"captions": captions} if captions is not None else {})}
+    return Config(mode="review", workspace_dir=Path("workspace"), output_dir=Path("output"), _sections=sections)
+
+
+def _render_split(tmp_path, video_dir, config):
+    from clipper.render import render
+
+    (video_dir / "reframe" / f"{CLIP_ID}.json").write_text(
+        json.dumps(_reframe_json_stream_split()), encoding="utf-8")
+    (video_dir / f"{VIDEO_ID}.mp4").write_bytes(b"")
+    render(VIDEO_ID, CLIP_ID, workspace_dir=video_dir.parent, output_dir=tmp_path / "output", config=config)
+    return _sidecar(tmp_path)
+
+
+def test_split_title_drawn_on_the_split_centre_is_recorded_as_shown_with_its_style(
+    tmp_path, video_dir, title_capture, cpu_device
+):
+    config = _ab_config({"screen_title_style": "promesse_emoji"}, title_split_center_y=640, badge_enabled=False)
+
+    data = _render_split(tmp_path, video_dir, config)
+
+    assert "bbox" in title_capture  # le titre split a bien ete dessine
+    assert data["title_shown"] is True
+    assert data["screen_title_style"] == "promesse_emoji"
+
+
+def test_sidecar_style_defaults_to_the_captions_default_citation(tmp_path, video_dir, fake_ffmpeg, cpu_device):
+    data = _render_split(tmp_path, video_dir, _ab_config(title_split_center_y=640, badge_enabled=False))
+
+    assert data["screen_title_style"] == "citation"
+
+
+def test_sidecar_title_not_shown_when_title_disabled_even_with_a_style(tmp_path, video_dir, fake_ffmpeg, cpu_device):
+    config = _ab_config({"screen_title_style": "promesse"}, title_enabled=False)
+
+    data = _render_split(tmp_path, video_dir, config)
+
+    assert data["title_shown"] is False
+    assert data["screen_title_style"] == "promesse"
+
+
+def test_invalid_captions_style_is_an_explicit_render_error(tmp_path, video_dir, fake_ffmpeg, cpu_device):
+    from clipper.render import RenderError
+
+    with pytest.raises(RenderError, match="screen_title_style"):
+        _render_split(tmp_path, video_dir, _ab_config({"screen_title_style": "chaotique"},
+                                                      title_split_center_y=640, badge_enabled=False))
+    assert fake_ffmpeg == []

@@ -1,4 +1,5 @@
-"""Retitre le stock de clips AION en « promesse » sans toucher au reste (TASK-a21f409cf69d, SPEC-08c2).
+"""Retitre le stock de clips AION dans un style de titre (« promesse » par défaut) sans toucher au reste
+(TASK-a21f409cf69d, SPEC-810f ; option --style : test A/B des titres, SPEC-6d1f).
 
 Pourquoi pas ``clipper render --force-step captions`` : l'etape captions reecrit aussi ``caption`` et
 ``hashtags``, or ``clipper/learning.py`` rattache un post TikTok a son clip par caption+hashtags. Ici les
@@ -9,6 +10,10 @@ commande, il ne lance rien.
 
     python tools/retitle_stock.py --workspace E:/.../workspace --dry-run
     python tools/retitle_stock.py --workspace E:/.../workspace --video v2895815199
+    python tools/retitle_stock.py --workspace E:/.../workspace --video v2895815199 --style promesse_emoji
+
+Le style choisi est aussi ecrit dans ``pipeline.json`` (``title_style``, seule cle touchee) pour que le rendu
+l'enregistre dans le sidecar du clip : la repartition ne place un clip que sur le compte de son style.
 """
 from __future__ import annotations
 
@@ -17,6 +22,7 @@ import json
 import shutil
 import sys
 import tempfile
+from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,6 +32,7 @@ from clipper.config import Config, load_config
 
 INPUTS = ("transcript.json", "moments.json", "parts.json", "meta.json")
 FIRST_RENDER_STEP = "reframe"  # captions déjà patché : reframe, subtitles, render, qa suffisent
+DEFAULT_STYLE = "promesse"
 DEFAULT_CHANNEL = "twitch-gaming"
 DEFAULT_GAME = "aion"
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
@@ -121,11 +128,16 @@ def assert_only_screen_title_changed(before: list[dict[str, Any]], after: list[d
                 raise RetitleError(f"clip {old['id']} : le champ {key!r} a change ({old.get(key)!r} -> {new.get(key)!r})")
 
 
-def _generate(video_id: str, workspace: Path, config: Config) -> list[dict[str, Any]]:
-    settings = captions._settings(config)
-    style = captions.screen_title_style(settings)
-    if style != "promesse":
-        raise RetitleError(f"{video_id} : [captions] screen_title_style vaut {style!r}, 'promesse' attendu (preset twitch-gaming)")
+def _check_style(style: str) -> None:
+    if style not in captions.SCREEN_TITLE_STYLES:
+        raise RetitleError(f"style de titre inconnu {style!r} (valeurs permises : {', '.join(captions.SCREEN_TITLE_STYLES)})")
+
+
+def _generate(video_id: str, workspace: Path, config: Config, style: str) -> list[dict[str, Any]]:
+    _check_style(style)
+    # le style demande l'emporte sur celui du preset, le reste de [captions] est intact
+    sections = {**config._sections, "captions": {**config._sections.get("captions", {}), "screen_title_style": style}}
+    config = dataclass_replace(config, _sections=sections)
     with tempfile.TemporaryDirectory(prefix="retitle-") as tmp:
         tmp_ws = Path(tmp)
         vtmp = tmp_ws / video_id
@@ -139,21 +151,24 @@ def _generate(video_id: str, workspace: Path, config: Config) -> list[dict[str, 
 
 
 def retitle_video(video_id: str, *, workspace: str | Path, config: Config, backup_root: str | Path,
-                  dry_run: bool = False) -> dict[str, Any]:
-    """Retitre une vidéo. ``dry_run`` ne laisse rien sur le disque. Tout échec : RetitleError qui nomme la
-    vidéo, captions.json réel intact."""
+                  dry_run: bool = False, style: str = DEFAULT_STYLE) -> dict[str, Any]:
+    """Retitre une vidéo dans le style ``style``. ``dry_run`` ne laisse rien sur le disque. Tout échec :
+    RetitleError qui nomme la vidéo, captions.json réel intact."""
     workspace = Path(workspace)
     cap_path = workspace / video_id / "captions.json"
+    state_path = workspace / video_id / "pipeline.json"
     try:
+        _check_style(style)
         if not cap_path.exists():
             raise RetitleError("captions.json absent")
         old_data = _read_json(cap_path)
         old_clips = old_data["clips"]
-        new_clips = _generate(video_id, workspace, config)
+        new_clips = _generate(video_id, workspace, config, style)
         patched = merge_screen_titles(old_clips, new_clips)
         assert_only_screen_title_changed(old_clips, patched)
         report: dict[str, Any] = {
-            "video_id": video_id, "patched": False, "backup": None, "render_command": render_command(video_id),
+            "video_id": video_id, "style": style, "patched": False, "backup": None,
+            "render_command": render_command(video_id),
             "clips": [{"id": o["id"], "old": o["screen_title"], "new": p["screen_title"]}
                       for o, p in zip(old_clips, patched)],
         }
@@ -163,7 +178,10 @@ def retitle_video(video_id: str, *, workspace: str | Path, config: Config, backu
         backup_dir = Path(backup_root) / f"{video_id}-{stamp}"
         backup_dir.mkdir(parents=True)
         shutil.copy2(cap_path, backup_dir / "captions.json")
+        shutil.copy2(state_path, backup_dir / "pipeline.json")
+        state = _read_json(state_path)
         _write_json_atomic(cap_path, {**old_data, "clips": patched})
+        _write_json_atomic(state_path, {**state, "title_style": style})
         assert_only_screen_title_changed(old_clips, _read_json(cap_path)["clips"])  # relecture disque
         report.update(patched=True, backup=str(backup_dir))
         return report
@@ -174,7 +192,7 @@ def retitle_video(video_id: str, *, workspace: str | Path, config: Config, backu
 
 
 def _markdown_report(reports: list[dict[str, Any]], errors: dict[str, str], *, dry_run: bool, api_base: str) -> str:
-    lines = ["# Retitrage du stock en promesse", "",
+    lines = ["# Retitrage du stock" + (f" en {reports[0]['style']}" if reports else ""), "",
              f"Mode : {'dry-run (rien ecrit)' if dry_run else 'patch reel'}.", "",
              "| Video | Clips | Patchee | Commande de rendu |", "|---|---|---|---|"]
     for r in reports:
@@ -194,7 +212,7 @@ def _markdown_report(reports: list[dict[str, Any]], errors: dict[str, str], *, d
     return "\n".join(lines)
 
 
-def main(argv: list[str] | None = None) -> int:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--workspace", help="dossier workspace (defaut : [workspace_dir] de config.toml)")
     ap.add_argument("--config", default="config.toml", help="config de base (defaut : config.toml)")
@@ -205,7 +223,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--backup-dir", default="research/retitle-backup")
     ap.add_argument("--report", help="ecrit le rapport markdown dans ce fichier")
     ap.add_argument("--api-base", default=DEFAULT_BASE_URL)
-    args = ap.parse_args(argv)
+    ap.add_argument("--style", choices=captions.SCREEN_TITLE_STYLES, default=DEFAULT_STYLE,
+                    help="style de titre d'ecran du retitrage (defaut : promesse)")
+    return ap.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
 
     base = load_config(args.config)
     workspace = Path(args.workspace) if args.workspace else Path(base.workspace_dir)
@@ -217,7 +241,8 @@ def main(argv: list[str] | None = None) -> int:
     errors: dict[str, str] = {}
     for vid in videos:
         try:
-            r = retitle_video(vid, workspace=workspace, config=config, backup_root=args.backup_dir, dry_run=args.dry_run)
+            r = retitle_video(vid, workspace=workspace, config=config, backup_root=args.backup_dir, dry_run=args.dry_run,
+                             style=args.style)
         except RetitleError as exc:
             errors[vid] = str(exc)
             print(f"ERREUR {exc}", file=sys.stderr)
