@@ -132,10 +132,12 @@ Liste régénérée depuis `ank find --type adr --status accepted` et `ank find 
 
 ### SPEC acceptées
 
-- **SPEC-6a86** — contrat de sortie d'un clip : titre d'écran sobre, sans
-  emoji ni superlatif par défaut. Succède à SPEC-6a47 (reprise à l'identique
-  pour le reste : format letterbox par défaut, `.mp4` + `.json` sidecar,
-  appel à l'abonnement désactivé par défaut).
+- **SPEC-08c2** — contrat de sortie d'un clip : titre d'écran sobre, sans
+  emoji ni superlatif ; `[captions] screen_title_style` = `citation` (défaut,
+  phrase prononcée) ou `promesse` (annonce l'enjeu sans révéler l'issue,
+  forme variée). Succède à SPEC-6a86 (reprise à l'identique pour le reste :
+  format letterbox par défaut, `.mp4` + `.json` sidecar, appel à
+  l'abonnement désactivé par défaut).
 - **SPEC-b19b** — webcam du stream trouvée par période (rectangles candidats
   numérotés choisis par Claude, garde-fous locaux journalisés, recalage),
   visage exigé par clip sans bords réels, `empty_webcam` bloquant en
