@@ -1738,3 +1738,82 @@ def test_promesse_prompt_and_schema_vary_the_form_and_forbid_revealing_the_outco
         assert "situation en suspens" in text
         assert "Dernière carte, tout ou rien" in text
         assert "jamais reveler ni resumer l'issue" in text
+
+
+# --- promesse_emoji : « ... » + un seul emoji d'émotion (successeur de SPEC-08c2) ---
+
+EMOJI_TITLE = "Il tente le boss seul... \U0001F62C"
+
+
+def _emoji_description():
+    from clipper.captions import CONFIG_DEFAULTS, response_schema
+
+    return response_schema({**CONFIG_DEFAULTS, "screen_title_style": "promesse_emoji"})[
+        "properties"]["screen_title"]["description"]
+
+
+def test_promesse_emoji_prompt_and_schema_carry_the_ellipsis_and_emoji_instructions(workspace, tmp_path):
+    write_moments(workspace, moment(0))
+    write_parts(workspace, parts_record(0, "single", 1, [part(1, 0.0, 3.9)]))
+    fake, _ = run(workspace, make_config(tmp_path, screen_title_style="promesse_emoji"),
+                  [answer(screen_title=EMOJI_TITLE)])
+    prompt = fake.calls[0].prompt
+    description = _emoji_description()
+
+    for text in (prompt, description):
+        assert "jamais reveler ni resumer l'issue" in text  # base promesse
+        assert "se realise dans le clip" in text
+        assert "points de suspension « ... »" in text
+        assert "UN seul emoji" in text
+        assert "jamais 🤔" in text
+        assert "jamais de « ? » avec « ... »" in text
+        assert "varie l'emoji" in text
+        assert "ne recopie pas une citation" in text
+    assert "emoji simple, jamais obligatoire" not in prompt
+    assert "AUCUN emoji" not in description
+
+
+def test_promesse_emoji_accepts_ellipsis_then_one_emoji_without_allow_emoji(workspace, tmp_path):
+    write_moments(workspace, moment(0))
+    write_parts(workspace, parts_record(0, "single", 1, [part(1, 0.0, 3.9)]))
+
+    fake, _ = run(workspace, make_config(tmp_path, screen_title_style="promesse_emoji"),
+                  [answer(screen_title=EMOJI_TITLE)])
+
+    assert len(fake.calls) == 1
+    assert by_id(read_captions(workspace), "00")["screen_title"] == EMOJI_TITLE
+
+
+@pytest.mark.parametrize("bad, why", [
+    ("Il tente le boss seul...", "emoji"),
+    ("Il tente le boss seul \U0001F62C", "points de suspension"),
+    ("Il tente le boss seul... \U0001F62C\U0001F525", "un seul emoji"),
+    ("Il tente le boss seul... \U0001F914", "🤔"),
+    ("Il tente le boss seul ?... 😬", "jamais contenir"),
+    ("Il tente le boss seul... \U0001F62C ensuite", "points de suspension"),
+    ("Il tente le boss seul...\U0001F62C", "points de suspension"),
+])
+def test_promesse_emoji_refuses_malformed_titles_then_fails(workspace, tmp_path, bad, why):
+    from clipper.captions import run as run_captions
+
+    write_moments(workspace, moment(0))
+    write_parts(workspace, parts_record(0, "single", 1, [part(1, 0.0, 3.9)]))
+    fake = FakeBackend([answer(screen_title=bad)] * 2)
+
+    with llm.use_backend(fake), pytest.raises(llm.SchemaError, match=why):
+        run_captions(VIDEO_ID, workspace,
+                     config=make_config(tmp_path, screen_title_style="promesse_emoji"))
+
+    assert len(fake.calls) == 4
+    assert not (workspace / VIDEO_ID / "captions.json").exists()
+
+
+def test_promesse_emoji_is_a_known_style_but_citation_and_promesse_keep_refusing_emoji(workspace, tmp_path):
+    from clipper.captions import run as run_captions
+
+    for style in ("citation", "promesse"):
+        write_moments(workspace, moment(0))
+        write_parts(workspace, parts_record(0, "single", 1, [part(1, 0.0, 3.9)]))
+        fake = FakeBackend([answer(screen_title=EMOJI_TITLE)] * 2)
+        with llm.use_backend(fake), pytest.raises(llm.SchemaError, match="aucun emoji"):
+            run_captions(VIDEO_ID, workspace, config=make_config(tmp_path, screen_title_style=style))
