@@ -3513,7 +3513,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                       "created": (account_id, line["video_id"], line["clip_id"]) in made,
                       "refusal": refusals.get((line["video_id"], line["clip_id"])),
                       "warning": line.get("warning")} for line in account["lines"]]
-            pool = _series_units_view(repartition_mod.account_pool(account["account"], world=world, settings=settings))
+            pool = _series_units_view(repartition_mod.account_pool(account["account"], world=world, settings=settings, day=day))
             accounts_out.append({**account, "lines": lines, "pool": pool})
         base["accounts"] = accounts_out
         return base

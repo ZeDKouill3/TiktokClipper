@@ -400,3 +400,96 @@ def test_set_aside_review_is_stable_with_a_concurrent_reader_30_times(tmp_path):
     finally:
         stop.set()
         thread.join()
+
+
+# --------------------------------------------------------------------------
+# Test A/B des titres (SPEC-6d1f) : style de titre d'une video = le moins fourni, garde a la relance
+# --------------------------------------------------------------------------
+
+
+def _ab_config(tmp_path: Path, *, enabled: bool = True) -> Config:
+    return Config(mode="auto", workspace_dir=tmp_path / "workspace", output_dir=tmp_path / "output", _sections={
+        "publish": {"state_dir": str(tmp_path / "pub")},
+        "captions": {"screen_title_style": "promesse", "title_repair_attempts": 1},
+        "repartition": {"title_ab_enabled": enabled, "title_ab_accounts": ["a"], "state_dir": str(tmp_path / "rep")},
+    })
+
+
+def _ready_clip(tmp_path: Path, video: str, style: str | None) -> None:
+    out = tmp_path / "output" / video
+    out.mkdir(parents=True, exist_ok=True)
+    sidecar = {"ready": True, "score": 80}
+    if style is not None:
+        sidecar.update(screen_title_style=style, title_shown=True)
+    (out / "01.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    work = tmp_path / "workspace" / video
+    work.mkdir(parents=True, exist_ok=True)
+    (work / "pipeline.json").write_text(json.dumps({"channel": None}), encoding="utf-8")
+
+
+def _captions_run(monkeypatch) -> list:
+    seen = []
+
+    def fake(video_id, ws, *, config, force, **opts):
+        seen.append(dict(config.section("captions")))
+
+    monkeypatch.setattr(pipeline.captions, "run", fake)
+    return seen
+
+
+def _stock(tmp_path: Path, citation: int, promesse: int, emoji: int) -> None:
+    for style, count in (("citation", citation), ("promesse", promesse), ("promesse_emoji", emoji)):
+        for i in range(count):
+            _ready_clip(tmp_path, f"{style}{i}", style)
+
+
+def test_ab_captions_picks_the_least_supplied_style_writes_it_and_applies_it(tmp_path, monkeypatch):
+    config = _ab_config(tmp_path)
+    _stock(tmp_path, citation=2, promesse=1, emoji=0)
+    _ready_clip(tmp_path, "sansstyle", None)  # ne compte pour aucun style
+    seen = _captions_run(monkeypatch)
+    state = pipeline.new_state(VIDEO_ID, URL, "auto")
+
+    pipeline._Run(state, config, False, None).captions()
+
+    assert seen[0]["screen_title_style"] == "promesse_emoji"
+    assert seen[0]["title_repair_attempts"] == 1  # le reste du preset est intact
+    assert state["title_style"] == "promesse_emoji"
+    saved = json.loads((tmp_path / "workspace" / VIDEO_ID / pipeline.STATE_FILE).read_text(encoding="utf-8"))
+    assert saved["title_style"] == "promesse_emoji"
+
+
+def test_ab_a_rerun_keeps_the_style_already_written(tmp_path, monkeypatch):
+    config = _ab_config(tmp_path)
+    _stock(tmp_path, citation=2, promesse=1, emoji=0)  # le moins fourni serait promesse_emoji
+    seen = _captions_run(monkeypatch)
+    state = pipeline.new_state(VIDEO_ID, URL, "auto")
+    state["title_style"] = "citation"
+
+    pipeline._Run(state, config, False, None).captions()
+
+    assert seen[0]["screen_title_style"] == "citation"
+    assert state["title_style"] == "citation"
+
+
+def test_ab_the_style_of_the_state_reaches_the_later_steps_even_when_captions_is_not_rerun(tmp_path):
+    config = _ab_config(tmp_path, enabled=False)  # test eteint depuis : la video garde son titre
+    state = pipeline.new_state(VIDEO_ID, URL, "auto")
+    state["title_style"] = "promesse_emoji"
+
+    run = pipeline._Run(state, config, False, None)
+
+    assert run.config.section("captions")["screen_title_style"] == "promesse_emoji"
+    assert run.config.section("captions")["title_repair_attempts"] == 1
+
+
+def test_ab_off_leaves_the_preset_style_and_writes_nothing(tmp_path, monkeypatch):
+    config = _ab_config(tmp_path, enabled=False)
+    _stock(tmp_path, citation=2, promesse=1, emoji=0)
+    seen = _captions_run(monkeypatch)
+    state = pipeline.new_state(VIDEO_ID, URL, "auto")
+
+    pipeline._Run(state, config, False, None).captions()
+
+    assert seen[0]["screen_title_style"] == "promesse"
+    assert "title_style" not in state

@@ -504,6 +504,10 @@ Réglages `[repartition]` (défauts du code, `clipper/repartition.py`) :
 | `bonus_min_age_h` | `24` | âge minimal (heures) d'un post relevé pour compter dans le bonus : les vues mûrissent |
 | `bonus_min_posts` | `3` | posts relevés d'une source au moins pour qu'elle ait un bonus |
 | `bonus_points` | `5.0` | amplitude maximale du bonus, en points de score |
+| `title_ab_enabled` | `false` | vrai : test A/B des titres, un style de titre par compte, rotation hebdomadaire (voir le guide) |
+| `title_ab_start` | `"2026-10-14"` | premier jour (heure de Paris) de la semaine 1 de la rotation |
+| `title_ab_accounts` | `[]` | ids des comptes TikTok du test, dans l'ordre de la rotation |
+| `title_ab_styles` | `["citation", "promesse", "promesse_emoji"]` | styles de titre, dans l'ordre de la rotation |
 
 Un réglage hors domaine (heure non `HH:MM`, `prime_end` avant `prime_start`,
 `bonus_points` négatif...) est refusé avec son nom : il n'est jamais corrigé en

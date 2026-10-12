@@ -42,6 +42,10 @@ CONFIG_DEFAULTS: dict[str, object] = {
     "bonus_min_age_h": 24,  # age minimal (heures) d'un post releve pour compter : les vues mûrissent
     "bonus_min_posts": 3,  # posts releves d'une source au moins pour qu'elle ait un bonus
     "bonus_points": 5.0,  # amplitude maximale du bonus, en points de score
+    "title_ab_enabled": False,  # vrai : test A/B des titres, un style de titre par compte, en rotation hebdomadaire
+    "title_ab_start": "2026-10-14",  # premier jour (AAAA-MM-JJ, heure de Paris) de la semaine 1 de la rotation
+    "title_ab_accounts": [],  # ids des comptes TikTok du test, dans l'ordre de la rotation (hors liste : inchangés)
+    "title_ab_styles": ["citation", "promesse", "promesse_emoji"],  # styles de titre, dans l'ordre de la rotation
 }
 
 PARIS = ZoneInfo("Europe/Paris")
@@ -51,6 +55,7 @@ _HANDLED = (publish.PublishError, accounts.AccountsError, tiktok.TikTokError, Co
 _logged_errors: set[tuple[str, str, str]] = set()
 _HM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _CLIP_NUMBER = re.compile(r"^(\d+)")
+TITLE_STYLES = ("citation", "promesse", "promesse_emoji")  # SPEC-810f ; les memes que [captions] screen_title_style
 
 
 class RepartitionError(Exception):
@@ -99,7 +104,102 @@ def _settings(config: Config | None) -> dict[str, Any]:
     sources = settings["excluded_sources"]
     if not isinstance(sources, list) or not all(isinstance(s, str) for s in sources):
         raise RepartitionError(f"[repartition] excluded_sources invalide : {sources!r} (une liste de chaines est attendue)")
+    _check_title_ab(settings)
     return settings
+
+
+def _check_title_ab(settings: dict[str, Any]) -> None:
+    """Reglages ``title_ab_*`` (SPEC-6d1f, test A/B des titres) : toute valeur hors domaine est une erreur nommee."""
+    if not isinstance(settings["title_ab_enabled"], bool):
+        raise RepartitionError(
+            f"[repartition] title_ab_enabled invalide : {settings['title_ab_enabled']!r} (true ou false est attendu)")
+    start = settings["title_ab_start"]
+    try:
+        if not isinstance(start, str):
+            raise ValueError(start)
+        date.fromisoformat(start)
+    except ValueError:
+        raise RepartitionError(f"[repartition] title_ab_start invalide : {start!r} (AAAA-MM-JJ est attendu)") from None
+    styles = settings["title_ab_styles"]
+    if not isinstance(styles, list) or not styles or not all(isinstance(s, str) for s in styles):
+        raise RepartitionError(
+            f"[repartition] title_ab_styles invalide : {styles!r} (une liste non vide de styles est attendue)")
+    unknown = [s for s in styles if s not in TITLE_STYLES]
+    if unknown:
+        raise RepartitionError(
+            f"[repartition] title_ab_styles : style inconnu {unknown!r} (valeurs permises : {', '.join(TITLE_STYLES)})")
+    if len(set(styles)) != len(styles):
+        raise RepartitionError(f"[repartition] title_ab_styles invalide : {styles!r} (un style ne figure qu'une fois)")
+    accounts_ = settings["title_ab_accounts"]
+    if not isinstance(accounts_, list) or not all(isinstance(a, str) and a for a in accounts_):
+        raise RepartitionError(
+            f"[repartition] title_ab_accounts invalide : {accounts_!r} (une liste d'ids de comptes est attendue)")
+    if len(set(accounts_)) != len(accounts_):
+        raise RepartitionError(
+            f"[repartition] title_ab_accounts invalide : {accounts_!r} (un compte ne figure qu'une fois)")
+    if settings["title_ab_enabled"] and not accounts_:
+        raise RepartitionError("[repartition] title_ab_accounts est vide alors que title_ab_enabled est vrai")
+
+
+def title_style_for(account: str, day: date | str, settings: dict[str, Any]) -> str | None:
+    """Style de titre du compte ``account`` le jour ``day`` (heure de Paris) dans le test A/B, ``None`` si le test est
+    éteint, pas commencé, ou si le compte n'est pas dans ``title_ab_accounts``. Semaine ``w`` = jours écoulés depuis
+    ``title_ab_start`` // 7 (0 pour la première) ; style = styles[(rang du compte + w) % len(styles)]."""
+    _check_title_ab(settings)
+    target = _as_day(day)
+    if not settings["title_ab_enabled"] or account not in settings["title_ab_accounts"]:
+        return None
+    elapsed = (target - date.fromisoformat(settings["title_ab_start"])).days
+    if elapsed < 0:
+        return None
+    styles = settings["title_ab_styles"]
+    return styles[(settings["title_ab_accounts"].index(account) + elapsed // 7) % len(styles)]
+
+
+def clip_title_style(output_dir: str | Path, video_id: str, clip_id: str) -> str | None:
+    """Style du titre réellement dessiné sur le clip (sidecar : ``screen_title_style`` et ``title_shown`` vrai),
+    ``None`` sinon : un clip sans titre dessiné ou sans style n'est jamais deviné (SPEC-6d1f)."""
+    sidecar = publish.read_sidecar(output_dir, video_id, clip_id)
+    style = sidecar.get("screen_title_style")
+    return style if sidecar.get("title_shown") is True and style in TITLE_STYLES else None
+
+
+def _ab_refusal(clip_style: str | None, account_style: str | None) -> str | None:
+    """Raison pour laquelle un clip ne peut pas partir sur un compte du test, ``None`` s'il le peut (ou si le compte
+    n'est pas dans le test)."""
+    if account_style is None:
+        return None
+    if clip_style is None:
+        return "no_title_style"
+    return None if clip_style == account_style else "style_mismatch"
+
+
+def _ab_text(reason: str, video_id: str, clip_id: str, account_id: str, clip_style: str | None,
+             account_style: str | None) -> str:
+    if reason == "no_title_style":
+        return (f"{video_id}/{clip_id} : style de titre inconnu (sidecar sans screen_title_style ou titre non "
+                f"dessiné), refusé pour le compte {account_id} du test A/B des titres")
+    return (f"{video_id}/{clip_id} : titre en « {clip_style} » mais le compte {account_id} est en "
+            f"« {account_style} » ce jour-là (test A/B des titres)")
+
+
+def least_supplied_style(supply: dict[str, int], styles: list[str]) -> str:
+    """Style de ``styles`` qui a le moins de clips disponibles (``supply``) ; égalité : le premier de l'ordre de config."""
+    return min(styles, key=lambda style: (supply.get(style, 0), styles.index(style)))
+
+
+def style_supply(config: Config, styles: list[str]) -> dict[str, int]:
+    """Clips disponibles (prêts, absents de toute file de publication, ou validés sans créneau) par style de titre
+    de ``styles``. Un clip sans style de titre dessiné ne compte pour aucun."""
+    workspace, output = Path(config.workspace_dir), Path(config.output_dir)
+    counts = {style: 0 for style in styles}
+    for unit in publish.available_series_clips(
+            None, account=None, together=False, workspace_dir=workspace, output_dir=output,
+            state_dir=config.section("publish")["state_dir"]):
+        style = clip_title_style(output, unit["video_id"], unit["clip_ids"][0])
+        if style in counts:
+            counts[style] += 1
+    return counts
 
 
 # ---------------------------------------------------------------- fichiers et dates
@@ -370,9 +470,11 @@ def clip_exclusion(world: World, video_id: str, clip_id: str, excluded_sources: 
     return "in_processing_queue" if video_id in queued else None
 
 
-def _pool(world: World, active: list[dict[str, Any]], settings: dict[str, Any], notes: list[str]) -> tuple[
-        list[dict[str, Any]], list[dict[str, str]]]:
-    """Clips choisissables (R2) avec les comptes qui peuvent les prendre, et les exclusions comptees par raison."""
+def _pool(world: World, active: list[dict[str, Any]], settings: dict[str, Any], notes: list[str],
+          day: date, ab_refused: list[dict[str, str]]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Clips choisissables (R2) avec les comptes qui peuvent les prendre, et les exclusions comptees par raison.
+    Test A/B des titres : un compte du test ne garde que les clips dont le style est le sien ce jour-là ; chaque refus
+    est ajouté à ``ab_refused`` (et, pour un clip sans style, dit dans ``notes``)."""
     clips: dict[tuple[str, str], dict[str, Any]] = {}
     for acc in active:
         units = publish.available_series_clips(
@@ -397,8 +499,18 @@ def _pool(world: World, active: list[dict[str, Any]], settings: dict[str, Any], 
         reason = clip_exclusion(world, key[0], key[1], settings["excluded_sources"], queued)
         if reason:
             excluded.append({"video_id": key[0], "clip_id": key[1], "reason": reason})
-        else:
-            pool.append(clip)
+            continue
+        clip["title_style"] = clip_title_style(world.output, key[0], key[1]) if settings["title_ab_enabled"] else None
+        for account_id in sorted(clip["accounts"]):
+            refusal = _ab_refusal(clip["title_style"], title_style_for(account_id, day, settings))
+            if refusal:
+                clip["accounts"].discard(account_id)
+                ab_refused.append({"video_id": key[0], "clip_id": key[1], "account": account_id, "reason": refusal})
+        if clip["title_style"] is None and any(r["reason"] == "no_title_style" and (r["video_id"], r["clip_id"]) == key
+                                               for r in ab_refused):
+            notes.append(f"{key[0]}/{key[1]} : style de titre inconnu (sidecar sans screen_title_style ou titre non "
+                         "dessiné), refusé pour les comptes du test A/B des titres")
+        pool.append(clip)
     return pool, excluded
 
 
@@ -413,7 +525,8 @@ def _take(state: dict[str, Any], slot: dict[str, Any], clip: dict[str, Any]) -> 
         "slot_at": slot["slot_at"], "video_id": clip["video_id"], "clip_id": clip["clip_id"],
         "score": clip["score"], "bonus": clip["bonus"], "bonus_reason": clip["bonus_reason"],
         "adjusted": clip["adjusted"], "source_key": clip["source_key"], "game_name": clip["game_name"],
-        "source_from": clip["source_from"], "exploration": clip["exploration"], "prime": slot["prime"]})
+        "source_from": clip["source_from"], "exploration": clip["exploration"], "prime": slot["prime"],
+        **({"title_style": clip["title_style"]} if state["ab"] else {})})
 
 
 def _reserve_exploration(states: list[dict[str, Any]], remaining: list[dict[str, Any]], settings: dict[str, Any],
@@ -456,7 +569,9 @@ def _build(day: date, now: datetime, settings: dict[str, Any], config: Config, c
             notes.append(f"{account['label']} : compte {accounts.SERVICE_LABELS.get(account['service'], account['service'])}"
                          " prêt, hors périmètre v1 (non planifié)")
 
-    pool, excluded = _pool(world, active, settings, notes)
+    ab_styles = {a["id"]: style for a in active if (style := title_style_for(a["id"], day, settings))}
+    ab_refused: list[dict[str, str]] = []
+    pool, excluded = _pool(world, active, settings, notes, day, ab_refused)
     by_source, every = source_stats(world, active, now, settings)
     if not every:
         notes.append("aucun relevé récent")
@@ -485,7 +600,7 @@ def _build(day: date, now: datetime, settings: dict[str, Any], config: Config, c
             counts[key] = counts.get(key, 0) + 1
         order = [s for s in slots if s["prime"]] + [s for s in slots if not s["prime"]]
         states.append({"account": account, "slots": slots, "free": order, "counts": counts, "lines": [],
-                       "notes": slot_notes})
+                       "notes": slot_notes, "ab": bool(ab_styles)})
 
     remaining = list(candidates)
     _reserve_exploration(states, remaining, settings, notes)
@@ -512,11 +627,15 @@ def _build(day: date, now: datetime, settings: dict[str, Any], config: Config, c
         if state["free"]:
             notes_here.append(f"{len(state['free'])} créneau(x) sans clip : vivier insuffisant")
         plan_accounts.append({"account": state["account"]["id"], "label": state["account"]["label"],
-                              "slots": state["slots"], "lines": lines, "notes": notes_here})
+                              "slots": state["slots"], "lines": lines, "notes": notes_here,
+                              **({"title_style": ab_styles.get(state["account"]["id"])} if ab_styles else {})})
     notes.extend(world.notes)
-    return {"day": day.isoformat(), "computed_at": now.isoformat(), "computed_by": computed_by,
+    plan = {"day": day.isoformat(), "computed_at": now.isoformat(), "computed_by": computed_by,
             "status": "proposed", "accounts": plan_accounts, "pool": len(pool), "excluded": excluded,
             "notes": notes, "validated_at": None, "created": []}
+    if ab_styles:
+        plan["title_ab"] = {"start": settings["title_ab_start"], "styles": ab_styles, "refused": ab_refused}
+    return plan
 
 
 def _compute_locked(day: date, now: datetime, settings: dict[str, Any], config: Config, computed_by: str,
@@ -619,22 +738,29 @@ def describe_line(
             "bonus": bonus, "bonus_reason": reason,
             "adjusted": None if number is None else round(number + bonus, 2),
             **source, "exploration": world.exploration(video_id, clip_id, []),
-            "prime": is_prime(slot, settings), "warning": None}
+            "prime": is_prime(slot, settings), "warning": None,
+            **({"title_style": clip_title_style(world.output, video_id, clip_id)} if settings["title_ab_enabled"] else {})}
 
 
 def _multi_part(world: World, video_id: str, clip_id: str) -> bool:
     return (publish.read_sidecar(world.output, video_id, clip_id).get("parts_total") or 1) > 1  # un clip seul est « 1 sur 1 »
 
 
-def account_pool(account_id: str, *, world: World, settings: dict[str, Any]) -> list[dict[str, Any]]:
+def account_pool(account_id: str, *, world: World, settings: dict[str, Any],
+                 day: date | str | None = None) -> list[dict[str, Any]]:
     """Vivier de l'écran pour un compte (R2) : les clips que ``account_id`` peut prendre (jamais un clip validé pour un
-    autre compte), chaque partie seule, sans ce que le plan exclut (``clip_exclusion``)."""
+    autre compte), chaque partie seule, sans ce que le plan exclut (``clip_exclusion``). Test A/B des titres actif :
+    ``day`` est requis et un compte du test ne voit que les clips de son style ce jour-là."""
+    if settings["title_ab_enabled"] and day is None:
+        raise RepartitionError("account_pool : le jour du plan est requis quand title_ab_enabled est vrai")
+    account_style = title_style_for(account_id, day, settings) if day is not None else None
     units = publish.available_series_clips(
         None, account=account_id, together=False, workspace_dir=world.workspace, output_dir=world.output,
         state_dir=world.publish_dir)
     queued = world.queued_videos()
-    return [u for u in units if clip_exclusion(world, u["video_id"], u["clip_ids"][0], settings["excluded_sources"],
-                                               queued) is None]
+    return [u for u in units
+            if clip_exclusion(world, u["video_id"], u["clip_ids"][0], settings["excluded_sources"], queued) is None
+            and _ab_refusal(clip_title_style(world.output, u["video_id"], u["clip_ids"][0]), account_style) is None]
 
 
 def line_error(
@@ -651,6 +777,11 @@ def line_error(
                             world.queued_videos())
     if reason:
         return f"{video_id}/{clip_id} : {reason} ({_EXCLUSION_TEXT[reason]})"
+    account_style = title_style_for(account_id, target, read_settings(world.config))
+    clip_style = clip_title_style(world.output, video_id, clip_id)
+    refusal = _ab_refusal(clip_style, account_style)
+    if refusal:
+        return _ab_text(refusal, video_id, clip_id, account_id, clip_style, account_style)
     for _channel, entry in entries:
         owner = entry.get("account")
         if ((entry["video_id"], entry["clip_id"]) == (video_id, clip_id) and entry["status"] == "approved"

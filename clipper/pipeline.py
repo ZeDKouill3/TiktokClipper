@@ -107,6 +107,7 @@ from clipper import (
     qa,
     reframe,
     render as render_step,
+    repartition,
     scenes,
     subtitles,
     transcribe,
@@ -361,6 +362,13 @@ class _ProgressWriter:
             save_state(state, config=config)
 
 
+def _with_title_style(config: Config, style: str) -> Config:
+    """``config`` dont la section ``[captions]`` a ``screen_title_style`` = ``style`` (test A/B des titres, SPEC-6d1f) :
+    le reste du preset de la chaine est intact."""
+    sections = {**config._sections, "captions": {**config._sections.get("captions", {}), "screen_title_style": style}}
+    return dataclass_replace(config, _sections=sections)
+
+
 class _Run:
     """Contexte d'un passage du pipeline sur une video."""
 
@@ -368,7 +376,8 @@ class _Run:
                  step_options: dict[str, dict[str, Any]] | None, *,
                  forced: Any = frozenset(), clip_filter: list[str] | None = None):
         self.state = state
-        self.config = config
+        # style de titre ecrit par le test A/B : verite de la video, il vaut pour captions comme pour render
+        self.config = _with_title_style(config, state["title_style"]) if state.get("title_style") else config
         self.force = force
         self.forced = frozenset(forced) if forced is not None else frozenset()
         self.clip_filter = set(clip_filter) if clip_filter is not None else None
@@ -460,7 +469,22 @@ class _Run:
     def parts(self) -> None:
         parts.run(self.video_id, self.ws, config=self.config, force=self._forced("parts"), **self.opts("parts"))
 
+    def _choose_title_style(self) -> None:
+        """Test A/B des titres (SPEC-6d1f) : une video sans ``title_style`` recoit le style qui a le moins de clips
+        disponibles parmi ``title_ab_styles``, ecrit dans pipeline.json puis applique a sa config ; une video qui en a
+        deja un le garde (relance, reprise)."""
+        settings = repartition.read_settings(self.config)
+        if not settings["title_ab_enabled"] or self.state.get("title_style"):
+            return
+        styles = settings["title_ab_styles"]
+        style = repartition.least_supplied_style(repartition.style_supply(self.config, styles), styles)
+        self.state["title_style"] = style
+        save_state(self.state, config=self.config)
+        self.config = _with_title_style(self.config, style)
+        log.info("%s : test A/B des titres, style %s", self.video_id, style)
+
     def captions(self) -> None:
+        self._choose_title_style()
         force = self._forced("captions")
         changed = self.config.mode == "review" and _apply_review(self)
         before_ids = {c["id"] for c in self.clips()} if changed and (self.dir / "captions.json").exists() else None

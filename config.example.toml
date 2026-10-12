@@ -64,6 +64,10 @@ output_dir = "output"
 # bonus_min_age_h = 24           # age minimal (heures) d'un post releve pour compter : les vues mûrissent
 # bonus_min_posts = 3            # posts releves d'une source au moins pour qu'elle ait un bonus
 # bonus_points = 5.0             # amplitude maximale du bonus (points de score), vues reelles seulement
+# title_ab_enabled = false       # vrai : test A/B des titres, un style de titre par compte, rotation hebdomadaire (SPEC-6d1f)
+# title_ab_start = "2026-10-14"  # premier jour (heure de Paris) de la semaine 1 de la rotation
+# title_ab_accounts = []         # ids des comptes TikTok du test, dans l'ordre de la rotation (hors liste : inchanges)
+# title_ab_styles = ["citation", "promesse", "promesse_emoji"]  # styles de titre, dans l'ordre de la rotation
 #
 # [action]  # etape action (SPEC-b0f3, ADR-4e57) : passages d'action des VOD gaming (pics audio, plans, images decrites par le LLM)
 # # Desactivee par defaut : action.json vide, aucun appel LLM, scenes.json inchange. Activee (style gaming

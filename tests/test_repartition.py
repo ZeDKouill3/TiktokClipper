@@ -125,7 +125,8 @@ def test_r0_defaults_are_exactly_the_spec():
         "default_grid_start": "08:00", "default_grid_end": "22:00", "default_grid_gap_min": 150,
         "account_stagger_min": 30, "max_per_source": 2, "excluded_sources": [], "prime_start": "18:00",
         "prime_end": "22:00", "exploration_per_day": 1, "bonus_window_days": 7, "bonus_min_age_h": 24,
-        "bonus_min_posts": 3, "bonus_points": 5.0,
+        "bonus_min_posts": 3, "bonus_points": 5.0, "title_ab_enabled": False, "title_ab_start": "2026-10-14",
+        "title_ab_accounts": [], "title_ab_styles": ["citation", "promesse", "promesse_emoji"],
     }
 
 
@@ -1117,3 +1118,179 @@ def test_r7_run_if_due_without_injected_config_reads_config_toml_again_each_time
     second = repartition.run_if_due(NOW)
 
     assert second is not None and [(e["video_id"], e["reason"]) for e in second["excluded"]] == [("V1", "excluded_source")]
+
+
+# ---------------------------------------------------------------- test A/B des titres par compte (SPEC-6d1f + SPEC-810f)
+
+AB_STYLES = ["citation", "promesse", "promesse_emoji"]
+AB_TABLE_ACCOUNTS = ["1ad53325b65d", "5fb241d5fb53", "17c3783183e1"]
+
+
+def _ab(**overrides) -> dict:
+    return {**repartition.CONFIG_DEFAULTS, "title_ab_enabled": True, "title_ab_start": "2026-10-14",
+            "title_ab_accounts": list(AB_TABLE_ACCOUNTS), "title_ab_styles": list(AB_STYLES), **overrides}
+
+
+def _styled(config, video, clip="01", *, style="citation", shown=True, **kwargs) -> None:
+    """Un clip pret dont le sidecar porte le style de titre reellement dessine par le rendu."""
+    _clip(config, video, clip, **kwargs)
+    path = Path(config.output_dir) / video / f"{clip}.json"
+    sidecar = json.loads(path.read_text(encoding="utf-8"))
+    if style is not None:
+        sidecar["screen_title_style"] = style
+    if shown is not None:
+        sidecar["title_shown"] = shown
+    path.write_text(json.dumps(sidecar), encoding="utf-8")
+
+
+def test_ab_defaults_are_off_and_documented():
+    assert repartition.CONFIG_DEFAULTS["title_ab_enabled"] is False
+    assert repartition.CONFIG_DEFAULTS["title_ab_start"] == "2026-10-14"
+    assert repartition.CONFIG_DEFAULTS["title_ab_accounts"] == []
+    assert repartition.CONFIG_DEFAULTS["title_ab_styles"] == AB_STYLES
+
+
+@pytest.mark.parametrize(("day", "expected"), [
+    ("2026-10-14", ["citation", "promesse", "promesse_emoji"]),  # semaine 1
+    ("2026-10-20", ["citation", "promesse", "promesse_emoji"]),  # dernier jour de la semaine 1
+    ("2026-10-21", ["promesse", "promesse_emoji", "citation"]),  # semaine 2
+    ("2026-10-27", ["promesse", "promesse_emoji", "citation"]),
+    ("2026-10-28", ["promesse_emoji", "citation", "promesse"]),  # semaine 3
+    ("2026-11-04", ["citation", "promesse", "promesse_emoji"]),  # semaine 4 = semaine 1
+])
+def test_ab_rotation_is_exactly_the_table(day, expected):
+    got = [repartition.title_style_for(a, day, _ab()) for a in AB_TABLE_ACCOUNTS]
+
+    assert got == expected
+
+
+def test_ab_style_for_none_when_off_before_start_or_account_outside_the_list():
+    assert repartition.title_style_for("5fb241d5fb53", "2026-10-14", _ab(title_ab_enabled=False)) is None
+    assert repartition.title_style_for("5fb241d5fb53", "2026-10-13", _ab()) is None
+    assert repartition.title_style_for("autre", "2026-10-14", _ab()) is None
+    assert repartition.title_style_for("5fb241d5fb53", date(2026, 10, 14), _ab()) == "promesse"
+
+
+@pytest.mark.parametrize("override", [
+    {"title_ab_styles": ["citation", "inconnu"]}, {"title_ab_styles": ["citation", "citation"]},
+    {"title_ab_styles": []}, {"title_ab_styles": "citation"}, {"title_ab_accounts": ["a", "a"]},
+    {"title_ab_accounts": []}, {"title_ab_accounts": "a"}, {"title_ab_accounts": [1]},
+    {"title_ab_start": "14/10/2026"}, {"title_ab_start": ""}, {"title_ab_start": 20261014},
+    {"title_ab_enabled": "oui"},
+])
+def test_ab_invalid_setting_is_a_named_error(tmp_path, override):
+    config = _config(tmp_path, **{"title_ab_enabled": True, "title_ab_accounts": ["a"], **override})
+    _accounts(config, _acc("a"))
+
+    with pytest.raises(repartition.RepartitionError, match="title_ab_"):
+        _plan(config)
+
+
+def test_ab_disabled_does_not_change_the_plan(tmp_path):
+    config = _config(tmp_path)
+    _accounts(config, _acc("a"))
+    _clip(config, "V1", "01")  # sans style : planifie quand meme
+
+    plan = _plan(config)
+
+    assert _line_for(plan, "a", "V1") is not None
+    assert "title_ab" not in plan
+
+
+def _ab_config(tmp_path, **overrides) -> Config:
+    config = _config(tmp_path, title_ab_enabled=True, title_ab_start="2026-10-10",
+                     title_ab_accounts=["a", "b"], **overrides)
+    _accounts(config, _acc("a"), _acc("b"), _acc("c"))
+    return config
+
+
+def test_ab_a_test_account_only_gets_clips_of_its_style_of_the_day(tmp_path):
+    config = _ab_config(tmp_path)  # 10/10, semaine 1 : a = citation, b = promesse
+    _styled(config, "V1", style="citation", score=90, game="g1")
+    _styled(config, "V2", style="promesse", score=80, game="g2")
+    _styled(config, "V3", style="promesse_emoji", score=70, game="g3")
+
+    plan = _plan(config)
+
+    placed = {acc: {line["video_id"] for line in _acc_plan(plan, acc)["lines"]} for acc in ("a", "b")}
+    assert placed["a"] == {"V1"} and placed["b"] == {"V2"}
+    assert _acc_plan(plan, "a")["title_style"] == "citation"
+    assert _acc_plan(plan, "b")["title_style"] == "promesse"
+    assert _acc_plan(plan, "c")["title_style"] is None
+    assert _line_for(plan, "a", "V1")["title_style"] == "citation"
+    assert _line_for(plan, "b", "V2")["title_style"] == "promesse"
+
+
+def test_ab_account_outside_the_list_is_unchanged_and_takes_any_style(tmp_path):
+    config = _config(tmp_path, title_ab_enabled=True, title_ab_start="2026-10-10", title_ab_accounts=["a"])
+    _accounts(config, _acc("a"), _acc("c"))
+    _styled(config, "V1", style="promesse_emoji", game="g1")
+    _styled(config, "V2", style=None, shown=None, game="g2")
+
+    plan = _plan(config)
+
+    assert {line["video_id"] for line in _acc_plan(plan, "c")["lines"]} == {"V1", "V2"}
+    assert _acc_plan(plan, "a")["lines"] == []
+
+
+def test_ab_refusals_are_explicit_in_the_plan_with_a_reason(tmp_path):
+    config = _ab_config(tmp_path)
+    _styled(config, "V1", style="promesse_emoji", game="g1")  # style d'aucun des deux comptes ce jour-la
+    _styled(config, "V2", style=None, shown=None, game="g2")  # sidecar sans style
+    _styled(config, "V3", style="citation", shown=False, game="g3")  # titre non dessine
+
+    plan = _plan(config)
+
+    refused = {(r["video_id"], r["account"]): r["reason"] for r in plan["title_ab"]["refused"]}
+    assert refused[("V1", "a")] == "style_mismatch" and refused[("V1", "b")] == "style_mismatch"
+    assert refused[("V2", "a")] == "no_title_style" and refused[("V2", "b")] == "no_title_style"
+    assert refused[("V3", "a")] == "no_title_style" and refused[("V3", "b")] == "no_title_style"
+    assert ("V1", "c") not in refused
+    assert plan["title_ab"]["styles"] == {"a": "citation", "b": "promesse"}
+    assert any("V2" in n and "style" in n for n in plan["notes"])
+    assert _acc_plan(plan, "a")["lines"] == [] and _acc_plan(plan, "b")["lines"] == []
+
+
+def test_ab_account_pool_and_line_error_follow_the_account_style(tmp_path):
+    config = _ab_config(tmp_path)
+    _styled(config, "V1", style="citation", game="g1")
+    _styled(config, "V2", style="promesse", game="g2")
+    _styled(config, "V3", style=None, shown=None, game="g3")
+    world = repartition.World(config)
+    settings = repartition.read_settings(config)
+    slot = datetime(2026, 10, 10, 19, 0, tzinfo=PARIS)
+
+    pool_a = {u["video_id"] for u in repartition.account_pool("a", world=world, settings=settings, day=DAY)}
+    pool_c = {u["video_id"] for u in repartition.account_pool("c", world=world, settings=settings, day=DAY)}
+    ok = repartition.line_error(world, "a", DAY, video_id="V1", clip_id="01", slot_at=slot, entries=[])
+    wrong = repartition.line_error(world, "a", DAY, video_id="V2", clip_id="01", slot_at=slot, entries=[])
+    none = repartition.line_error(world, "a", DAY, video_id="V3", clip_id="01", slot_at=slot, entries=[])
+    other = repartition.line_error(world, "c", DAY, video_id="V3", clip_id="01", slot_at=slot, entries=[])
+
+    assert pool_a == {"V1"} and pool_c == {"V1", "V2", "V3"}
+    assert ok is None and other is None
+    assert "promesse" in wrong and "citation" in wrong
+    assert "style" in none
+
+
+def test_ab_style_supply_counts_available_clips_per_style(tmp_path):
+    config = _ab_config(tmp_path)
+    _styled(config, "V1", "01", style="citation")
+    _styled(config, "V1", "02", style="citation")
+    _styled(config, "V2", style="promesse")
+    _styled(config, "V3", style="citation", ready=False)  # pas pret
+    _styled(config, "V4", style="citation")
+    _entry(config, "V4", "01", status="scheduled")  # deja en file : plus disponible
+    _styled(config, "V5", style=None, shown=None)  # sans style : compte pour aucun
+
+    supply = repartition.style_supply(config, AB_STYLES)
+
+    assert supply == {"citation": 2, "promesse": 1, "promesse_emoji": 0}
+
+
+def test_ab_least_supplied_style_ties_go_to_the_first_in_config_order():
+    assert repartition.least_supplied_style({"citation": 2, "promesse": 1, "promesse_emoji": 3},
+                                            AB_STYLES) == "promesse"
+    assert repartition.least_supplied_style({"citation": 1, "promesse": 1, "promesse_emoji": 1},
+                                            AB_STYLES) == "citation"
+    assert repartition.least_supplied_style({}, ["promesse", "citation"]) == "promesse"
