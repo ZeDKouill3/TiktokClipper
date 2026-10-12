@@ -3591,3 +3591,41 @@ def test_cover_camera_rect_refuses_an_area_beyond_a_quarter_of_the_image_with_a_
 
     rect, why = _cover_camera_rect((0.0, 0.0, 1920.0, 1080.0), None, 1920, 1080, dict(CONFIG_DEFAULTS))
     assert rect is None and "pas une incrustation" in why
+
+
+# --------------------------------------------------------------------------
+# split_gameplay_align (TASK-3f9d9187efbb) : jeu centre sur l'image entiere
+# --------------------------------------------------------------------------
+
+
+def test_split_gameplay_align_default_is_exclude_webcam():
+    from clipper.reframe import CONFIG_DEFAULTS
+
+    assert CONFIG_DEFAULTS["split_gameplay_align"] == "exclude_webcam"
+
+
+def test_split_gameplay_align_center_centers_on_the_whole_source_without_note(tmp_path, video_dir):
+    # Meme fixture que le test d'exclusion (webcam collee a gauche) : par
+    # defaut le jeu est decale a droite de la webcam ; en "center" il est
+    # centre sur l'image entiere, sans note de repli.
+    panel = (0, 300, 400, 700)
+    face = (panel[0] + 90, panel[1] + 40, panel[0] + 220, panel[1] + 190)
+    write_stream_clip_fixture(video_dir, [(0.5 + k, "live") for k in range(20)], panel=panel, face=face)
+    out, _ = run_stream(tmp_path, stream_variant="split", split_gameplay_align="center")
+
+    plan = load(out)["plans"][0]
+    [game] = {p["name"]: p for p in plan["panels"]}["gameplay"]["rects"]
+    assert game["x"] == pytest.approx((W - game["w"]) / 2, abs=1)
+    assert plan["reason"] is None
+    # le defaut (exclude_webcam) cadre ailleurs : centre de la largeur restante a droite de la webcam
+    default = load(run_stream(tmp_path, stream_variant="split", force=True)[0])["plans"][0]
+    [default_game] = {p["name"]: p for p in default["panels"]}["gameplay"]["rects"]
+    assert default_game["x"] != game["x"]
+
+
+def test_split_gameplay_align_unknown_value_is_an_explicit_error_naming_the_key(tmp_path, video_dir):
+    from clipper.reframe import ReframeError
+
+    write_keyframes(video_dir, pattern(20, 20))
+    with pytest.raises(ReframeError, match="split_gameplay_align"):
+        run_stream(tmp_path, stream_variant="split", split_gameplay_align="gauche")

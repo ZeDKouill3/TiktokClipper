@@ -2601,3 +2601,109 @@ def test_split_sidecar_records_title_shown_true_when_title_drawn(tmp_path, video
     data = _sidecar(tmp_path)
     assert data["title_shown"] is True
     assert data["badge_shown"] is False
+
+
+# --------------------------------------------------------------------------
+# title_split_center_y (TASK-3f9d9187efbb) : titre centre sur la separation
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def title_capture(monkeypatch):
+    """Comme fake_ffmpeg, mais releve la boite opaque du PNG de titre (en
+    pixels de sortie : le PNG recouvre tout le cadre en x=0, y=0) et la
+    position d'incrustation."""
+    from PIL import Image
+
+    got = {}
+
+    def run(cmd, cwd, out_path):
+        inputs = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-i"]
+        png = [i for i in inputs if i.endswith("title.png")]
+        if png:
+            got["png_size"] = Image.open(png[0]).size
+            got["bbox"] = Image.open(png[0]).getchannel("A").getbbox()
+        got["cmd"] = list(cmd)
+        Path(out_path).write_bytes(b"mp4")
+
+    monkeypatch.setattr("clipper.render._exec_ffmpeg", run)
+    return got
+
+
+def _split_title_render(tmp_path, video_dir, **render_settings):
+    from clipper.render import render
+
+    (video_dir / "reframe" / f"{CLIP_ID}.json").write_text(
+        json.dumps(_reframe_json_stream_split()), encoding="utf-8")
+    (video_dir / f"{VIDEO_ID}.mp4").write_bytes(b"")
+    render(VIDEO_ID, CLIP_ID, workspace_dir=video_dir.parent, output_dir=tmp_path / "output",
+           config=make_config(**render_settings))
+
+
+def test_title_split_center_y_default_is_zero_and_keeps_the_zone_placement():
+    from clipper.render import CONFIG_DEFAULTS
+
+    assert CONFIG_DEFAULTS["title_split_center_y"] == 0
+
+
+def test_stream_split_title_centered_on_the_given_ordinate_and_on_the_frame(
+    tmp_path, video_dir, title_capture, cpu_device
+):
+    _split_title_render(tmp_path, video_dir, title_split_center_y=640, badge_enabled=False)
+
+    assert title_capture["png_size"] == (OUT_W, OUT_H)
+    x0, y0, x1, y1 = title_capture["bbox"]
+    assert abs((y0 + y1) / 2 - 640) <= 1
+    assert abs((x0 + x1) / 2 - OUT_W / 2) <= 1
+    assert 0 <= y0 and y1 <= OUT_H and 0 <= x0 and x1 <= OUT_W
+
+
+def test_stream_split_title_colliding_with_subtitles_is_an_explicit_error(
+    tmp_path, video_dir, fake_ffmpeg, cpu_device
+):
+    from clipper.render import RenderError
+
+    # y=760 : l'encadre tombe dans la zone sous-titres (y 710..860)
+    with pytest.raises(RenderError, match="title_split_center_y.*subtitles"):
+        _split_title_render(tmp_path, video_dir, title_split_center_y=760)
+    assert fake_ffmpeg == []
+
+
+def test_stream_split_title_colliding_with_the_active_badge_is_an_explicit_error(
+    tmp_path, video_dir, fake_ffmpeg, cpu_device
+):
+    from clipper.render import RenderError
+
+    logo = tmp_path / "logo.png"
+    from PIL import Image
+    Image.new("RGBA", (64, 64), "white").save(logo)
+    # badge actif sur 590..690 : un titre centre sur 640 le chevauche
+    with pytest.raises(RenderError, match="title_split_center_y.*badge"):
+        _split_title_render(tmp_path, video_dir, title_split_center_y=640, badge_enabled=True,
+                            badge_logo=str(logo), badge_name="chaine")
+    assert fake_ffmpeg == []
+
+
+def test_stream_split_title_outside_the_frame_is_an_explicit_error(tmp_path, video_dir, fake_ffmpeg, cpu_device):
+    from clipper.render import RenderError
+
+    with pytest.raises(RenderError, match="title_split_center_y"):
+        _split_title_render(tmp_path, video_dir, title_split_center_y=OUT_H - 5)
+    assert fake_ffmpeg == []
+
+
+@pytest.mark.parametrize("bad", [-1, 1.5, "640", True])
+def test_title_split_center_y_invalid_value_is_an_explicit_error(tmp_path, video_dir, fake_ffmpeg, bad):
+    from clipper.render import RenderError
+
+    with pytest.raises(RenderError, match="title_split_center_y"):
+        _split_title_render(tmp_path, video_dir, title_split_center_y=bad)
+
+
+def test_title_split_center_y_does_not_change_letterbox_placement(tmp_path, video_dir, fake_ffmpeg, cpu_device):
+    from clipper.render import CONFIG_DEFAULTS, layout_title
+
+    zone = dict(STREAM_TITLE_ZONE)
+    base = layout_title("Un titre sobre", zone, CONFIG_DEFAULTS)
+    other = layout_title("Un titre sobre", zone, {**CONFIG_DEFAULTS, "title_split_center_y": 640})
+    assert base.box == other.box

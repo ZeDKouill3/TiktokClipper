@@ -300,6 +300,12 @@ CONFIG_DEFAULTS: dict[str, object] = {
     # chargement sinon, ADR-ad2e).
     "split_webcam_dest": {"x": 20, "y": 0, "w": 1040, "h": 640},
     "split_gameplay_dest": {"x": 0, "y": 640, "w": 1080, "h": 1280},
+    # Cadrage horizontal du jeu dans l'agencement split : "exclude_webcam"
+    # (défaut) centre la fenêtre dans la largeur qui reste une fois la colonne
+    # de la webcam exclue ; "center" la centre sur l'image source entière
+    # (personnage et barre de sorts au milieu), sans note, même si elle
+    # recouvre la colonne de la webcam. Autre valeur : erreur explicite.
+    "split_gameplay_align": "exclude_webcam",
     # Bandeau de badge de chaîne (logo + nom, [render] badge_*), à cheval par
     # défaut sur la jonction webcam/jeu. Doit tenir dans la zone sûre TikTok
     # (erreur explicite sinon).
@@ -421,6 +427,7 @@ _FALLBACKS = ("auto", "blur")
 _FORMATS = ("letterbox", "crop")
 _LAYOUT_MODES = ("letterbox", "stream_auto")
 _STREAM_VARIANTS = ("top", "split")
+_GAMEPLAY_ALIGNS = ("exclude_webcam", "center")
 
 LAYOUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -2846,13 +2853,17 @@ def _split_webcam_rect(facecam_rect: dict[str, int], dest: dict[str, Any]) -> di
 
 
 def _split_gameplay_rect(
-    source_w: int, source_h: int, dest: dict[str, Any], webcam_source: dict[str, int]
+    source_w: int, source_h: int, dest: dict[str, Any], webcam_source: dict[str, int],
+    align: str = "exclude_webcam",
 ) -> tuple[dict[str, int], str | None]:
     """Rectangle source du jeu : la plus grande fenetre au ratio de ``dest``
     (pleine hauteur en general), centree dans la largeur qui reste une fois
     la colonne de la webcam exclue quand c'est possible ; sinon centree dans
-    l'image entiere, avec une note (repli silencieux accepte, SPEC-76dc)."""
+    l'image entiere, avec une note (repli silencieux accepte, SPEC-76dc).
+    ``align`` = "center" : toujours centree sur l'image entiere, sans note."""
     ww, wh = _window(source_w, source_h, float(dest["w"]) / float(dest["h"]))
+    if align == "center":
+        return {"x": round((source_w - ww) / 2), "y": round((source_h - wh) / 2), "w": ww, "h": wh}, None
     ex0, ex1 = webcam_source["x"], webcam_source["x"] + webcam_source["w"]
     left_w, right_w = ex0, source_w - ex1
     note = None
@@ -2889,7 +2900,9 @@ def _reframe_stream_split(
     webcam_dest = settings["split_webcam_dest"]
     gameplay_dest = settings["split_gameplay_dest"]
     webcam_source = _split_webcam_rect(rect, webcam_dest)
-    gameplay_source, note = _split_gameplay_rect(source_w, source_h, gameplay_dest, webcam_source)
+    gameplay_source, note = _split_gameplay_rect(
+        source_w, source_h, gameplay_dest, webcam_source, str(settings["split_gameplay_align"])
+    )
 
     def panel(name: str, src: dict[str, int], dest: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -3081,6 +3094,11 @@ def _settings(config: Any) -> dict[str, Any]:
         raise ReframeError(
             f"[reframe] stream_variant inconnu {settings['stream_variant']!r} "
             f"(attendu : {' | '.join(_STREAM_VARIANTS)})"
+        )
+    if settings["split_gameplay_align"] not in _GAMEPLAY_ALIGNS:
+        raise ReframeError(
+            f"[reframe] split_gameplay_align inconnu {settings['split_gameplay_align']!r} "
+            f"(attendu : {' | '.join(_GAMEPLAY_ALIGNS)})"
         )
     if settings["stream_variant"] == "split":
         _validate_split_geometry(settings)

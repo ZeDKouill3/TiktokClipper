@@ -223,6 +223,22 @@ de zone badge (letterbox, stream `"top"`, format crop), est aussi une erreur
 explicite : le badge remplace le pseudo d'affichage de l'appel à l'abonnement
 quand les deux sont actifs, sans toucher à la carte de fin.
 
+Deux réglages ajustent le cadrage et le titre du split (TASK-3f9d9187efbb) :
+
+- `[reframe] split_gameplay_align` — `"exclude_webcam"` (défaut, inchangé) centre
+  la fenêtre du jeu dans la largeur qui reste une fois la colonne de la webcam
+  exclue ; `"center"` la centre sur l'image source entière (personnage et barre
+  de sorts au milieu), sans note, même si elle recouvre la colonne de la webcam.
+  Toute autre valeur est une erreur explicite nommant la clé.
+- `[render] title_split_center_y` — entier, défaut `0` (placement actuel du
+  titre). Avec une valeur > 0 (ex. `640`, la ligne de séparation webcam/jeu), le
+  titre d'écran des clips `stream_split` est centré verticalement sur cette
+  ordonnée de sortie et horizontalement sur l'image, dans le cadre 1080x1920.
+  S'il chevauche les sous-titres (`split_subtitle_dest`) ou le badge actif
+  (`badge_enabled`), ou sort du cadre, le rendu s'arrête avec une erreur
+  explicite (jamais de déplacement silencieux, ADR-ad2e). Sans effet sur les
+  clips letterbox, stream ou blur.
+
 Le groupe logo + nom est toujours centré horizontalement sur `badge_dest`
 (largeur ajustée au contenu, mesurée avec la vraie police) : jamais de vide
 asymétrique. `badge_background` (défaut `"black"`) dessine un rectangle
