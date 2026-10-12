@@ -5,7 +5,7 @@ slug: webcam-claude-r-pond-null-quand-aucun-rectangle
 title: "Webcam : Claude répond null quand aucun rectangle ne montre le streamer (mini-carte prise pour la webcam)"
 created: 2026-10-12T09:08:56Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/reframe.py
   - tests/test_reframe*.py
@@ -16,6 +16,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/390080fe1519@4d2c2aa
+    tree: scope/2270a5fdc2bc
+    criteria: cb2e7fc18513
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---

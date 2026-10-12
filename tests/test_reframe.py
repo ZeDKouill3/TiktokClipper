@@ -2377,6 +2377,50 @@ def test_period_without_webcam_keeps_the_letterbox_rule_with_the_decision_writte
     assert data["facecam_decision"]["candidate"] is None
 
 
+def test_facecam_prompt_says_null_is_the_right_answer_when_no_rectangle_shows_the_streamer():
+    """TASK-b4acfff3e784 : une mini-carte de jeu avait ete prise pour la webcam
+    (« le moins mauvais » choix) : le prompt dit que null est la bonne reponse."""
+    from clipper import reframe
+
+    cand = [{"id": 1, "kind": "cadre", "support": 5, "face_support": 0, "rect": HALF_BANNER}]
+    prompt = reframe._facecam_prompt(cand, 0, 60)
+
+    assert "null" in prompt
+    assert "bonne reponse" in prompt
+    assert "la personne du streamer" in prompt
+    assert "meme si la webcam est visible ailleurs" in prompt
+    for case in ("proche", "decale", "partiel", "decor"):
+        assert case in prompt
+    assert "jamais le moins mauvais" in prompt
+
+
+def test_facecam_call_sends_the_null_guidance_to_claude(tmp_path, video_dir):
+    write_timeline(video_dir, every(10.0, 120, "live"), shrink=2)
+    _, fake = run_detect(tmp_path, [webcam_answer(None, "aucun")])
+
+    assert "jamais le moins mauvais" in fake.calls[0].prompt
+
+
+def test_single_period_null_answer_gives_fallback_clips_with_the_logged_reason(
+    tmp_path, video_dir, monkeypatch, caplog
+):
+    """Cas reel du 12/10 rejoue : une seule periode, candidats (dont un visage
+    stable) mais Claude repond null : la mini-carte n'est pas la webcam, facecam
+    est null et le clip passe en repli avec la raison de Claude."""
+    _null_period(monkeypatch, video_dir)
+    reason = "le rectangle 2 est proche de ce coin mais ne montre que du decor"
+    with caplog.at_level("WARNING"):
+        out, _ = run_stream(tmp_path, start=100.0, end=130.0, answers=[webcam_answer(None, reason)])
+    data = load(out)
+
+    facecam = load(tmp_path / "workspace" / VIDEO_ID / "facecam.json")
+    assert [p["facecam"] for p in facecam["periods"]] == [None]
+    assert data["layout"] == "letterbox"
+    assert data["facecam_decision"]["candidate"] is None
+    assert reason in data["layout_reason"]
+    assert "une seule periode" in caplog.text
+
+
 def test_nothing_is_remembered_from_one_stream_to_another(tmp_path, video_dir):
     from clipper.reframe import detect_facecam
 
