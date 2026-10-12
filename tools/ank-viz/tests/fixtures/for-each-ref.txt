@@ -1,3 +1,3 @@
-refs/heads/main	ec791ef	2026-09-25T10:44:16+01:00	zedkpiteurz	ratify SPEC-6a867ae54f94
-refs/heads/task/TASK-7aca-ank-viz	ec791ef	2026-09-25T10:44:16+01:00	zedkpiteurz	ratify SPEC-6a867ae54f94
-refs/remotes/origin/main	ec791ef	2026-09-25T10:44:16+01:00	zedkpiteurz	ratify SPEC-6a867ae54f94
+refs/heads/main	ec791ef	2026-09-25T10:44:16+01:00	zedkpiteurz	ratify SPEC-08c28e46a632
+refs/heads/task/TASK-7aca-ank-viz	ec791ef	2026-09-25T10:44:16+01:00	zedkpiteurz	ratify SPEC-08c28e46a632
+refs/remotes/origin/main	ec791ef	2026-09-25T10:44:16+01:00	zedkpiteurz	ratify SPEC-08c28e46a632
