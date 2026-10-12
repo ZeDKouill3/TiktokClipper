@@ -127,6 +127,7 @@ CONFIG_DEFAULTS: dict[str, object] = {
     "veille_deadline_s": 480,
     "llm_retry_delay_min": 30,  # limite de session (429) pendant le choix : on réessaie le choix seul après ce délai
     "llm_retry_max": 3,  # nombre de reprises du choix avant l'échec explicite
+    "webcam_check_max": 30,  # miniatures contrôlées (webcam ?) avant le choix de Claude ; 0 = contrôle désactivé
 }
 
 # Clés retirées qu'un config.toml peut encore porter : ignorées à la lecture (clipper.config).
@@ -185,7 +186,8 @@ def settings(config: Config) -> dict[str, object]:
         if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
             raise VeilleError(f"[veille] {key} doit être un entier >= {minimum} (reçu {value!r})")
     for key, minimum in (("steam_players_lookups_max", 0), ("trend_games_max", 0), ("community_min_steam_players", 0), ("community_min_steam_followers", 0),
-                         ("community_min_twitch_viewers", 0), ("community_min_hypes", 0), ("max_vods_per_game", 1)):
+                         ("community_min_twitch_viewers", 0), ("community_min_hypes", 0), ("max_vods_per_game", 1),
+                         ("webcam_check_max", 0)):
         value = table[key]
         if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
             raise VeilleError(f"[veille] {key} doit être un entier >= {minimum} (reçu {value!r})")
@@ -1517,6 +1519,8 @@ def _prompt(day_state: dict[str, Any], table: dict[str, object]) -> str:
         "ne l'invente pas.",
         f"Au plus {table['max_vods_per_game']} VOD par jeu : varie les jeux.",
         *_incomplete_lines(day_state, table),
+        *(["webcam = contrôle de la miniature : oui (une webcam y est visible), doute ou inconnue (pas un refus : "
+           "à toi de juger)."] if any(c.get("webcam") for c in day_state["candidates"]) else []),
         "",
         "Jeux (viewers Twitch FR, joueurs Steam, variation vs moyenne des jours précédents, gain de rang Steam vs semaine dernière, rang et gain dans le top des ventes Steam du pays) :",
         "Deux mesures de joueurs Steam, jamais comparées entre elles : steam_players = pic du jour du top 100 "
@@ -1564,15 +1568,16 @@ def _prompt(day_state: dict[str, Any], table: dict[str, object]) -> str:
             f"ventes_fr_nouveau={_fmt(signals.get('steam_sellers_new'))} "
             f"sortie_j_plus={_fmt(signals.get('release_days_since'))} "
             f"steam_players={_steam_players_label(community)} steam_abonnes={_fmt(community.get('steam_followers'))} "
-            f"twitch_fr_viewers={_fmt(community.get('twitch_fr_viewers'))} hypes_igdb={_fmt(community.get('hypes'))}")
+            f"twitch_fr_viewers={_fmt(community.get('twitch_fr_viewers'))} hypes_igdb={_fmt(community.get('hypes'))}"
+            + (f" webcam={c['webcam']}" if c.get("webcam") else ""))
     return "\n".join(lines)
 
 
-def _model_used(config: Config) -> str | None:
-    """Modèle que ``llm.ask("veille")`` utilise vraiment ; ``None`` si la config LLM est elle-même invalide
+def _model_used(config: Config, usage: str = "veille") -> str | None:
+    """Modèle que ``llm.ask(usage)`` utilise vraiment ; ``None`` si la config LLM est elle-même invalide
     (l'appel échoue alors avec ce message, écrit dans ``llm.error``)."""
     try:
-        return llm.model_for("veille", config)
+        return llm.model_for(usage, config)
     except llm.LLMError:
         return None
 
@@ -1620,6 +1625,212 @@ def decide(day_state: dict[str, Any], config: Config, now: datetime | None = Non
         for rank, pick in enumerate(answer["picks"], start=1)]
     state.update(llm={"status": "ok", "error": None, "model": model}, skipped_note=answer["skipped_note"])
     return state
+
+
+# --------------------------------------------------------------------------
+# Contrôle webcam sur les miniatures (SPEC-fefc, complète R6)
+# --------------------------------------------------------------------------
+
+_THUMB_PLACEHOLDER = "404_processing"  # miniature « en cours de traitement » de Twitch : pas une vraie image
+_THUMB_MAX_BYTES = 5_000_000
+_THUMB_WORKERS = 8
+_BOARD_COLS, _BOARD_CELL_W, _BOARD_CELL_H, _BOARD_BAND_H = 4, 320, 180, 36
+_BOARD_FILE = "webcam_board.jpg"  # une seule planche, remplacée à chaque relevé : aucune image gardée au-delà
+_WEBCAM_VERDICTS = ("oui", "non", "doute")
+
+
+def _fetch_thumbnail(url: str, timeout_s: float) -> bytes:
+    """Miniature officielle (URL déjà portée par le candidat, jamais de scraping) ; lève en cas d'échec."""
+    import httpx
+
+    response = httpx.get(url, timeout=timeout_s, follow_redirects=True)
+    response.raise_for_status()
+    if len(response.content) > _THUMB_MAX_BYTES:
+        raise ValueError(f"miniature trop lourde ({len(response.content)} octets)")
+    return response.content
+
+
+def _webcam_schema() -> dict[str, Any]:
+    return {
+        "type": "object", "required": ["items"], "additionalProperties": False,
+        "properties": {"items": {"type": "array", "items": {
+            "type": "object", "required": ["n", "webcam", "reason"], "additionalProperties": False,
+            "properties": {
+                "n": {"type": "integer", "minimum": 1},
+                "webcam": {"type": "string", "enum": list(_WEBCAM_VERDICTS)},
+                "reason": {"type": "string", "minLength": 1, "maxLength": 200},
+            }}}},
+    }
+
+
+def _check_webcam_items(count: int) -> Callable[[Any], None]:
+    """Numéros existants (1..count), uniques, tous présents."""
+
+    def check(value: Any) -> None:
+        numbers = [item["n"] for item in value["items"]]
+        if len(set(numbers)) != len(numbers):
+            raise llm.SchemaError(f"numéro en double : {sorted(numbers)}")
+        unknown = sorted(set(numbers) - set(range(1, count + 1)))
+        if unknown:
+            raise llm.SchemaError(f"numéro inexistant : {unknown} (la planche va de 1 à {count})")
+        missing = sorted(set(range(1, count + 1)) - set(numbers))
+        if missing:
+            raise llm.SchemaError(f"numéro absent de la réponse : {missing}")
+
+    return check
+
+
+def _webcam_prompt(count: int) -> str:
+    return "\n".join([
+        f"L'image jointe est une planche de {count} miniatures de VOD de stream, numérotées de 1 à {count} : le "
+        "numéro est écrit dans la bande noire au-dessus de chaque miniature.",
+        "Pour chaque miniature, dis si une webcam y est visible. Une webcam est la caméra qui filme le streamer, "
+        "incrustée sur le jeu (un visage ou un buste dans un cadre). Une mini-carte, un widget, une interface de "
+        "jeu, un personnage du jeu ne sont pas une webcam.",
+        'Réponds "oui" (webcam visible), "non" (aucune webcam) ou "doute" ; dans le doute, réponds "doute". '
+        "Donne une raison courte. Une entrée par numéro, tous présents, aucun en double.",
+    ])
+
+
+def _build_board(images: list[Any]) -> bytes:
+    """Planche JPEG : miniatures en grille, chacune sous une bande noire portant son numéro (hors de l'image)."""
+    import cv2
+    import numpy as np
+
+    cells = []
+    for number, image in enumerate(images, start=1):
+        cell = cv2.resize(image, (_BOARD_CELL_W, _BOARD_CELL_H))
+        band = np.zeros((_BOARD_BAND_H, _BOARD_CELL_W, 3), dtype=np.uint8)
+        cv2.putText(band, str(number), (10, _BOARD_BAND_H - 8), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2,
+                    cv2.LINE_AA)
+        cells.append(np.vstack([band, cell]))
+    blank = np.zeros_like(cells[0])
+    while len(cells) % _BOARD_COLS:
+        cells.append(blank)
+    rows = [np.hstack(cells[i:i + _BOARD_COLS]) for i in range(0, len(cells), _BOARD_COLS)]
+    ok, buffer = cv2.imencode(".jpg", np.vstack(rows), [cv2.IMWRITE_JPEG_QUALITY, 90])
+    if not ok:
+        raise VeilleError("planche webcam : encodage JPEG impossible")
+    return buffer.tobytes()
+
+
+def _decode_image(data: bytes) -> Any:
+    import cv2
+    import numpy as np
+
+    try:
+        return cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+    except cv2.error:
+        return None
+
+
+def _download_thumbnails(targets: list[dict[str, Any]], fetch: Callable[[str, float], bytes], timeout_s: float,
+                         deadline: Callable[[], float] | None) -> list[Any]:
+    """Une entrée par cible : octets, ou l'exception levée (téléchargement parallèle borné, en temps et en nombre)."""
+
+    def one(candidate: dict[str, Any]) -> Any:
+        if deadline is not None and deadline() <= 0:
+            return TimeoutError("échéance atteinte avant le téléchargement")
+        wait = timeout_s if deadline is None else max(1.0, min(timeout_s, deadline()))
+        try:
+            return fetch(str(candidate["thumbnail_url"]), wait)
+        except Exception as exc:  # noqa: BLE001 : une miniature qui échoue rend ce candidat « inconnue », pas la veille
+            return exc
+
+    with ThreadPoolExecutor(max_workers=max(1, min(_THUMB_WORKERS, len(targets)))) as pool:
+        return list(pool.map(one, targets))
+
+
+def check_webcams(
+    state: dict[str, Any],
+    config: Config,
+    *,
+    fetch: Callable[[str, float], bytes] | None = None,
+    deadline: Callable[[], float] | None = None,
+) -> dict[str, Any]:
+    """Contrôle webcam avant le choix de Claude : rend une copie de l'état, ne lève jamais. Chaque candidat porte
+    ``webcam`` (``oui`` | ``doute`` | ``inconnue``) ; ``non`` retire le candidat (``excluded.no_webcam`` et
+    ``webcam_excluded``). ``llm_webcam`` = ``{status: ok | error | skipped | deadline, error, model, ...}`` : un
+    échec ou une échéance garde tous les candidats (inconnue), il s'écrit dans l'état du jour et dans le journal
+    (ADR-ad2e), il ne bloque jamais la veille."""
+    out = {**state, "candidates": [{**c, "webcam": "inconnue"} for c in state["candidates"]],
+           "excluded": dict(state.get("excluded") or {})}
+    model = _model_used(config, "veille_webcam")
+    try:
+        _run_webcam_check(out, config, fetch or _fetch_thumbnail, deadline, model)
+    except Exception as exc:  # noqa: BLE001 : tout échec du contrôle se voit, sans bloquer le choix
+        log.exception("veille : le contrôle webcam a échoué")
+        out["candidates"] = [{**c, "webcam": "inconnue"} for c in state["candidates"]]
+        out["excluded"] = dict(state.get("excluded") or {})
+        out.pop("webcam_excluded", None)
+        out["llm_webcam"] = {"status": "error", "error": f"{type(exc).__name__} : {exc}", "model": model}
+    return out
+
+
+def _webcam_error(out: dict[str, Any], model: str | None, message: str) -> None:
+    log.error("veille : contrôle webcam en échec : %s", message)
+    out["llm_webcam"] = {"status": "error", "error": message, "model": model}
+
+
+def _run_webcam_check(out: dict[str, Any], config: Config, fetch: Callable[[str, float], bytes],
+                      deadline: Callable[[], float] | None, model: str | None) -> None:
+    table = settings(config)
+    out["llm_webcam"] = {"status": "skipped", "error": None, "model": model}
+    window = out["candidates"][:int(table["webcam_check_max"])]  # type: ignore[call-overload]
+    targets = [c for c in window if c.get("thumbnail_url") and _THUMB_PLACEHOLDER not in str(c["thumbnail_url"])]
+    if not targets:
+        return
+    if deadline is not None and deadline() <= 0:
+        out["llm_webcam"] = {"status": "deadline", "error": "échéance atteinte avant le contrôle", "model": model}
+        log.warning("veille : contrôle webcam non fait, échéance atteinte")
+        return
+    downloaded = _download_thumbnails(targets, fetch, float(table["http_timeout_s"]), deadline)  # type: ignore[arg-type]
+    usable: list[tuple[dict[str, Any], Any]] = []
+    errors: list[str] = []
+    for candidate, data in zip(targets, downloaded):
+        if isinstance(data, Exception):
+            errors.append(f"{candidate['id']} : {data}")
+            continue
+        image = _decode_image(data)
+        if image is None:
+            errors.append(f"{candidate['id']} : miniature illisible")
+            continue
+        usable.append((candidate, image))
+    for line in errors:
+        log.warning("veille : miniature inutilisable (%s)", line)
+    if deadline is not None and deadline() <= 0:
+        out["llm_webcam"] = {"status": "deadline", "error": "échéance atteinte pendant le contrôle", "model": model}
+        log.warning("veille : contrôle webcam coupé par l'échéance")
+        return
+    if not usable:
+        _webcam_error(out, model, "aucune miniature lisible : " + " ; ".join(errors))
+        return
+    sdir = _state_dir(table)
+    sdir.mkdir(parents=True, exist_ok=True)
+    board = sdir / _BOARD_FILE
+    board.write_bytes(_build_board([image for _, image in usable]))
+    try:
+        answer = llm.ask("veille_webcam", _webcam_prompt(len(usable)), [board], _webcam_schema(), config=config,
+                         usage_log_path=sdir / "llm_usage.jsonl", check=_check_webcam_items(len(usable)))  # type: ignore[call-overload]
+    except llm.LLMError as exc:
+        _webcam_error(out, model, str(exc))
+        return
+    verdicts = {item["n"]: item for item in answer["items"]}
+    removed: list[dict[str, str]] = []
+    gone: set[str] = set()
+    for number, (candidate, _) in enumerate(usable, start=1):
+        item = verdicts[number]
+        if item["webcam"] == "non":
+            gone.add(candidate["id"])
+            removed.append({"candidate_id": candidate["id"], "title": str(candidate.get("title")),
+                            "reason": f"pas de webcam sur la miniature : {item['reason']}"})
+        else:
+            candidate["webcam"] = item["webcam"]
+    out["candidates"] = [c for c in out["candidates"] if c["id"] not in gone]
+    out["excluded"]["no_webcam"] = len(removed)
+    out["webcam_excluded"] = removed
+    out["llm_webcam"] = {"status": "ok", "error": None, "model": model, "checked": len(usable),
+                         "unreadable": len(errors)}
 
 
 # --------------------------------------------------------------------------
@@ -1692,6 +1903,11 @@ def run_if_due(
             _write(_day_path(sdir, day), failed)
         raise
     state["refresh_requested_at"] = requested_at
+
+    def remaining() -> float:
+        return (datetime.fromisoformat(state["deadline_at"]) - read_clock()).total_seconds()
+
+    state = check_webcams(state, config, deadline=remaining)  # avant le choix de Claude (SPEC-fefc)
     state = _safe_decide(state, config, now)
     state["finished_at"] = read_clock().isoformat()  # vraie heure de fin, jamais celle du départ
     with channel_mod.file_lock(_state_lock(sdir)):

@@ -128,13 +128,18 @@ function veilleSources(data) {
     : llm.status === "error" ? `<span class="chip bad plain">Claude : erreur</span>`
     : llm.status === "retry" ? `<span class="chip warn plain">Claude : choix reporté${llm.retry_at ? ` à ${esc(veilleWhen(llm.retry_at, true))}` : ""} (tentative ${esc(llm.attempts ?? "?")})</span>`
     : `<span class="chip plain">Claude : pas appelé</span>`;
+  const wc = day.llm_webcam || {};
+  const webcamError = wc.status === "error" ? `<p class="reason bad" role="alert"><b>Contrôle webcam :</b> ${esc(wc.error)} (toutes les VOD restent proposables, webcam inconnue)</p>`
+    : wc.status === "deadline" ? `<p class="reason warn" role="status"><b>Contrôle webcam coupé :</b> ${esc(wc.error)} (VOD gardées, webcam inconnue)</p>` : "";
+  const webcamOut = (day.webcam_excluded || []).length
+    ? `<div data-veille-webcam-excluded><p class="muted"><b>VOD écartées sans webcam :</b></p><ul>${day.webcam_excluded.map((x) => `<li>${esc(x.title)} — ${esc(x.reason)}</li>`).join("")}</ul></div>` : "";
   const llmError = llm.status === "error" ? `<p class="reason bad" role="alert"><b>Choix de Claude :</b> ${esc(llm.error)}</p>`
     : llm.status === "retry" ? `<p class="reason warn" role="status"><b>Choix de Claude reporté :</b> ${esc(llm.error)}</p>` : "";
   const when = data.running ? `<span class="chip running plain">Relevé en cours…</span>`
     : `<span>Relevé du <b class="mono">${esc(veilleWhen(day.finished_at || day.started_at, true))}</b></span>`;
   const problem = veilleReleveProblem(data);
   return `<details id="veille-releve" class="releve" data-veille-sources${veilleUi.more.releve ? " open" : ""}><summary>${icon("chevron-right", "i-xs")}Relevé des sources${problem ? `<span class="chip ${problem.bad ? "bad" : "warn"} plain">${esc(problem.label)}</span>` : ""}</summary><div class="sources">${when}${llmChip}</div>${veilleIncomplete(data)}
-    <div class="table-wrap"><table class="table sources-table"><thead><tr><th>Source</th><th>État</th><th>Relevé</th><th>Erreur</th></tr></thead><tbody>${rows}</tbody></table></div>${llmError}</details>`;
+    <div class="table-wrap"><table class="table sources-table"><thead><tr><th>Source</th><th>État</th><th>Relevé</th><th>Erreur</th></tr></thead><tbody>${rows}</tbody></table></div>${llmError}${webcamError}${webcamOut}</details>`;
 }
 
 /* Ce qui rend le relevé douteux : une source en erreur ou incomplète, l'échéance atteinte, le choix de Claude en échec. */
@@ -142,8 +147,9 @@ function veilleReleveProblem(data) {
   const day = data.day || {};
   const states = Object.values(day.sources || {}).map((src) => src.status);
   const llm = (day.llm || {}).status;
-  if (states.includes("error") || llm === "error") return { bad: true, label: "en erreur" };
-  if (day.deadline_hit || states.includes("partial") || states.includes("skipped") || llm === "retry") return { bad: false, label: "incomplet" };
+  const webcam = (day.llm_webcam || {}).status;
+  if (states.includes("error") || llm === "error" || webcam === "error") return { bad: true, label: "en erreur" };
+  if (day.deadline_hit || states.includes("partial") || states.includes("skipped") || llm === "retry" || webcam === "deadline") return { bad: false, label: "incomplet" };
   return null;
 }
 
@@ -162,6 +168,7 @@ function veilleExcludedFoot(ex, cfg) {
   if (ex.access_restricted != null) parts.push(`${ex.access_restricted} VOD écartées : réservées aux abonnés`);
   if (ex.access_unreachable != null) parts.push(`${ex.access_unreachable} VOD écartées : injoignables après ${cfg.twitch_access_attempts ?? "?"} essais`);
   if (ex.access_untested != null) parts.push(`${ex.access_untested} VOD non testées : jeu déjà servi (${cfg.max_vods_per_game ?? "?"} VOD accessibles par jeu)`);
+  if (ex.no_webcam != null) parts.push(`${ex.no_webcam} VOD écartées : pas de webcam sur la miniature`);
   if (ex.access_deadline != null) parts.push(`${ex.access_deadline} VOD non testées : échéance`);
   return parts.join(", ");
 }
@@ -205,6 +212,13 @@ function veilleStyleToSend(id) {
   return ((veilleUi.data && veilleUi.data.settings) || {}).default_channel || "";
 }
 
+/* Pastille du contrôle webcam de la miniature : oui / doute / inconnue (jamais lancé = inconnue). */
+function veilleWebcamBadge(value) {
+  const v = value === "oui" || value === "doute" ? value : "inconnue";
+  const label = v === "oui" ? "webcam" : `webcam : ${v}`;
+  return `<span class="chip${v === "oui" ? " accent" : v === "doute" ? " warn" : ""} plain" data-veille-webcam="${v}">${esc(label)}</span>`;
+}
+
 function veilleProposal(p, game, channels) {
   const c = p.candidate;
   const queued = p.status === "queued";
@@ -215,6 +229,7 @@ function veilleProposal(p, game, channels) {
     game && game.steam_sellers_rank != null && game.steam_match ? sig("steam", "Ventes FR", veilleSellers(game)) : "",
     c.source === "youtube" && c.views_per_hour != null ? sig("youtube", "YouTube", `<b>${esc(fr(Math.round(c.views_per_hour)))} vues/h</b>`) : "",
     (c.signals || {}).release_days_since != null ? veilleReleaseBadge(c.signals.release_days_since) : "",
+    veilleWebcamBadge(c.webcam),
   ].join("");
   const chosen = veilleStyleToSend(p.candidate_id);
   const styleSelect = `<select class="input" data-veille-style aria-label="Style"><option value="">Sans style (config.toml)</option>${channels.map((n) => `<option value="${esc(n)}"${n === chosen ? " selected" : ""}>Style : ${esc(n)}</option>`).join("")}</select>`;

@@ -193,3 +193,47 @@ def test_rising_table_has_no_voir_plus_when_ten_games_or_fewer(tmp_path):
     data["day"]["games"] = _games(10)
     (html,) = _eval(tmp_path, data, "veilleRising(D)")
     assert "data-veille-more" not in html
+
+
+# --- contrôle webcam des miniatures (SPEC-fefc) -----------------------------------------------------------------
+
+def _proposal(webcam=None) -> dict:
+    candidate = {"id": "twitch:A", "source": "twitch", "title": "Titre A", "channel_name": "streamer_a",
+                 "game_key": "jeu alpha", "game_name": "Jeu Alpha", "duration_s": 3600, "url": "https://example.test/a",
+                 "signals": {}}
+    if webcam is not None:
+        candidate["webcam"] = webcam
+    return {"candidate_id": "twitch:A", "rank": 1, "reason": "raison", "status": "proposed", "candidate": candidate}
+
+
+@NODE
+@pytest.mark.parametrize("webcam,label", [("oui", "webcam"), ("doute", "doute"), ("inconnue", "inconnue"), (None, "inconnue")])
+def test_each_proposal_shows_a_webcam_badge_oui_doute_or_inconnue(tmp_path, webcam, label):
+    (html,) = _eval(tmp_path, _data(), f"veilleProposal({json.dumps(_proposal(webcam))}, null, [])")
+    badge = re.search(r'<span[^>]*data-veille-webcam="([a-z]+)"[^>]*>(.*?)</span>', html, re.S)
+    assert badge and badge.group(1) == (webcam or "inconnue") and label in badge.group(2).lower()
+
+
+@NODE
+def test_webcam_exclusions_are_counted_and_listed_with_their_reason(tmp_path):
+    data = _data()
+    data["day"]["excluded"] = {"already_known": 0, "too_short": 0, "no_webcam": 2}
+    data["day"]["webcam_excluded"] = [
+        {"candidate_id": "twitch:B", "title": "Titre B", "reason": "pas de webcam sur la miniature : mini-carte"},
+        {"candidate_id": "twitch:C", "title": "Titre C", "reason": "pas de webcam sur la miniature : aucun visage"}]
+    data["day"]["llm_webcam"] = {"status": "ok", "error": None}
+    foot, releve = _eval(tmp_path, data, "veilleExcludedFoot(D.day.excluded, D.settings)", "veilleSources(D)")
+    assert "2 VOD écartées : pas de webcam sur la miniature" in foot
+    listing = _between(releve, "data-veille-webcam-excluded")
+    for text in ("Titre B", "mini-carte", "Titre C", "aucun visage"):
+        assert text in listing
+
+
+@NODE
+@pytest.mark.parametrize("status,error", [("error", "panne webcam"), ("deadline", "échéance atteinte avant le contrôle")])
+def test_a_failed_or_cut_webcam_check_is_seen_in_the_alert_and_the_releve(tmp_path, status, error):
+    data = _data()
+    data["day"]["llm_webcam"] = {"status": status, "error": error}
+    view, releve = _eval(tmp_path, data, VIEW, "veilleSources(D)")
+    assert "data-veille-alert" in view
+    assert "Contrôle webcam" in releve and error in releve
