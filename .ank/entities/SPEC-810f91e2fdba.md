@@ -1,0 +1,179 @@
+---
+id: SPEC-810f91e2fdba
+type: spec
+slug: titre-d-cran-promesse-emoji-promesse-un-emoji-d
+title: "Titre d'écran « promesse_emoji » : promesse + « ... » + un emoji d'émotion (screen_title_style citation | promesse | promesse_emoji)"
+created: 2026-10-12T15:35:45Z
+author: w-a41620252d2e
+status: proposed
+scope:
+  - clipper/captions.py
+  - clipper/render.py
+  - clipper/qa.py
+  - clipper/pipeline.py
+  - clipper/reframe.py
+  - clipper/subtitles.py
+references: [SPEC-3a88ee9c2eb9, ADR-ad2e562b1810]
+supersedes: SPEC-08c28e46a632
+schema: 4
+version: 1
+---
+
+## Objet
+Succède à SPEC-08c2 (reprise à l'identique ci-dessous, avec le style `promesse_emoji` en plus), elle-même successeur de SPEC-6a47 : resserre la seule
+règle du titre d'écran (`screen_title`). Retour utilisateur 2026-09-30 sur
+des clips de démo : « tes titres sont trop kitsch » — les titres produits
+enchaînaient emoji et superlatifs clickbait (« Rage pure sur Silent Hill 😡 »,
+« Panique totale 😱 », « 🚨 L'affaire PPDA dévoilée »...). Le reste du contrat
+(vidéo, formats, JSON, légende) est inchangé par cette spec.
+
+## Fichiers
+`output/<video_id>/<clip_id>.mp4` et `output/<video_id>/<clip_id>.json`, où
+clip_id = `<moment_index>` ou `<moment_index>-p<part>` (ex. `03-p2`).
+
+## Vidéo (commun)
+- 1080x1920, 9:16, écran entièrement rempli (pas de bandes noires : les
+  zones hors image sont un fond flou de la vidéo elle-même), 30 fps (ou fps
+  source si < 30).
+- H.264 (NVENC si dispo) + AAC 48 kHz, loudness normalisée à -14 LUFS
+  intégrés.
+- Sous-titres incrustés dans la langue de la vidéo, style CapCut (mot par
+  mot, mot courant surligné).
+- Zone sûre TikTok : aucun texte au-dessus de y=160 ni au-dessous de
+  y=1520, ni à gauche de x=150 ni à droite de x=930 (interface TikTok :
+  onglets en haut, légende en bas, colonne d'icônes à droite ; valeurs
+  réglables).
+
+## Titre d'écran (`screen_title`, commun à tous les formats)
+Règle resserrée par cette spec (succède à SPEC-6a47, qui imposait 6 mots au
+plus et exactement un emoji).
+
+- 6 mots au plus (inchangé, `screen_title_words_max`).
+- **Aucun emoji par défaut** (`[captions] screen_title_allow_emoji`, booléen,
+  défaut `false`) : sans configuration explicite, un `screen_title` avec un
+  emoji est refusé. Activer l'option ne rend pas l'emoji obligatoire, elle
+  permet seulement d'en accepter un (au plus un, mêmes règles de détection
+  qu'aujourd'hui : un seul emoji simple, pas de séquence ZWJ ni de drapeau).
+- **Ton sobre** : aucun superlatif ni mot d'emphase clickbait. Liste par
+  défaut des mots interdits (`[captions] screen_title_forbidden_words`,
+  insensible à la casse et aux accents, comparaison mot entier) : pur, total,
+  explose, choc, incroyable, fou, dingue, glaçant, assourdissant, dévoilé —
+  liste non exhaustive, réglable par preset de chaîne.
+- **Contenu** (règle changée par cette spec, selon `[captions] screen_title_style`, défaut `citation`) :
+  - `citation` : de préférence une phrase réellement prononcée dans le clip (citation courte, guillemets français « » autorisés), sinon un fait concret et précis du clip (jamais une reformulation vague). Règle de SPEC-6a86 inchangée.
+  - `promesse` : le titre annonce l'enjeu ou la chute du clip sans la révéler : question ou situation en suspens (ex. « Le craft T0 va-t-il passer ? », « Il tente le boss seul »). Sobre (mêmes mots interdits, mêmes règles d'emoji, 6 mots au plus) et vrai : la promesse se réalise dans le clip.
+  - `promesse_emoji` : même promesse que `promesse` (annonce l'enjeu sans révéler l'issue, forme variée, sobre, vrai), mais le titre se termine TOUJOURS par des points de suspension « ... », un espace, puis UN seul emoji qui traduit l'émotion du moment (ex. « Il tente le boss seul... 😬 »). Refusés : aucun emoji final, deux emojis ou plus, un emoji non précédé de « ... » et d'un espace, l'emoji 🤔, tout « ? » dans le titre (« ?... » compris), séquence ZWJ ou drapeau, simple recopie du titre citation suivie de « ... ». Ce style autorise l'emoji final sans `screen_title_allow_emoji`. Le prompt demande de varier l'emoji d'un clip à l'autre au sein de la réponse. La réponse mal formée est renvoyée au modèle pour correction puis rejetée, jamais corrigée en silence (ADR-ad2e). Les mots interdits et le plafond de mots (l'emoji et « ... » ne comptent pas comme mots supplémentaires) s'appliquent comme ailleurs.
+  - Dans les trois styles : jamais de contenu absent du clip (aucune affirmation, aucun nom, aucun chiffre qui n'apparaît pas dans la partie transcrite ou la justification du moment). Une série multipart garde le même titre sur toutes ses parties.
+  - Valeur inconnue de `screen_title_style` : erreur explicite nommant la clé et les valeurs permises (`citation`, `promesse`, `promesse_emoji`), jamais de repli silencieux (ADR-ad2e).
+### Exemples avant/après
+Titres produits par le pipeline avant cette spec, et versions sobres
+attendues après :
+
+| Avant (refusé) | Après (attendu) |
+| --- | --- |
+| « Rage pure sur Silent Hill 😡 » | « C'est des salopards » |
+| « Panique totale 😱 » | « Y'en a un qui m'a vu » |
+| « Pharmacie en pleine crise 💊 » | « Qui ouvre une pharmacie comme ça ? » |
+| « 🔎 TF1, le silence assourdissant » | « Pourquoi TF1 n'en a pas parlé » |
+
+### Contrôle automatique
+Le contrôle de la réponse LLM (aujourd'hui `clipper/captions.py`, passé à
+`clipper.llm.ask` comme `check`) refuse et fait recorriger (puis rejette si
+la correction échoue encore, ADR-b1c1) tout `screen_title` qui contient un
+emoji quand `screen_title_allow_emoji` est désactivé, ou un des mots
+interdits ci-dessus. Refus explicite, jamais de repli silencieux (titre
+générique, emoji retiré en douce, mot interdit toléré) : ADR-ad2e.
+
+## Format letterbox (défaut, `[reframe] format = letterbox`)
+- Aucune détection ni suivi de visage, aucun appel LLM de mise en page.
+- Image source zoomée d'un facteur fixe (1,3 par défaut) et centrée : on
+  garde la fenêtre centrale de largeur source/zoom, pleine hauteur, affichée
+  en pleine largeur 1080 px (hauteur au prorata, paire), à partir de
+  y = 440 (réglable) ; fond flou de la même vidéo derrière.
+- Bande floue du haut : titre d'écran (`screen_title`, voir section dédiée
+  ci-dessus) en texte noir sur un encadré blanc à coins arrondis, centré,
+  pendant tout le clip.
+- Bande floue du bas : sous-titres, puis « Partie N » dessous seulement si
+  le clip fait partie d'une série (parts_total > 1) ; rien sinon.
+- Aucun texte (titre, encadré, sous-titres, Partie) ne déborde : chaque
+  bloc est mesuré avec la vraie police et doit tenir entièrement dans la
+  zone sûre et dans sa bande floue, sans jamais empiéter sur l'image vidéo ;
+  un texte trop long est coupé en lignes puis réduit en taille par paliers
+  jusqu'à un minimum ; s'il ne tient toujours pas, c'est une erreur
+  explicite (jamais tronqué ni débordant en silence).
+
+### Appel à l'abonnement (option, `cta_enabled`, désactivé par défaut)
+- Pseudo de chaîne : sous le titre d'écran, dans la même bande floue du
+  haut, pendant tout le clip. Texte discret (`cta_handle`, ex.
+  `twitch.tv/madajel`), police et taille plus petites que celles du titre
+  (réglables), jamais superposé au titre. Requiert `cta_handle` non vide ;
+  `cta_enabled` sans `cta_handle` est une erreur explicite (ADR-ad2e :
+  jamais de rendu à moitié activé).
+- Carte de fin : sur les `cta_seconds` dernières secondes du clip (défaut
+  2 s), dans la bande floue du bas, les sous-titres sont remplacés par un
+  encadré « Abonne-toi ! » (texte réglable, `cta_text`), centré dans la
+  bande. « Partie N » continue de s'afficher normalement pendant ces
+  secondes si le clip est multipartie.
+- Mêmes règles de mesure, de zone sûre et d'erreur explicite que les autres
+  textes de la spec : pseudo et carte de fin sont mesurés avec la vraie
+  police, réduits par paliers si besoin, jamais tronqués ni débordants en
+  silence ; au-delà du minimum, erreur explicite.
+
+## Format recadré (option figée, `[reframe] format = crop`)
+- Gardé tel quel en option, sans nouveau développement (décision
+  utilisateur 2026-09-28).
+- Cadre 9:16 qui suit le sujet ; aucun visage retenu coupé, sinon repli
+  explicite (fond flou ou écran partagé selon la config) noté dans le JSON.
+- Sous-titres jamais par-dessus un visage retenu ; texte d'accroche les 2
+  premières secondes ; « Partie N » si multi-parties.
+- L'appel à l'abonnement (pseudo, carte de fin) ne s'applique pas à ce
+  format, qui reste figé.
+
+## Format stream (`[reframe] format = stream`, SPEC-3a88)
+- Rendu inchangé par ailleurs (facecam agrandie en haut, jeu en bas, titre
+  d'écran au-dessus de la caméra, sous-titres dans la zone basse sans jamais
+  recouvrir le visage retenu).
+- Même règle de titre d'écran que ci-dessus (sobre, sans emoji par défaut).
+- Même option `cta_enabled` qu'en letterbox : pseudo de chaîne sous le
+  titre d'écran, dans la bande du haut, au-dessus de la caméra, pendant
+  tout le clip ; carte de fin sur les `cta_seconds` dernières secondes à la
+  place des sous-titres, dans la zone basse (jeu), sans jamais recouvrir le
+  visage retenu. Mêmes règles de mesure, de zone sûre et d'erreur explicite
+  que ci-dessus.
+
+## JSON (sidecar)
+Champs obligatoires : `video_id`, `source_url`, `source_title`, `clip_id`,
+`part`, `parts_total`, `start`, `end`, `duration`, `language`, `score`,
+`scores` (par critère), `reason`, `hook_text`, `screen_title`, `title`,
+`caption`, `hashtags` (liste), `transcript` (texte du clip), `layout`
+(letterbox | facecam_gameplay | single | fallback_blur | split), `qa`
+(`status`: passed | rejected | skipped, `issues`: liste), `created_at` (ISO
+8601), `cta` (booléen : appel à l'abonnement présent et rendu sur ce clip ;
+`false` quand `cta_enabled` est désactivé ou que le format ne le supporte
+pas, ex. crop).
+Un clip dont `qa.status` = rejected n'est jamais marqué prêt à publier.
+
+## Légende (config, désactivé par défaut)
+- `[captions] cta_line` (chaîne, défaut vide) : ligne d'appel ajoutée à la
+  fin de `caption` quand non vide (ex. « Abonne-toi sur Twitch pour plus de
+  lives ! »).
+- `[captions] cta_hashtags` (liste, défaut vide) : hashtags supplémentaires
+  ajoutés à `hashtags`, mêmes règles que les autres (commencent par #, sans
+  doublon).
+- Vide par défaut : sans configuration explicite, `caption` et `hashtags`
+  restent ceux que produit captions.py aujourd'hui, inchangés par cette
+  spec.
+
+## Réglage (ajouté par cette spec)
+`[captions] screen_title_style` (chaîne, dans `CONFIG_DEFAULTS` de `clipper/captions.py`) : `citation` (défaut, comportement d'avant, prompt et schéma identiques), `promesse` ou `promesse_emoji` (promesse + « ... » + un emoji d'émotion, test A/B d'un style de titre par compte TikTok). Demande utilisateur 2026-10-12 : le titre doit tenir en haleine (annoncer l'enjeu sans dévoiler la chute) au lieu d'une citation (ex. « Je suis pas mort »).
+
+## Prompt et schéma (ajouté par cette spec)
+Le prompt et la description du champ `screen_title` dans le schéma JSON suivent le style choisi (le schéma prime sur le prompt, ADR-b1c1) : en `promesse` et `promesse_emoji`, les consignes d'enjeu sans révélation et de véracité figurent dans les deux ; en `promesse_emoji`, aussi la consigne « ... » + un seul emoji (jamais 🤔, jamais « ? », emoji varié).
+
+## Exemples du style promesse (ajouté par cette spec)
+| Citation (actuel) | Promesse (attendu) |
+| --- | --- |
+| « Je suis pas mort » | « Il tente le boss seul » |
+| « Ça va passer » | « Le craft T0 va-t-il passer ? » |
+
+Style `promesse_emoji` : « Il tente le boss seul... 😬 », « Dernière carte, tout ou rien... 😮 ». Refusés : « Il tente le boss seul... », « Il tente le boss seul ?... 😬 », « Il tente le boss seul... 🤔 », « Il tente le boss seul... 😬🔥 ».

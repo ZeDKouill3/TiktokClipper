@@ -105,7 +105,9 @@ CONFIG_DEFAULTS: dict[str, object] = {
     # elle permet seulement d'en accepter un (au plus un).
     "screen_title_allow_emoji": False,
     # SPEC-08c2 : "citation" (defaut, de preference une phrase prononcee dans
-    # le clip) ou "promesse" (annonce l'enjeu ou la chute sans la reveler).
+    # le clip), "promesse" (annonce l'enjeu ou la chute sans la reveler) ou
+    # "promesse_emoji" (promesse + « ... » + UN emoji d'emotion, sans qu'il
+    # faille activer screen_title_allow_emoji).
     # Valeur inconnue : CaptionsError qui nomme la cle, jamais de repli.
     "screen_title_style": "citation",
     # SPEC-6a86 : ton sobre, aucun superlatif ni mot d'emphase clickbait.
@@ -275,13 +277,18 @@ def response_schema(
         required.append("title")
     if include_screen_title:
         allow_emoji = bool(settings["screen_title_allow_emoji"])
+        style = screen_title_style(settings)
         title_hint = (
             _PROMESSE_SCHEMA_HINT
-            if screen_title_style(settings) == "promesse"
+            if style in _PROMESSE_STYLES
             else "si une citation depasse, ne la recopie pas telle quelle : raccourcis-la ou reformule ;"
         )
+        if style == "promesse_emoji":
+            title_hint += " " + _PROMESSE_EMOJI_RULE + " ;"
         emoji_desc = (
-            "au plus un emoji simple, jamais obligatoire"
+            "un emoji final obligatoire (voir plus haut)"
+            if style == "promesse_emoji"
+            else "au plus un emoji simple, jamais obligatoire"
             if allow_emoji
             else "AUCUN emoji"
         )
@@ -311,6 +318,15 @@ _PROMESSE_SCHEMA_HINT = (
     "sur 2 en question, sinon une situation en suspens (« Il tente le boss seul », "
     "« Dernière carte, tout ou rien ») ; la promesse se realise dans le clip : "
     "aucun fait, nom ou chiffre absent du transcript ou de la justification du moment ;"
+)
+# Consigne ajoutee par "promesse_emoji", identique dans le prompt et dans la
+# description du champ du schema. Les « ? » sont proscrits avec « ... ».
+_PROMESSE_EMOJI_RULE = (
+    "le titre se termine TOUJOURS par des points de suspension « ... » suivis d'un espace et d'UN seul emoji "
+    "qui traduit l'emotion du moment (jamais 🤔, jamais deux emojis) ; jamais de « ? » avec « ... » "
+    "(pas de « ?... ») ; ne recopie pas une citation en ajoutant « ... » : reformule en promesse ; "
+    "rappel : jamais reveler ni resumer l'issue ; varie l'emoji d'un clip a l'autre au sein de la reponse "
+    "(😬 😱 😤 😅 🔥 😮 😂 🙏 selon l'emotion, pas toujours le meme)"
 )
 _PROMESSE_PROMPT_RULE = (
     "il tient le spectateur en haleine : il annonce l'enjeu du clip, jamais reveler ni resumer l'issue "
@@ -398,15 +414,18 @@ def _prompt(
     )
     if screen_title is None:
         allow_emoji = bool(settings["screen_title_allow_emoji"])
+        style = screen_title_style(settings)
         emoji_rule = (
-            "au plus un emoji simple, jamais obligatoire (pas de sequence composee, pas de drapeau)"
+            "un seul emoji final obligatoire (voir plus haut), pas de sequence composee, pas de drapeau"
+            if style == "promesse_emoji"
+            else "au plus un emoji simple, jamais obligatoire (pas de sequence composee, pas de drapeau)"
             if allow_emoji
             else "aucun emoji"
         )
         forbidden_words = ", ".join(str(w) for w in settings["screen_title_forbidden_words"])
         content_rule = (
-            _PROMESSE_PROMPT_RULE
-            if screen_title_style(settings) == "promesse"
+            _PROMESSE_PROMPT_RULE + (" ; " + _PROMESSE_EMOJI_RULE if style == "promesse_emoji" else "")
+            if style in _PROMESSE_STYLES
             else "de preference une phrase reellement prononcee dans ce clip (citation courte entre "
             "« »), sinon un fait concret et precis du clip, jamais un contenu absent du clip"
         )
@@ -643,9 +662,44 @@ def _validate_moderation_risk_terms(answer: dict[str, Any], risk_terms: list[str
                 )
 
 
+_PROMESSE_EMOJI_RE = re.compile(r"^(?P<body>.*\S)\.\.\. (?P<emoji>\S+)$", re.DOTALL)
+_FORBIDDEN_FINAL_EMOJI = "🤔"
+
+
+def _validate_promesse_emoji(screen_title: str) -> None:
+    """Style ``promesse_emoji`` : fin « ... » + espace + UN seul emoji (🤔
+    refuse), aucun « ? », aucun autre emoji dans le corps. Rien n'est corrige."""
+    match = _PROMESSE_EMOJI_RE.match(screen_title)
+    if match is None:
+        raise llm.SchemaError(
+            "screen_title doit finir par des points de suspension « ... », un espace, "
+            f"puis UN seul emoji : {screen_title!r}"
+        )
+    body, token = match.group("body"), match.group("emoji")
+    if "?" in screen_title:
+        raise llm.SchemaError(
+            f"screen_title ne doit jamais contenir « ? » (pas de « ?... ») : {screen_title!r}"
+        )
+    if any(_is_pictographic(ord(c)) for c in body):
+        raise llm.SchemaError(
+            f"screen_title : l'emoji va uniquement apres les points de suspension : {screen_title!r}"
+        )
+    count = sum(1 for c in token if _is_pictographic(ord(c)))
+    if count != 1:
+        raise llm.SchemaError(
+            f"screen_title doit finir par un seul emoji, {count} trouve(s) : {screen_title!r}"
+        )
+    if _FORBIDDEN_FINAL_EMOJI in token:
+        raise llm.SchemaError(
+            f"emoji {_FORBIDDEN_FINAL_EMOJI} refuse dans screen_title : choisis une autre emotion : "
+            f"{screen_title!r}"
+        )
+    _validate_screen_title_emoji(screen_title, True)  # ZWJ et drapeau refuses
+
+
 def _validate_screen_title(
     screen_title: str, max_words: int, forbidden_words: list[str], allow_emoji: bool,
-    target_words: int | None = None,
+    target_words: int | None = None, style: str = "citation",
 ) -> None:
     n = _count_words(screen_title)
     if n > max_words:
@@ -654,7 +708,10 @@ def _validate_screen_title(
             f"titre d'ecran de {_excess_message(n, target)} : {_numbered_words(screen_title)}"
         )
     _validate_screen_title_forbidden_words(screen_title, forbidden_words)
-    _validate_screen_title_emoji(screen_title, allow_emoji)
+    if style == "promesse_emoji":
+        _validate_promesse_emoji(screen_title)
+    else:
+        _validate_screen_title_emoji(screen_title, allow_emoji)
 
 
 def _check_answer(
@@ -668,6 +725,7 @@ def _check_answer(
     hook_words_target: int | None = None,
     screen_title_words_target: int | None = None,
     moderation_risk_terms: list[str] | None = None,
+    screen_title_style: str = "citation",
 ):
     """Controle passe a llm.ask : ce qui le refuse est renvoye au modele
     pour correction, comme une reponse hors schema. ``require_screen_title``
@@ -684,7 +742,7 @@ def _check_answer(
             _validate_screen_title(
                 answer["screen_title"], screen_title_words_max,
                 screen_title_forbidden_words, screen_title_allow_emoji,
-                screen_title_words_target,
+                screen_title_words_target, screen_title_style,
             )
 
     return check
@@ -741,7 +799,8 @@ def _apply_cta_line(clips: list[dict[str, Any]], settings: dict[str, Any]) -> No
                     seen.add(tag.lower())
 
 
-SCREEN_TITLE_STYLES = ("citation", "promesse")
+SCREEN_TITLE_STYLES = ("citation", "promesse", "promesse_emoji")
+_PROMESSE_STYLES = ("promesse", "promesse_emoji")
 
 
 def screen_title_style(settings: dict[str, Any]) -> str:
@@ -813,6 +872,7 @@ def _process_moment(
             screen_title_words_target=_words_target(
                 settings, "screen_title_words_target", "screen_title_words_max"),
             moderation_risk_terms=list(settings["moderation_risk_terms"]),
+            screen_title_style=globals()["screen_title_style"](settings),
         )
         text = _part_text(transcript, part["start"], part["end"])
         prompt = _prompt(language, video_title, source, part, parts_total, text, settings,
