@@ -5,7 +5,7 @@ slug: re-rendu-garder-les-champs-de-publication-du-sid
 title: "Re-rendu : garder les champs de publication du sidecar (tiktok_post...)"
 created: 2026-10-12T13:43:59Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/render.py
   - tests/test_render.py
@@ -15,8 +15,15 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/2d56135d2ae8@46f703a
+    tree: scope/4d278c6b1d3e
+    criteria: fccef223a595
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 ## Bug

@@ -303,6 +303,37 @@ def _read_json(path: Path, optional: bool = False) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# Champs du sidecar ecrits APRES le rendu par d'autres modules : un re-rendu force doit les
+# recopier tels quels, sinon un clip publie ou programme parait neuf (doublon de publication,
+# lien post->clip perdu pour l'apprentissage).
+_KEPT_SIDECAR_FIELDS = (
+    "tiktok_post",  # publish.py (publication / programmation TikTok), learning.py (rattachement post->clip)
+    "youtube_post",  # publish.py (publication / programmation YouTube Shorts)
+    "removed_from_platform",  # publish.py (mark_removed_from_platform : post supprime a la main)
+    "edited_at",  # publish.py (retouche manuelle de la legende)
+)
+# Retouchees a la main dans la meme operation que ``edited_at`` (publish.py) : conservees avec lui.
+_EDITED_SIDECAR_FIELDS = ("caption", "hashtags")
+
+
+def _kept_sidecar_fields(json_out: Path) -> dict[str, Any]:
+    """Champs de publication de l'ancien sidecar ``json_out`` a reporter dans le nouveau ({} s'il
+    n'existe pas). Un ancien sidecar illisible est une erreur : jamais d'ecrasement silencieux de
+    l'etat de publication (ADR-ad2e)."""
+    if not json_out.exists():
+        return {}
+    try:
+        old = json.loads(json_out.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RenderError(
+            f"ancien sidecar illisible : {json_out} ({exc}) ; le reparer ou le supprimer avant de re-rendre"
+        ) from exc
+    if not isinstance(old, dict):
+        raise RenderError(f"ancien sidecar illisible : {json_out} (objet JSON attendu)")
+    fields = _KEPT_SIDECAR_FIELDS + (_EDITED_SIDECAR_FIELDS if "edited_at" in old else ())
+    return {k: old[k] for k in fields if k in old}
+
+
 def _find(items: list[dict[str, Any]], key: str, value: Any, where: str) -> dict[str, Any]:
     for item in items:
         if item[key] == value:
@@ -1318,6 +1349,8 @@ def render(
     if not source.exists():
         raise RenderError(f"video absente : {source}")
 
+    kept_fields = _kept_sidecar_fields(json_out)  # avant tout encodage : un sidecar casse echoue tot
+
     captions = _read_json(video_dir / "captions.json")
     clip = _find(captions["clips"], "id", clip_id, "captions.json")
 
@@ -1546,6 +1579,7 @@ def render(
         "qa": dict(_QA_DEFAULT),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    data.update(kept_fields)  # etat de publication / retouches de l'ancien sidecar (re-rendu force)
     data.update(rects)  # panneaux video en pixels de sortie, pour la qa (SPEC-6127, SPEC-3a88)
     tmp_json = json_out.with_suffix(".json.tmp")
     tmp_json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

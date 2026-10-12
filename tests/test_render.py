@@ -2707,3 +2707,101 @@ def test_title_split_center_y_does_not_change_letterbox_placement(tmp_path, vide
     base = layout_title("Un titre sobre", zone, CONFIG_DEFAULTS)
     other = layout_title("Un titre sobre", zone, {**CONFIG_DEFAULTS, "title_split_center_y": 640})
     assert base.box == other.box
+
+
+# --- re-rendu force : champs de publication de l'ancien sidecar conserves ----------
+
+
+def _render_letterbox(tmp_path, letterbox_dir, **kw):
+    from clipper.render import render
+
+    (letterbox_dir / f"{VIDEO_ID}.mp4").write_bytes(b"")
+    return render(VIDEO_ID, CLIP_ID, workspace_dir=letterbox_dir.parent, output_dir=tmp_path / "output",
+                  config=make_config(), **kw)
+
+
+def _sidecar_path(tmp_path):
+    return tmp_path / "output" / VIDEO_ID / f"{CLIP_ID}.json"
+
+
+def test_forced_rerender_keeps_publication_fields_of_the_old_sidecar(
+    tmp_path, letterbox_dir, fake_ffmpeg, cpu_device
+):
+    _render_letterbox(tmp_path, letterbox_dir)
+    path = _sidecar_path(tmp_path)
+    old = json.loads(path.read_text(encoding="utf-8"))
+    tiktok_post = {"url": "https://www.tiktok.com/@x/video/1", "id": "1", "state": "scheduled_on_tiktok"}
+    youtube_post = {"account": "yt", "url": "https://youtube.com/shorts/abc"}
+    removed = {"at": "2026-10-11T10:00:00+00:00", "reason": "doublon"}
+    old.update(tiktok_post=tiktok_post, youtube_post=youtube_post, removed_from_platform=removed,
+               screen_title="ANCIEN TITRE", qa={"status": "ok", "issues": []}, created_at="2020-01-01T00:00:00+00:00")
+    path.write_text(json.dumps(old), encoding="utf-8")
+
+    _render_letterbox(tmp_path, letterbox_dir, force=True)
+
+    new = json.loads(path.read_text(encoding="utf-8"))
+    assert new["tiktok_post"] == tiktok_post
+    assert new["youtube_post"] == youtube_post
+    assert new["removed_from_platform"] == removed
+    # champs de rendu renouveles
+    assert new["screen_title"] == "Il m'a menti en garde à vue"
+    assert new["qa"] == {"status": "skipped", "issues": []}
+    assert new["created_at"] != "2020-01-01T00:00:00+00:00"
+    assert new["layout"] == "letterbox"
+
+
+def test_forced_rerender_keeps_an_edited_caption_and_hashtags(tmp_path, letterbox_dir, fake_ffmpeg, cpu_device):
+    _render_letterbox(tmp_path, letterbox_dir)
+    path = _sidecar_path(tmp_path)
+    old = json.loads(path.read_text(encoding="utf-8"))
+    old.update(caption="Legende retouchee", hashtags=["#mien"], edited_at="2026-10-11T09:00:00+00:00")
+    path.write_text(json.dumps(old), encoding="utf-8")
+
+    _render_letterbox(tmp_path, letterbox_dir, force=True)
+
+    new = json.loads(path.read_text(encoding="utf-8"))
+    assert (new["caption"], new["hashtags"], new["edited_at"]) == (
+        "Legende retouchee", ["#mien"], "2026-10-11T09:00:00+00:00")
+
+
+def test_forced_rerender_regenerates_caption_when_it_was_never_edited(
+    tmp_path, letterbox_dir, fake_ffmpeg, cpu_device
+):
+    _render_letterbox(tmp_path, letterbox_dir)
+    path = _sidecar_path(tmp_path)
+    old = json.loads(path.read_text(encoding="utf-8"))
+    old["caption"] = "ancienne legende generee"
+    path.write_text(json.dumps(old), encoding="utf-8")
+
+    _render_letterbox(tmp_path, letterbox_dir, force=True)
+
+    new = json.loads(path.read_text(encoding="utf-8"))
+    assert new["caption"] == "Une legende qui donne envie"
+    assert "edited_at" not in new
+    assert "tiktok_post" not in new
+
+
+def test_first_render_without_old_sidecar_has_no_publication_fields(
+    tmp_path, letterbox_dir, fake_ffmpeg, cpu_device
+):
+    _render_letterbox(tmp_path, letterbox_dir)
+
+    data = json.loads(_sidecar_path(tmp_path).read_text(encoding="utf-8"))
+    assert not {"tiktok_post", "youtube_post", "removed_from_platform", "edited_at"} & set(data)
+
+
+def test_forced_rerender_with_a_broken_old_sidecar_is_an_explicit_error(
+    tmp_path, letterbox_dir, fake_ffmpeg, cpu_device
+):
+    from clipper.render import RenderError
+
+    _render_letterbox(tmp_path, letterbox_dir)
+    path = _sidecar_path(tmp_path)
+    path.write_text("{cassé", encoding="utf-8")
+    fake_ffmpeg.clear()
+
+    with pytest.raises(RenderError, match=r"illisible"):
+        _render_letterbox(tmp_path, letterbox_dir, force=True)
+
+    assert path.read_text(encoding="utf-8") == "{cassé"  # etat de publication jamais ecrase
+    assert fake_ffmpeg == []  # echec avant tout encodage
