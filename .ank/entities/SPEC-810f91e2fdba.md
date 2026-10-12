@@ -5,7 +5,7 @@ slug: titre-d-cran-promesse-emoji-promesse-un-emoji-d
 title: "Titre d'écran « promesse_emoji » : promesse + « ... » + un emoji d'émotion (screen_title_style citation | promesse | promesse_emoji)"
 created: 2026-10-12T15:35:45Z
 author: w-a41620252d2e
-status: proposed
+status: accepted
 scope:
   - clipper/captions.py
   - clipper/render.py
@@ -15,8 +15,12 @@ scope:
   - clipper/subtitles.py
 references: [SPEC-3a88ee9c2eb9, ADR-ad2e562b1810]
 supersedes: SPEC-08c28e46a632
+ratified: cdbac62252da
+verified:
+  - by: nicoc@zedk_ordi
+    at: 2026-10-12T15:52:23Z
 schema: 4
-version: 1
+version: 2
 ---
 
 ## Objet
