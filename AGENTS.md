@@ -195,6 +195,12 @@ Liste régénérée depuis `ank find --type adr --status accepted` et `ank find 
   sur posts d'au moins 24 h, exploration réservée, vivier par compte, refus
   explicites. Succède à SPEC-78dc.
 
+- **SPEC-042c** — test A/B des titres d'écran : `[repartition] title_ab_*`,
+  un style de titre par compte TikTok avec rotation hebdomadaire, un clip
+  n'est planifié que sur le compte de son style (sidecar
+  `screen_title_style` + `title_shown`), clip sans style refusé ; style des
+  nouvelles vidéos = le moins fourni (pipeline.json `title_style`).
+
 ### SPEC proposée (pas encore `ank accept`)
 
 - **SPEC-2a1e** — doublon vide créé par erreur (corps absent), à ne pas
