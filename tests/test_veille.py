@@ -130,7 +130,7 @@ def test_config_defaults_are_exactly_r1():
         "trend_days": 30, "trend_games_max": 40, "steam_reviews_pause_s": 2.0, "steam_reviews_retry_max": 3,
         "steam_reviews_retry_wait_max_s": 60.0, "twitch_history_pages_max": 5, "twitch_history_retry_max": 2,
         "twitch_history_retry_wait_max_s": 60.0, "veille_deadline_s": 480,
-        "llm_retry_delay_min": 30, "llm_retry_max": 3,
+        "llm_retry_delay_min": 30, "llm_retry_max": 3, "webcam_check_max": 30,
     }
 
 

@@ -105,6 +105,7 @@ const SET_LABELS = {
   "veille.veille_deadline_s": "Échéance globale du relevé (s)",
   "veille.llm_retry_delay_min": "Délai entre deux appels à Claude (min)",
   "veille.llm_retry_max": "Nouvelles tentatives d'appel à Claude",
+  "veille.webcam_check_max": "Miniatures contrôlées pour la webcam (0 = désactivé)",
   "veille.twitch_client_id": "Identifiant client Twitch",
   "veille.twitch_client_secret": "Secret client Twitch",
   "veille.youtube_api_key": "Clé API YouTube",

@@ -5,7 +5,7 @@ slug: veille-contr-le-webcam-sur-les-miniatures-des-vo
 title: "Veille : contrôle webcam sur les miniatures des VOD avant le choix de Claude (spec successeur de R6 de SPEC-bdd9)"
 created: 2026-10-12T09:24:26Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/veille.py
   - clipper/web/static/**
@@ -18,6 +18,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/09711e7a336e@40aa6e7
+    tree: scope/2ec3647bc0cf
+    criteria: 3bce3a15a106
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
