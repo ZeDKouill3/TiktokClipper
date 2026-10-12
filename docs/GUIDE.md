@@ -778,6 +778,7 @@ est celle de l'étape moments (`rubric.path` de `moments.json`) ; l'ancienne cl�
 `screen_title_allow_emoji` = `false` (SPEC-6a86 : sans configuration
 explicite, un `screen_title` avec un emoji est refusé — activer l'option ne
 le rend pas obligatoire, elle permet seulement d'en accepter un au plus),
+`screen_title_style` = `"citation"` (SPEC-08c2 : `"citation"` = phrase prononcée dans le clip ou fait précis ; `"promesse"` = le titre annonce l'enjeu ou la chute du clip sans la révéler, ex. « Le craft T0 va-t-il passer ? », toujours sobre et vrai ; une autre valeur est une erreur explicite),
 `screen_title_forbidden_words` (liste de mots d'emphase clickbait refusés
 dans `screen_title`, insensible à la casse et aux accents, mot entier ;
 réglable par preset de style), `parallel` = 4 (moments traités en

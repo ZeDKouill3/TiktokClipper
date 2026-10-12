@@ -104,6 +104,10 @@ CONFIG_DEFAULTS: dict[str, object] = {
     # emoji est refuse. Activer l'option ne rend pas l'emoji obligatoire,
     # elle permet seulement d'en accepter un (au plus un).
     "screen_title_allow_emoji": False,
+    # SPEC-08c2 : "citation" (defaut, de preference une phrase prononcee dans
+    # le clip) ou "promesse" (annonce l'enjeu ou la chute sans la reveler).
+    # Valeur inconnue : CaptionsError qui nomme la cle, jamais de repli.
+    "screen_title_style": "citation",
     # SPEC-6a86 : ton sobre, aucun superlatif ni mot d'emphase clickbait.
     # Insensible a la casse et aux accents, comparaison mot entier. Liste
     # non exhaustive, reglable par preset de chaine.
@@ -271,6 +275,11 @@ def response_schema(
         required.append("title")
     if include_screen_title:
         allow_emoji = bool(settings["screen_title_allow_emoji"])
+        title_hint = (
+            _PROMESSE_SCHEMA_HINT
+            if screen_title_style(settings) == "promesse"
+            else "si une citation depasse, ne la recopie pas telle quelle : raccourcis-la ou reformule ;"
+        )
         emoji_desc = (
             "au plus un emoji simple, jamais obligatoire"
             if allow_emoji
@@ -282,8 +291,7 @@ def response_schema(
                 "Titre d'ecran affiche en haut, sur un encadre blanc, pendant tout le "
                 f"clip : viser {_words_target(settings, 'screen_title_words_target', 'screen_title_words_max')} "
                 f"mots, {settings['screen_title_words_max']} au plus (l'emoji ne compte pas) ; "
-                "si une citation depasse, ne la recopie pas telle quelle : raccourcis-la ou "
-                f"reformule ; ton sobre (jamais de superlatif ni de mot d'emphase "
+                f"{title_hint} ton sobre (jamais de superlatif ni de mot d'emphase "
                 f"clickbait) ; {emoji_desc}."
             ),
         }
@@ -294,6 +302,24 @@ def response_schema(
         "required": required,
         "additionalProperties": False,
     }
+
+
+# SPEC-08c2 : consignes du style "promesse", reprises a l'identique dans le
+# prompt et dans la description du champ du schema (le schema prime).
+_PROMESSE_SCHEMA_HINT = (
+    "annonce l'enjeu du clip, jamais reveler ni resumer l'issue ; varier la forme : au plus 1 titre "
+    "sur 2 en question, sinon une situation en suspens (« Il tente le boss seul », "
+    "« Dernière carte, tout ou rien ») ; la promesse se realise dans le clip : "
+    "aucun fait, nom ou chiffre absent du transcript ou de la justification du moment ;"
+)
+_PROMESSE_PROMPT_RULE = (
+    "il tient le spectateur en haleine : il annonce l'enjeu du clip, jamais reveler ni resumer l'issue "
+    "(un titre qui dit ce qui s'est passe, ex. « Il refuse de répondre aux stats », est refuse) ; "
+    "varier la forme : au plus 1 titre sur 2 en question, sinon une situation en suspens "
+    "(« Il tente le boss seul », « Dernière carte, tout ou rien »), pas une citation ; "
+    "la promesse se realise dans le clip : "
+    "aucun fait, nom ou chiffre absent du transcript ou de la justification du moment"
+)
 
 
 def _keywords_rule(channel: str) -> str:
@@ -378,12 +404,17 @@ def _prompt(
             else "aucun emoji"
         )
         forbidden_words = ", ".join(str(w) for w in settings["screen_title_forbidden_words"])
+        content_rule = (
+            _PROMESSE_PROMPT_RULE
+            if screen_title_style(settings) == "promesse"
+            else "de preference une phrase reellement prononcee dans ce clip (citation courte entre "
+            "« »), sinon un fait concret et precis du clip, jamais un contenu absent du clip"
+        )
         rules.append(
             f"screen_title : titre, viser "
             f"{_words_target(settings, 'screen_title_words_target', 'screen_title_words_max')} mots "
             f"({int(settings['screen_title_words_max'])} au plus, limite stricte), affiche dans un encadre blanc au-dessus de la video, pendant tout le clip ; ton "
-            "sobre, de preference une phrase reellement prononcee dans ce clip (citation courte entre "
-            "« »), sinon un fait concret et precis du clip, jamais un contenu absent du clip ; "
+            f"sobre, {content_rule} ; "
             f"{emoji_rule} ; aucun superlatif ni mot d'emphase clickbait, notamment : {forbidden_words}."
         )
     rules.append(
@@ -710,6 +741,21 @@ def _apply_cta_line(clips: list[dict[str, Any]], settings: dict[str, Any]) -> No
                     seen.add(tag.lower())
 
 
+SCREEN_TITLE_STYLES = ("citation", "promesse")
+
+
+def screen_title_style(settings: dict[str, Any]) -> str:
+    """Style du titre d'ecran (SPEC-08c2) ; valeur inconnue : CaptionsError qui
+    nomme la cle et les valeurs permises (ADR-ad2e, aucun repli silencieux)."""
+    value = settings["screen_title_style"]
+    if not isinstance(value, str) or value not in SCREEN_TITLE_STYLES:
+        raise CaptionsError(
+            f"[captions] screen_title_style doit valoir {' ou '.join(repr(v) for v in SCREEN_TITLE_STYLES)}, "
+            f"recu {value!r}"
+        )
+    return value
+
+
 def title_repair_attempts(settings: dict[str, Any]) -> int:
     """Nombre de relances LLM d'un titre ; < 0, non entier ou booleen : CaptionsError qui le nomme (ADR-ad2e)."""
     value = settings["title_repair_attempts"]
@@ -820,6 +866,7 @@ def run(
     meta = _read_json(video_dir / "meta.json", optional=True) or {}
     settings = _settings(config)
     title_repair_attempts(settings)  # refusé ici, avant tout appel LLM
+    screen_title_style(settings)  # idem (SPEC-08c2)
     workers = parallel_workers(settings)
     language = transcript.get("language") or ""
     video_title = meta.get("title") or ""

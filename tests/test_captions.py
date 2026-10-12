@@ -1646,3 +1646,95 @@ def test_prompt_asks_to_avoid_risk_terms_and_their_hashtags(workspace, tmp_path)
     fake, _ = run(workspace, make_config(tmp_path), [answer()])
 
     assert "bannissement" in fake.calls[0].prompt and "macro" in fake.calls[0].prompt
+
+
+# --- SPEC-08c2 : [captions] screen_title_style (citation | promesse) ---
+
+
+def test_screen_title_style_defaults_to_citation():
+    from clipper.captions import CONFIG_DEFAULTS
+
+    assert CONFIG_DEFAULTS["screen_title_style"] == "citation"
+
+
+def test_default_prompt_keeps_the_citation_rule_and_has_no_promise_wording(workspace, tmp_path):
+    prompt = _single_prompt(workspace, tmp_path)
+
+    assert "de preference une phrase reellement prononcee dans ce clip" in prompt
+    assert "enjeu" not in prompt
+
+
+def test_default_schema_screen_title_description_is_the_citation_one():
+    from clipper.captions import CONFIG_DEFAULTS, response_schema
+
+    description = response_schema(CONFIG_DEFAULTS)["properties"]["screen_title"]["description"]
+
+    assert "enjeu" not in description
+    explicit = response_schema({**CONFIG_DEFAULTS, "screen_title_style": "citation"})
+    assert explicit["properties"]["screen_title"]["description"] == description
+
+
+def test_promesse_prompt_asks_for_the_stake_without_revealing_the_outcome(workspace, tmp_path):
+    prompt = _single_prompt(workspace, tmp_path, screen_title_style="promesse")
+
+    assert "enjeu" in prompt
+    assert "ni resumer l'issue" in prompt
+    assert "se realise dans le clip" in prompt
+    assert "de preference une phrase reellement prononcee dans ce clip" not in prompt
+    assert "choc" in prompt and "aucun emoji" in prompt  # sobriete inchangee
+
+
+def test_promesse_schema_screen_title_description_carries_the_same_instructions():
+    from clipper.captions import CONFIG_DEFAULTS, response_schema
+
+    schema = response_schema({**CONFIG_DEFAULTS, "screen_title_style": "promesse"})
+
+    description = schema["properties"]["screen_title"]["description"]
+    assert "enjeu" in description and "ni resumer l'issue" in description
+    assert "se realise dans le clip" in description
+    assert "AUCUN emoji" in description
+
+
+def test_promesse_is_sent_to_the_llm_in_prompt_and_schema(workspace, tmp_path):
+    write_moments(workspace, moment(0))
+    write_parts(workspace, parts_record(0, "single", 1, [part(1, 0.0, 3.9)]))
+
+    fake, _ = run(workspace, make_config(tmp_path, screen_title_style="promesse"), [answer()])
+
+    schema_text = json.dumps(fake.calls[0].schema, ensure_ascii=False)
+    assert "ni resumer l'issue" in fake.calls[0].prompt
+    assert "ni resumer l'issue" in schema_text
+
+
+def test_unknown_screen_title_style_is_an_explicit_error_naming_the_key(workspace, tmp_path):
+    from clipper.captions import CaptionsError
+
+    write_moments(workspace, moment(0))
+    write_parts(workspace, parts_record(0, "single", 1, [part(1, 0.0, 3.9)]))
+    fake = FakeBackend([answer()])
+    llm.use_backend(fake)
+
+    with pytest.raises(CaptionsError, match="screen_title_style"):
+        run(workspace, make_config(tmp_path, screen_title_style="clickbait"), [answer()])
+    assert fake.calls == []
+
+
+def test_unknown_screen_title_style_also_fails_in_response_schema():
+    from clipper.captions import CONFIG_DEFAULTS, CaptionsError, response_schema
+
+    with pytest.raises(CaptionsError, match="screen_title_style"):
+        response_schema({**CONFIG_DEFAULTS, "screen_title_style": "x"})
+
+
+def test_promesse_prompt_and_schema_vary_the_form_and_forbid_revealing_the_outcome(workspace, tmp_path):
+    from clipper.captions import CONFIG_DEFAULTS, response_schema
+
+    prompt = _single_prompt(workspace, tmp_path, screen_title_style="promesse")
+    description = response_schema({**CONFIG_DEFAULTS, "screen_title_style": "promesse"})[
+        "properties"]["screen_title"]["description"]
+
+    for text in (prompt, description):
+        assert "au plus 1 titre sur 2 en question" in text
+        assert "situation en suspens" in text
+        assert "Dernière carte, tout ou rien" in text
+        assert "jamais reveler ni resumer l'issue" in text

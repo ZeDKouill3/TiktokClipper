@@ -5,7 +5,7 @@ slug: titre-d-cran-promesse-tient-en-haleine-r-glage-s
 title: "Titre d'écran « promesse » (tient en haleine) : réglage screen_title_style, spec successeur de SPEC-6a86"
 created: 2026-10-12T11:27:36Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/captions.py
   - tests/test_captions*.py
@@ -19,6 +19,13 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/5ff272573036@c68864c
+    tree: scope/1dac2a4ec829
+    criteria: "687174895017"
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
