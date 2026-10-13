@@ -3119,8 +3119,8 @@ def _validate_split_geometry(settings: dict[str, Any]) -> None:
     """Geometrie de l'agencement split (SPEC-76dc), verifiee des le
     chargement de la config (ne depend que d'elle, jamais de la source) :
     webcam/jeu dans le canevas sans se chevaucher, badge/sous-titres dans la
-    zone sure TikTok sans se chevaucher entre eux (ADR-ad2e : jamais un
-    rendu tronque ou chevauchant en silence)."""
+    zone sure TikTok sans se chevaucher entre eux ni la bande « Partie N »
+    (ADR-ad2e : jamais un rendu tronque ou chevauchant en silence)."""
     out_w, out_h = int(settings["output_width"]), int(settings["output_height"])
     webcam = _dest_box("split_webcam_dest", settings["split_webcam_dest"])
     gameplay = _dest_box("split_gameplay_dest", settings["split_gameplay_dest"])
@@ -3147,6 +3147,13 @@ def _validate_split_geometry(settings: dict[str, Any]) -> None:
             raise ReframeError(
                 f"[reframe] {name} hors de la zone sure TikTok "
                 f"(x {safe_left}-{safe_right}, y {safe_top}-{safe_bottom}) : ({x0},{y0})-({x1},{y1})"
+            )
+    part = (safe_left, safe_bottom - int(settings["part_height"]), safe_right, safe_bottom)
+    for name, box in (("badge_dest", badge), ("split_subtitle_dest", subtitles)):
+        if _rects_overlap(box, part):
+            raise ReframeError(
+                f"[reframe] {name} chevauche la bande « Partie N » (y {part[1]}-{part[3]}) : "
+                f"({box[0]},{box[1]})-({box[2]},{box[3]})"
             )
     if _rects_overlap(badge, subtitles):
         raise ReframeError(

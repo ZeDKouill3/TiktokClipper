@@ -1995,6 +1995,53 @@ def test_badge_and_subtitle_dests_overlapping_is_an_error(tmp_path, video_dir):
         )
 
 
+@pytest.mark.parametrize(
+    "name,override",
+    [
+        # bande « Partie N » : y 1464-1520 (safe_bottom 1520, part_height 56)
+        ("split_subtitle_dest", {"x": 150, "y": 1370, "w": 780, "h": 150}),  # bug 12/10 (presets/twitch-gaming)
+        ("badge_dest", {"x": 330, "y": 1400, "w": 420, "h": 100}),
+    ],
+)
+def test_split_dest_overlapping_part_band_is_an_error(tmp_path, video_dir, name, override):
+    from clipper.reframe import ReframeError
+
+    write_keyframes(video_dir, pattern(20, 20))
+    with pytest.raises(ReframeError, match=f"{name}.*Partie N"):
+        run_stream(tmp_path, stream_variant="split", **{name: override})
+
+
+def test_split_subtitle_just_above_part_band_is_accepted(tmp_path, video_dir):
+    # bord bas exactement sur le haut de la bande (1464) : pas de chevauchement
+    write_keyframes(video_dir, pattern(20, 20))
+    run_stream(tmp_path, stream_variant="split", split_subtitle_dest={"x": 150, "y": 1314, "w": 780, "h": 150})
+
+
+def test_defaults_and_split_defaults_pass_the_geometry_check(tmp_path):
+    from clipper.reframe import CONFIG_DEFAULTS, _settings
+
+    _settings(make_config(tmp_path))
+    _settings(make_config(tmp_path, stream_variant="split"))
+    assert CONFIG_DEFAULTS["split_subtitle_dest"]["y"] + CONFIG_DEFAULTS["split_subtitle_dest"]["h"] <= 1464
+
+
+PRESETS_DIR = Path(__file__).resolve().parents[1] / "presets"
+
+
+@pytest.mark.skipif(not PRESETS_DIR.is_dir(), reason="presets/ non versionne (gitignore) : absent de ce worktree")
+def test_every_shipped_preset_still_loads_with_split_geometry(tmp_path):
+    from clipper.channel import load_channel
+    from clipper.reframe import _settings
+
+    names = sorted(p.stem for p in PRESETS_DIR.glob("*.toml"))
+    assert names
+    base = tmp_path / "base.toml"
+    base.write_text("", encoding="utf-8")
+    for name in names:
+        config, _ = load_channel(name, presets_dir=PRESETS_DIR, base=base)
+        _settings(config)
+
+
 def test_split_layout_crops_webcam_and_gameplay_without_deformation(tmp_path, video_dir):
     # STREAM_PANEL (aspect 1080/768) rogne au ratio par defaut du split
     # (1040/640) : jamais etire (aucune deformation, ratio dest respecte).
