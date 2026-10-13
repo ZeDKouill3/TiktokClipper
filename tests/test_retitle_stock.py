@@ -290,3 +290,100 @@ def test_render_command_forces_reframe_not_captions():
     call = retitle_stock.api_call("abc123", base_url="http://127.0.0.1:8000")
     assert call["url"] == "http://127.0.0.1:8000/api/videos/abc123/retry"
     assert call["json"] == {"from_step": "reframe"}
+
+
+# --------------------------------------------------------------------------
+# TASK-ee48b6241ea4 : --max-chars ne retitre que les titres plus longs que N
+# --------------------------------------------------------------------------
+
+
+def make_sidecars(tmp_path, *, style="citation", extra=None):
+    out = tmp_path / "output" / VIDEO_ID
+    out.mkdir(parents=True)
+    for clip in OLD_CLIPS:
+        data = {"video_id": VIDEO_ID, "clip_id": clip["id"], "screen_title": clip["screen_title"],
+                "screen_title_style": style, "ready": True, **((extra or {}).get(clip["id"]) or {})}
+        (out / f"{clip['id']}.json").write_text(json.dumps(data), encoding="utf-8")
+    return tmp_path / "output"
+
+
+def run_max_chars(ws, tmp_path, responses, *, max_chars=25, dry_run=False, output_dir=None):
+    fake = FakeBackend(responses)
+    with llm.use_backend(fake):
+        report = retitle_stock.retitle_video(
+            VIDEO_ID, workspace=ws, config=config(tmp_path), backup_root=tmp_path / "backup", dry_run=dry_run,
+            max_chars=max_chars, output_dir=output_dir)
+    return fake, report
+
+
+def test_max_chars_only_retitles_clips_with_a_longer_title(ws, tmp_path):
+    make_video(ws)
+    out = make_sidecars(tmp_path)  # titres de 24 et 26 caracteres
+
+    fake, report = run_max_chars(ws, tmp_path, [answer("Titre court"), answer("Autre court")], output_dir=out)
+
+    new = read_clips(ws)
+    assert new[0]["screen_title"] == OLD_CLIPS[0]["screen_title"]  # 24 <= 25 : intact
+    assert new[1]["screen_title"] == "Autre court"
+    assert [c["id"] for c in report["clips"]] == ["01"]
+    for old_clip, new_clip in zip(OLD_CLIPS, new):
+        assert {k: v for k, v in new_clip.items() if k != "screen_title"} == \
+               {k: v for k, v in old_clip.items() if k != "screen_title"}
+
+
+def test_max_chars_keeps_the_clip_style_and_states_the_limit_to_the_generation(ws, tmp_path):
+    make_video(ws)
+    out = make_sidecars(tmp_path, style="citation")  # le preset de config() dit « promesse »
+
+    fake, _ = run_max_chars(ws, tmp_path, [answer("Titre court"), answer("Autre court")], output_dir=out)
+
+    prompt = fake.calls[0].prompt
+    assert "phrase reellement prononcee" in prompt  # style citation du clip, pas celui du preset
+    assert "25 caracteres" in prompt
+
+
+def test_max_chars_uses_pipeline_title_style_first(ws, tmp_path):
+    d = make_video(ws)
+    state = json.loads((d / "pipeline.json").read_text(encoding="utf-8"))
+    (d / "pipeline.json").write_text(json.dumps({**state, "title_style": "promesse"}), encoding="utf-8")
+    out = make_sidecars(tmp_path, style="citation")
+
+    fake, _ = run_max_chars(ws, tmp_path, [answer("Titre court"), answer("Autre court")], output_dir=out)
+
+    assert "phrase reellement prononcee" not in fake.calls[0].prompt
+
+
+def test_max_chars_never_touches_a_published_clip(ws, tmp_path):
+    d = make_video(ws)
+    before = (d / "captions.json").read_bytes()
+    out = make_sidecars(tmp_path, extra={"01": {"tiktok_post": {"id": "123"}}})
+
+    fake, report = run_max_chars(ws, tmp_path, [], output_dir=out)
+
+    assert fake.calls == []
+    assert report["clips"] == [] and report["patched"] is False
+    assert (d / "captions.json").read_bytes() == before
+
+
+def test_max_chars_generated_title_over_the_limit_fails_and_leaves_the_video_untouched(ws, tmp_path):
+    d = make_video(ws)
+    before = (d / "captions.json").read_bytes()
+    out = make_sidecars(tmp_path)
+
+    with pytest.raises(retitle_stock.RetitleError, match=VIDEO_ID):
+        run_max_chars(ws, tmp_path, [answer("Un titre bien trop long pour le plafond")] * 4, output_dir=out)
+    assert (d / "captions.json").read_bytes() == before
+
+
+def test_max_chars_needs_the_output_dir_and_a_positive_limit(ws, tmp_path):
+    make_video(ws)
+    with pytest.raises(retitle_stock.RetitleError, match="output"):
+        run_max_chars(ws, tmp_path, [], output_dir=None)
+    out = make_sidecars(tmp_path)
+    with pytest.raises(retitle_stock.RetitleError, match="max-chars"):
+        run_max_chars(ws, tmp_path, [], max_chars=0, output_dir=out)
+
+
+def test_cli_max_chars_option_is_parsed():
+    assert retitle_stock.parse_args(["--max-chars", "35"]).max_chars == 35
+    assert retitle_stock.parse_args([]).max_chars is None

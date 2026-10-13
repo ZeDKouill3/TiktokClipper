@@ -1817,3 +1817,171 @@ def test_promesse_emoji_is_a_known_style_but_citation_and_promesse_keep_refusing
         fake = FakeBackend([answer(screen_title=EMOJI_TITLE)] * 2)
         with llm.use_backend(fake), pytest.raises(llm.SchemaError, match="aucun emoji"):
             run_captions(VIDEO_ID, workspace, config=make_config(tmp_path, screen_title_style=style))
+
+
+# --------------------------------------------------------------------------
+# TASK-ee48b6241ea4 : jeu de la categorie Twitch, mauvais jeu refuse,
+# plafond de longueur du titre d'ecran
+# --------------------------------------------------------------------------
+
+CHAPTERS = [
+    {"title": "AION 2", "start_time": 0, "end_time": 100},
+    {"title": "Girls' Frontline 2: Exilium", "start_time": 100, "end_time": 200},
+]
+
+
+def _game_meta(workspace, chapters=CHAPTERS, title="Chill & Grind Templar 1900+"):
+    _write_meta_full(workspace, title=title, channel="Youby4", chapters=chapters)
+
+
+def _one_clip(workspace, start=0.0, end=3.9):
+    write_moments(workspace, moment(0))
+    write_parts(workspace, parts_record(0, "single", 1, [part(1, start, end)]))
+
+
+def test_prompt_carries_the_twitch_category_of_the_chapter_containing_the_clip_start(workspace, tmp_path):
+    _game_meta(workspace)
+    _one_clip(workspace, 0.0, 3.9)
+
+    fake, _ = run(workspace, make_config(tmp_path), [answer(caption="Sur AION 2, Youby4 tente un craft.")])
+
+    prompt = fake.calls[0].prompt
+    assert "Categorie Twitch du clip : AION 2" in prompt
+    assert "Girls' Frontline" not in prompt
+    assert "Sur <autre jeu>" in prompt  # la regle interdit « Sur <autre jeu> »
+
+
+def test_prompt_uses_the_chapter_of_the_part_start_not_the_first_chapter(workspace, tmp_path):
+    _game_meta(workspace)
+    _one_clip(workspace, 120.0, 130.0)
+
+    fake, _ = run(workspace, make_config(tmp_path),
+                  [answer(caption="Sur Girls' Frontline 2, Youby4 change de jeu.")])
+
+    assert "Categorie Twitch du clip : Girls' Frontline 2: Exilium" in fake.calls[0].prompt
+
+
+def test_without_chapters_the_prompt_has_no_category_line(workspace, tmp_path):
+    _write_meta_full(workspace, title="Minecraft hardcore", channel="Leila")
+    prompt = _single_prompt(workspace, tmp_path)
+
+    assert "Categorie Twitch" not in prompt
+
+
+def test_caption_on_the_wrong_game_is_refused_and_sent_back_to_the_llm(workspace, tmp_path):
+    _game_meta(workspace)
+    _one_clip(workspace)
+
+    fake, _ = run(workspace, make_config(tmp_path), [
+        answer(caption="Sur Dofus Touch, Youby4 enchaine les defis."),
+        answer(caption="Sur AION 2, Youby4 enchaine les defis."),
+    ])
+
+    assert len(fake.calls) == 2
+    assert "Dofus Touch" in fake.calls[1].prompt  # l'erreur renvoyee au modele nomme le jeu refuse
+
+
+def test_wrong_game_that_stays_wrong_raises_schema_error_and_writes_nothing(workspace, tmp_path):
+    _game_meta(workspace)
+    _one_clip(workspace)
+
+    with pytest.raises(llm.SchemaError, match="Dofus Touch"):
+        run(workspace, make_config(tmp_path, title_repair_attempts=0),
+            [answer(caption="Sur Dofus Touch, Youby4 enchaine les defis.")])
+    assert not (workspace / VIDEO_ID / "captions.json").exists()
+
+
+def test_wrong_game_with_vu_par_form_is_refused(workspace, tmp_path):
+    _game_meta(workspace)
+    _one_clip(workspace)
+
+    with pytest.raises(llm.SchemaError, match="World of Warcraft"):
+        run(workspace, make_config(tmp_path, title_repair_attempts=0),
+            [answer(caption="World of Warcraft vu par LaTaverneDePatatus, un moment drole.")])
+
+
+@pytest.mark.parametrize("caption", [
+    "Sur AION 2, Youby4 enchaine les defis.",
+    "Sur Aion II, Youby4 enchaine les defis.",       # chiffres romains/arabes
+    "Sur aion 2 : Youby4 enchaine les defis.",       # casse
+    "Sur la chaîne de Youby4, un craft qui passe.",  # pas un jeu
+    "Sur le stream de Youby4, un craft qui passe.",
+    "Youby4 parle de Dofus Touch pendant son craft.",  # pas une forme « Sur X, »
+    "Youby4 enchaine les defis sur AION 2.",
+])
+def test_captions_naming_the_chapter_game_or_no_game_are_accepted(workspace, tmp_path, caption):
+    _game_meta(workspace)
+    _one_clip(workspace)
+
+    run(workspace, make_config(tmp_path, title_repair_attempts=0), [answer(caption=caption)])
+
+    assert by_id(read_captions(workspace), "00")["caption"] == caption
+
+
+def test_a_game_named_in_the_vod_title_is_accepted_even_if_not_the_category(workspace, tmp_path):
+    _game_meta(workspace, title="Dofus Touch puis AION 2")
+    _one_clip(workspace)
+
+    run(workspace, make_config(tmp_path, title_repair_attempts=0),
+        [answer(caption="Sur Dofus Touch, Youby4 enchaine les defis.")])
+
+
+def test_without_chapters_no_game_check_is_applied(workspace, tmp_path):
+    _write_meta_full(workspace, title="Une video", channel="Leila")
+    _one_clip(workspace)
+
+    run(workspace, make_config(tmp_path, title_repair_attempts=0),
+        [answer(caption="Sur Dofus Touch, Leila enchaine les defis.")])
+
+
+def test_non_game_category_refuses_sur_game_captions(workspace, tmp_path):
+    _game_meta(workspace, chapters=[{"title": "Just Chatting", "start_time": 0, "end_time": 100}])
+    _one_clip(workspace)
+
+    with pytest.raises(llm.SchemaError, match="Just Chatting"):
+        run(workspace, make_config(tmp_path, title_repair_attempts=0),
+            [answer(caption="Sur AION 2, Youby4 discute avec le chat.")])
+
+
+def test_screen_title_max_chars_defaults_to_zero_no_limit():
+    from clipper.captions import CONFIG_DEFAULTS
+
+    assert CONFIG_DEFAULTS["screen_title_max_chars"] == 0
+
+
+def test_screen_title_longer_than_max_chars_is_refused(workspace, tmp_path):
+    _one_clip(workspace)
+
+    with pytest.raises(llm.SchemaError, match="20"):
+        run(workspace, make_config(tmp_path, screen_title_max_chars=20, title_repair_attempts=0),
+            [answer(screen_title="Un titre vraiment trop long ici")])
+
+
+def test_screen_title_within_max_chars_is_kept_and_prompt_states_the_limit(workspace, tmp_path):
+    _one_clip(workspace)
+
+    fake, _ = run(workspace, make_config(tmp_path, screen_title_max_chars=35),
+                  [answer(screen_title="Un titre court")])
+
+    assert "35 caracteres" in fake.calls[0].prompt
+    assert by_id(read_captions(workspace), "00")["screen_title"] == "Un titre court"
+
+
+def test_screen_title_without_limit_keeps_long_titles_and_prompt_has_no_limit(workspace, tmp_path):
+    _one_clip(workspace)
+
+    fake, _ = run(workspace, make_config(tmp_path), [answer(screen_title="Un deux trois quatre cinq")])
+
+    assert "caracteres" not in fake.calls[0].prompt.split("screen_title :")[1].split("\n")[0]
+
+
+@pytest.mark.parametrize("bad", [-1, "35", 3.5, True])
+def test_screen_title_max_chars_invalid_is_a_named_error_before_any_llm_call(workspace, tmp_path, bad):
+    from clipper.captions import CaptionsError
+
+    _one_clip(workspace)
+    fake = FakeBackend([])
+    with llm.use_backend(fake), pytest.raises(CaptionsError, match="screen_title_max_chars"):
+        from clipper.captions import run as run_captions
+        run_captions(VIDEO_ID, workspace, config=make_config(tmp_path, screen_title_max_chars=bad))
+    assert fake.calls == []

@@ -445,6 +445,13 @@ que sur un compte dont le style du jour est le sien.
   écrit dans son `pipeline.json` (`title_style`) et gardé à la relance.
 - `python tools/retitle_stock.py --video <id> --style promesse_emoji` retitre une vidéo du stock dans
   un style donné (défaut `promesse`) ; relancer ensuite le rendu depuis `reframe`.
+- `python tools/retitle_stock.py --max-chars 35` ne retitre que les clips non publiés dont le titre d'écran dépasse 35 caractères, dans le style de chaque clip (`title_style` de `pipeline.json`, sinon `screen_title_style` du sidecar), avec `screen_title_max_chars` appliqué à la génération.
+
+### Légende : jeu de la catégorie Twitch
+
+Pour une VOD Twitch (`meta.json` avec `chapters`), l'étape captions passe au modèle la catégorie du chapitre qui contient le début du clip, et le jeu en tête de la légende est celui-ci. Une légende « Sur X, ... » (ou « X vu par ... ») dont X n'est ni la catégorie ni dans le titre de la VOD est renvoyée au modèle, puis échoue (aucune légende de secours) ; « Sur la chaîne de ... » et « <Streamer> parle de <jeu> » restent permis. Sans chapitres (YouTube), aucun contrôle.
+
+`python tools/recaption_stock.py --dry-run` liste les clips prêts jamais publiés (ni `tiktok_post`, ni `youtube_post`, ni légende retouchée à la main) dont la légende cite le mauvais jeu ; sans `--dry-run`, il régénère seulement `caption` et `hashtags` (captions.json et sidecar, sauvegarde horodatée, `--report` pour un rapport markdown). Aucun rendu à relancer : la légende n'est pas dessinée dans la vidéo.
 
 ### Surveillance des VOD
 
@@ -800,6 +807,7 @@ est celle de l'étape moments (`rubric.path` de `moments.json`) ; l'ancienne cl�
 explicite, un `screen_title` avec un emoji est refusé — activer l'option ne
 le rend pas obligatoire, elle permet seulement d'en accepter un au plus),
 `screen_title_style` = `"citation"` (SPEC-08c2 : `"citation"` = phrase prononcée dans le clip ou fait précis ; `"promesse"` = le titre annonce l'enjeu ou la chute du clip sans la révéler, ex. « Le craft T0 va-t-il passer ? », toujours sobre et vrai ; `"promesse_emoji"` = même promesse, mais le titre se termine toujours par « ... », un espace et UN seul emoji d'émotion (🤔 et « ?... » refusés, emoji autorisé sans `screen_title_allow_emoji`, une réponse mal formée est renvoyée au modèle puis échoue, jamais corrigée en silence) ; une autre valeur est une erreur explicite),
+`screen_title_max_chars` = 0 (0 = pas de limite ; N > 0 : un titre d'écran de plus de N caractères est renvoyé au modèle puis échoue, et la limite figure dans la consigne ; l'étude des vues du 13/10 mesure une médiane de 80 vues pour les titres de plus de 35 caractères contre 251, corrélation et non causalité),
 `screen_title_forbidden_words` (liste de mots d'emphase clickbait refusés
 dans `screen_title`, insensible à la casse et aux accents, mot entier ;
 réglable par preset de style), `parallel` = 4 (moments traités en

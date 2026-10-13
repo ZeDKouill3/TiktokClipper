@@ -12,6 +12,11 @@ commande, il ne lance rien.
     python tools/retitle_stock.py --workspace E:/.../workspace --video v2895815199
     python tools/retitle_stock.py --workspace E:/.../workspace --video v2895815199 --style promesse_emoji
 
+Option ``--max-chars N`` (etude des vues 13/10 : les titres de plus de 35 caracteres font moins de vues) : ne
+retitre que les clips dont le titre d'ecran depasse N caracteres, dans le style du clip (``pipeline.json``
+``title_style``, sinon ``screen_title_style`` du sidecar), avec ``[captions] screen_title_max_chars = N`` a la
+generation ; jamais un clip publie (``tiktok_post``/``youtube_post`` dans son sidecar sous ``--output-dir``).
+
 Le style choisi est aussi ecrit dans ``pipeline.json`` (``title_style``, seule cle touchee) pour que le rendu
 l'enregistre dans le sidecar du clip : la repartition ne place un clip que sur le compte de son style.
 """
@@ -97,9 +102,10 @@ def select_videos(workspace: str | Path, *, channel: str = DEFAULT_CHANNEL, game
     return found
 
 
-def merge_screen_titles(old_clips: list[dict[str, Any]], new_clips: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Copie de ``old_clips`` où seul ``screen_title`` vient de ``new_clips`` (même ``id``). Un id absent d'un
-    côté ou l'autre, ou un titre vide : RetitleError."""
+def merge_screen_titles(old_clips: list[dict[str, Any]], new_clips: list[dict[str, Any]],
+                        only_ids: set[str] | None = None) -> list[dict[str, Any]]:
+    """Copie de ``old_clips`` où seul ``screen_title`` vient de ``new_clips`` (même ``id``), pour les seuls
+    ``only_ids`` si donné. Un id absent d'un côté ou l'autre, ou un titre vide : RetitleError."""
     new_by_id = {c["id"]: c for c in new_clips}
     old_ids = [c["id"] for c in old_clips]
     missing = [i for i in old_ids if i not in new_by_id]
@@ -111,6 +117,9 @@ def merge_screen_titles(old_clips: list[dict[str, Any]], new_clips: list[dict[st
         )
     patched = []
     for old in old_clips:
+        if only_ids is not None and old["id"] not in only_ids:
+            patched.append(dict(old))
+            continue
         title = new_by_id[old["id"]].get("screen_title")
         if not isinstance(title, str) or not title.strip():
             raise RetitleError(f"screen_title regenere vide pour le clip {old['id']}")
@@ -133,10 +142,14 @@ def _check_style(style: str) -> None:
         raise RetitleError(f"style de titre inconnu {style!r} (valeurs permises : {', '.join(captions.SCREEN_TITLE_STYLES)})")
 
 
-def _generate(video_id: str, workspace: Path, config: Config, style: str) -> list[dict[str, Any]]:
+def _generate(video_id: str, workspace: Path, config: Config, style: str,
+              max_chars: int | None = None) -> list[dict[str, Any]]:
     _check_style(style)
     # le style demande l'emporte sur celui du preset, le reste de [captions] est intact
-    sections = {**config._sections, "captions": {**config._sections.get("captions", {}), "screen_title_style": style}}
+    overrides: dict[str, Any] = {"screen_title_style": style}
+    if max_chars is not None:
+        overrides["screen_title_max_chars"] = max_chars
+    sections = {**config._sections, "captions": {**config._sections.get("captions", {}), **overrides}}
     config = dataclass_replace(config, _sections=sections)
     with tempfile.TemporaryDirectory(prefix="retitle-") as tmp:
         tmp_ws = Path(tmp)
@@ -150,28 +163,80 @@ def _generate(video_id: str, workspace: Path, config: Config, style: str) -> lis
         return _read_json(out)["clips"]
 
 
+def _read_sidecar(output_dir: Path, video_id: str, clip_id: str) -> dict[str, Any] | None:
+    path = output_dir / video_id / f"{clip_id}.json"
+    if not path.exists():
+        return None
+    try:
+        data = _read_json(path)
+    except ValueError as exc:
+        raise RetitleError(f"sidecar illisible : {path} ({exc})") from exc
+    if not isinstance(data, dict):
+        raise RetitleError(f"sidecar illisible : {path} (objet JSON attendu)")
+    return data
+
+
+def long_title_clips(video_id: str, old_clips: list[dict[str, Any]], output_dir: Path, max_chars: int,
+                     state: dict[str, Any]) -> tuple[list[str], str]:
+    """Ids des clips NON publiés dont le titre d'écran dépasse ``max_chars``, et le style de la vidéo
+    (``pipeline.json`` ``title_style``, sinon style unique des sidecars de ces clips, sinon DEFAULT_STYLE)."""
+    ids: list[str] = []
+    styles: set[str] = set()
+    for clip in old_clips:
+        if len(str(clip.get("screen_title") or "")) <= max_chars:
+            continue
+        sidecar = _read_sidecar(output_dir, video_id, clip["id"]) or {}
+        if sidecar.get("tiktok_post") or sidecar.get("youtube_post"):
+            continue  # jamais un clip publié (learning.py rattache le post au clip)
+        ids.append(clip["id"])
+        if sidecar.get("screen_title_style"):
+            styles.add(str(sidecar["screen_title_style"]))
+    style = state.get("title_style")
+    if not style:
+        if len(styles) > 1:
+            raise RetitleError(f"styles de titre differents selon les clips ({', '.join(sorted(styles))}) "
+                               "et aucun title_style dans pipeline.json")
+        style = next(iter(styles), DEFAULT_STYLE)
+    return ids, style
+
+
 def retitle_video(video_id: str, *, workspace: str | Path, config: Config, backup_root: str | Path,
-                  dry_run: bool = False, style: str = DEFAULT_STYLE) -> dict[str, Any]:
-    """Retitre une vidéo dans le style ``style``. ``dry_run`` ne laisse rien sur le disque. Tout échec :
-    RetitleError qui nomme la vidéo, captions.json réel intact."""
+                  dry_run: bool = False, style: str = DEFAULT_STYLE, max_chars: int | None = None,
+                  output_dir: str | Path | None = None) -> dict[str, Any]:
+    """Retitre une vidéo dans le style ``style``. ``dry_run`` ne laisse rien sur le disque. Avec ``max_chars``,
+    ne retitre que les clips non publiés dont le titre dépasse N, dans leur style (``style`` est ignoré).
+    Tout échec : RetitleError qui nomme la vidéo, captions.json réel intact."""
     workspace = Path(workspace)
     cap_path = workspace / video_id / "captions.json"
     state_path = workspace / video_id / "pipeline.json"
     try:
-        _check_style(style)
+        only_ids: set[str] | None = None
+        if max_chars is not None:
+            if max_chars < 1:
+                raise RetitleError(f"--max-chars doit etre un entier >= 1, recu {max_chars!r}")
+            if output_dir is None:
+                raise RetitleError("--max-chars a besoin du dossier output (sidecars) pour exclure les clips publies")
+        else:
+            _check_style(style)
         if not cap_path.exists():
             raise RetitleError("captions.json absent")
         old_data = _read_json(cap_path)
         old_clips = old_data["clips"]
-        new_clips = _generate(video_id, workspace, config, style)
-        patched = merge_screen_titles(old_clips, new_clips)
-        assert_only_screen_title_changed(old_clips, patched)
+        if max_chars is not None:
+            ids, style = long_title_clips(video_id, old_clips, Path(output_dir), max_chars, _read_json(state_path))
+            only_ids = set(ids)
+            _check_style(style)
         report: dict[str, Any] = {
             "video_id": video_id, "style": style, "patched": False, "backup": None,
-            "render_command": render_command(video_id),
-            "clips": [{"id": o["id"], "old": o["screen_title"], "new": p["screen_title"]}
-                      for o, p in zip(old_clips, patched)],
+            "render_command": render_command(video_id), "clips": [],
         }
+        if only_ids is not None and not only_ids:
+            return report  # rien de plus long que N (ou tout est publie) : aucun appel LLM
+        new_clips = _generate(video_id, workspace, config, style, max_chars)
+        patched = merge_screen_titles(old_clips, new_clips, only_ids)
+        assert_only_screen_title_changed(old_clips, patched)
+        report["clips"] = [{"id": o["id"], "old": o["screen_title"], "new": p["screen_title"]}
+                           for o, p in zip(old_clips, patched) if only_ids is None or o["id"] in only_ids]
         if dry_run:
             return report
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -225,6 +290,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--api-base", default=DEFAULT_BASE_URL)
     ap.add_argument("--style", choices=captions.SCREEN_TITLE_STYLES, default=DEFAULT_STYLE,
                     help="style de titre d'ecran du retitrage (defaut : promesse)")
+    ap.add_argument("--max-chars", type=int, default=None, metavar="N",
+                    help="ne retitre que les clips non publies dont le titre depasse N caracteres, dans leur style")
+    ap.add_argument("--output-dir", help="dossier output des sidecars (defaut : [output_dir] de config.toml)")
     return ap.parse_args(argv)
 
 
@@ -238,6 +306,7 @@ def main(argv: list[str] | None = None) -> int:
 
     base = load_config(args.config)
     workspace = Path(args.workspace) if args.workspace else Path(base.workspace_dir)
+    output_dir = Path(args.output_dir) if args.output_dir else Path(base.output_dir)
     watch = base.section("watch")
     config, _ = channel_mod.load_channel(args.channel, presets_dir=watch["presets_dir"], base=args.config)
 
@@ -247,7 +316,7 @@ def main(argv: list[str] | None = None) -> int:
     for vid in videos:
         try:
             r = retitle_video(vid, workspace=workspace, config=config, backup_root=args.backup_dir, dry_run=args.dry_run,
-                             style=args.style)
+                             style=args.style, max_chars=args.max_chars, output_dir=output_dir)
         except RetitleError as exc:
             errors[vid] = str(exc)
             print(f"ERREUR {exc}", file=sys.stderr)

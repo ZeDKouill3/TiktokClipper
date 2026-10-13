@@ -5,7 +5,7 @@ slug: l-gendes-jeu-de-la-cat-gorie-twitch-refus-du-mau
 title: "Légendes : jeu de la catégorie Twitch, refus du mauvais jeu, plafond de longueur du titre d'écran, recaption du stock"
 created: 2026-10-13T09:02:54Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/captions.py
   - tests/test_captions.py
@@ -23,8 +23,15 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/983d4ec6742b@11a3205
+    tree: scope/122d4a1d6e16
+    criteria: d8eb2f2495b7
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 Source : étude research/etude-vues-1013/RAPPORT.md (Q5, Q3) — dans le dépôt principal E:/ClaudeRandom/TiktokParseUpload (research/ est ignoré par git, lire en chemin absolu ; la liste des 36 clips au mauvais jeu est dans results_q5b.md, la méthode dans scripts/q5_mauvais_jeu.py).

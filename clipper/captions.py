@@ -94,6 +94,10 @@ CONFIG_DEFAULTS: dict[str, object] = {
     "hook_words_target": 6,
     "screen_title_words_max": 6,
     "screen_title_words_target": 5,
+    # Etude des vues 13/10 : les titres de plus de 35 caracteres font mediane 80
+    # vues contre 251 (correlation). 0 = pas de limite ; sinon un titre d'ecran
+    # plus long est refuse (renvoye au modele) et la limite est dite au prompt.
+    "screen_title_max_chars": 0,
     # TASK-3268 : essais de reparation de l'appel qui produit titre d'ecran et
     # legende, propres a captions (un titre trop long ne doit pas arreter la
     # video apres une seule reparation). Les autres usages gardent
@@ -358,6 +362,18 @@ def _keywords_rule(channel: str) -> str:
     )
 
 
+def _game_rule(category: str) -> str:
+    """Le jeu en tete de la legende est la categorie Twitch du chapitre du clip
+    (etude des vues 13/10 : des legendes citaient un jeu devine, jamais le bon)."""
+    return (
+        f"caption, jeu : la categorie Twitch du clip est « {category} » (voir Contexte). Si c'est un jeu, "
+        "le jeu en tete de la legende est CELUI-CI, ecrit avec son nom officiel ; jamais un autre jeu devine "
+        "d'apres le titre de la video. Si le streamer parle d'un autre jeu, n'ecris jamais « Sur <autre jeu> » "
+        "mais une tournure comme « <Streamer> parle de <autre jeu> ». Si la categorie n'est pas un jeu "
+        "(Just Chatting, IRL...), n'ecris pas « Sur <jeu> »."
+    )
+
+
 def _prompt(
     language: str,
     video_title: str,
@@ -370,6 +386,7 @@ def _prompt(
     screen_title: str | None = None,
     title: str | None = None,
     channel: str = "",
+    category: str | None = None,
 ) -> str:
     context = ""
     if parts_total > 1:
@@ -395,6 +412,8 @@ def _prompt(
     keywords_first = bool(settings["caption_keywords_first"])
     if keywords_first:
         rules.append(_keywords_rule(channel))
+        if category:
+            rules.append(_game_rule(category))
     rules.append(
         "hashtags : chacun commence par #, jamais deux fois le meme, pertinents pour ce clip precis "
         f"(pas de generique inutile), {int(settings['hashtags_max'])} au plus."
@@ -423,6 +442,12 @@ def _prompt(
             else "aucun emoji"
         )
         forbidden_words = ", ".join(str(w) for w in settings["screen_title_forbidden_words"])
+        max_chars = screen_title_max_chars(settings)
+        max_chars_rule = (
+            f" Longueur : {max_chars} caracteres au plus (espaces et emoji compris), limite stricte."
+            if max_chars
+            else ""
+        )
         content_rule = (
             _PROMESSE_PROMPT_RULE + (" ; " + _PROMESSE_EMOJI_RULE if style == "promesse_emoji" else "")
             if style in _PROMESSE_STYLES
@@ -435,6 +460,7 @@ def _prompt(
             f"({int(settings['screen_title_words_max'])} au plus, limite stricte), affiche dans un encadre blanc au-dessus de la video, pendant tout le clip ; ton "
             f"sobre, {content_rule} ; "
             f"{emoji_rule} ; aucun superlatif ni mot d'emphase clickbait, notamment : {forbidden_words}."
+            f"{max_chars_rule}"
         )
     rules.append(
         "Comptage des mots pour hook_text et screen_title : tout groupe separe par des espaces "
@@ -460,6 +486,8 @@ def _prompt(
     channel_line = (
         f"Chaine / streamer de la source : {channel or 'inconnu'}\n" if keywords_first else ""
     )
+    if keywords_first and category:
+        channel_line += f"Categorie Twitch du clip : {category}\n"
     return (
         "Tu ecris les metadonnees d'un clip vertical TikTok tire d'une video plus longue.\n\n"
         "## Regles\n"
@@ -662,6 +690,77 @@ def _validate_moderation_risk_terms(answer: dict[str, Any], risk_terms: list[str
                 )
 
 
+_ROMAN = {"ii": "2", "iii": "3", "iv": "4", "vi": "6", "vii": "7", "viii": "8", "ix": "9"}
+# Categories Twitch qui ne sont pas un jeu : « Sur <ce nom> » n'a pas de sens.
+_NON_GAME_CATEGORIES = frozenset({
+    "just chatting", "irl", "talk shows & podcasts", "music", "art", "special events", "sports",
+})
+# « Sur la chaine de ... », « Sur le stream de ... » : pas un nom de jeu.
+_NOT_A_GAME_LEAD = re.compile(r"^(la cha[iî]ne|le stream|le live|le canal|le direct)\b", re.IGNORECASE)
+_SUR_RE = re.compile(r"^\s*Sur\s+(?P<game>[^,:;.\n]+?)\s*[,:;]")
+_VU_PAR_RE = re.compile(r"^\s*(?P<game>[^,:;.\n]+?)\s+vu par\b", re.IGNORECASE)
+
+
+def _game_tokens(text: str) -> list[str]:
+    """Nom de jeu normalise : casse, accents, ponctuation ; ``II`` = ``2``."""
+    return [_ROMAN.get(w, w) for w in _normalized_words(text)]
+
+
+def _contains_seq(haystack: list[str], needle: list[str]) -> bool:
+    n = len(needle)
+    return n > 0 and any(haystack[i:i + n] == needle for i in range(len(haystack) - n + 1))
+
+
+def _cited_game(caption: str) -> str | None:
+    """Jeu cite en tete par « Sur X, ... » ou « X vu par ... » ; None si la
+    legende n'a pas cette forme ou cite la chaine/le stream."""
+    match = _SUR_RE.match(caption) or _VU_PAR_RE.match(caption)
+    if match is None:
+        return None
+    game = match.group("game").strip()
+    if not game or _NOT_A_GAME_LEAD.match(game):
+        return None
+    return game
+
+
+def caption_wrong_game(caption: str, category: str | None, video_title: str) -> str | None:
+    """Jeu cite par « Sur X, ... » (ou « X vu par ») qui n'est ni la categorie Twitch du chapitre
+    du clip ni dans le titre de la VOD ; None si la legende est conforme. Sans categorie (YouTube,
+    pas de chapitres) : aucun controle."""
+    if not category:
+        return None
+    game = _cited_game(caption)
+    if game is None:
+        return None
+    cited = _game_tokens(game)
+    if _contains_seq(_game_tokens(video_title), cited):
+        return None
+    if category.strip().lower() not in _NON_GAME_CATEGORIES:
+        cat = _game_tokens(category)
+        if _contains_seq(cat, cited) or _contains_seq(cited, cat):
+            return None
+    return game
+
+
+def _validate_caption_game(caption: str, category: str | None, video_title: str) -> None:
+    """Etude des vues 13/10 : legende sur le mauvais jeu, renvoyee au modele (ADR-ad2e)."""
+    game = caption_wrong_game(caption, category, video_title)
+    if game is not None:
+        raise llm.SchemaError(
+            f"la legende cite le jeu {game!r} mais la categorie Twitch du clip est {category!r} et le titre "
+            f"de la video {video_title!r} ne le contient pas : ecris le jeu de la categorie (nom officiel) ou, "
+            f"si le streamer parle d'un autre jeu, « <Streamer> parle de {game} » ; legende : {caption!r}"
+        )
+
+
+def _validate_screen_title_length(screen_title: str, max_chars: int) -> None:
+    if max_chars and len(screen_title) > max_chars:
+        raise llm.SchemaError(
+            f"titre d'ecran de {len(screen_title)} caracteres, {max_chars} au plus "
+            f"([captions] screen_title_max_chars) : raccourcis-le : {screen_title!r}"
+        )
+
+
 _PROMESSE_EMOJI_RE = re.compile(r"^(?P<body>.*\S)\.\.\. (?P<emoji>\S+)$", re.DOTALL)
 _FORBIDDEN_FINAL_EMOJI = "🤔"
 
@@ -726,6 +825,9 @@ def _check_answer(
     screen_title_words_target: int | None = None,
     moderation_risk_terms: list[str] | None = None,
     screen_title_style: str = "citation",
+    screen_title_max_chars: int = 0,
+    category: str | None = None,
+    video_title: str = "",
 ):
     """Controle passe a llm.ask : ce qui le refuse est renvoye au modele
     pour correction, comme une reponse hors schema. ``require_screen_title``
@@ -735,10 +837,12 @@ def _check_answer(
     def check(answer: dict[str, Any]) -> None:
         _validate_hashtags(answer["hashtags"])
         _validate_moderation_risk_terms(answer, moderation_risk_terms or [])
+        _validate_caption_game(answer["caption"], category, video_title)
         _validate_hook_text(answer["hook_text"], hook_words_max, hook_words_target)
         _validate_sober_text_emoji(answer["caption"], "caption", caption_allow_emoji)
         _validate_sober_text_emoji(answer["hook_text"], "hook_text", caption_allow_emoji)
         if require_screen_title:
+            _validate_screen_title_length(answer["screen_title"], screen_title_max_chars)
             _validate_screen_title(
                 answer["screen_title"], screen_title_words_max,
                 screen_title_forbidden_words, screen_title_allow_emoji,
@@ -815,6 +919,26 @@ def screen_title_style(settings: dict[str, Any]) -> str:
     return value
 
 
+def screen_title_max_chars(settings: dict[str, Any]) -> int:
+    """Longueur maximale du titre d'ecran (0 = pas de limite) ; < 0, non entier ou booleen : CaptionsError."""
+    value = settings["screen_title_max_chars"]
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise CaptionsError(f"[captions] screen_title_max_chars doit etre un entier >= 0, recu {value!r}")
+    return value
+
+
+def chapter_category(meta: dict[str, Any], start: float) -> str | None:
+    """Categorie Twitch du chapitre de meta.json qui contient ``start`` (secondes) ; None sans chapitres
+    (YouTube) ou hors de tout chapitre."""
+    for chapter in meta.get("chapters") or []:
+        begin, end = chapter.get("start_time"), chapter.get("end_time")
+        if begin is None or end is None:
+            continue
+        if begin <= start < end:
+            return str(chapter.get("title") or "").strip() or None
+    return None
+
+
 def title_repair_attempts(settings: dict[str, Any]) -> int:
     """Nombre de relances LLM d'un titre ; < 0, non entier ou booleen : CaptionsError qui le nomme (ADR-ad2e)."""
     value = settings["title_repair_attempts"]
@@ -843,6 +967,7 @@ def _process_moment(
     config: Any,
     log_path: Path,
     channel: str = "",
+    meta: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Clips d'un moment, ses parties traitees dans l'ordre, sequentiellement
     (la partie 1 fixe title et screen_title, repris par les suivantes)."""
@@ -863,6 +988,7 @@ def _process_moment(
         schema = response_schema(
             schema_settings, include_screen_title=request_screen_title, include_title=request_title
         )
+        category = chapter_category(meta or {}, part["start"])
         check = _check_answer(
             hook_words_max, screen_title_words_max,
             list(settings["screen_title_forbidden_words"]), bool(settings["screen_title_allow_emoji"]),
@@ -873,10 +999,13 @@ def _process_moment(
                 settings, "screen_title_words_target", "screen_title_words_max"),
             moderation_risk_terms=list(settings["moderation_risk_terms"]),
             screen_title_style=globals()["screen_title_style"](settings),
+            screen_title_max_chars=screen_title_max_chars(settings),
+            category=category, video_title=video_title,
         )
         text = _part_text(transcript, part["start"], part["end"])
         prompt = _prompt(language, video_title, source, part, parts_total, text, settings,
-                          screen_title=screen_title, title=title, channel=channel)
+                          screen_title=screen_title, title=title, channel=channel,
+                          category=category)
         answer = llm.ask("captions", prompt, [], schema, config=config, check=check, log_path=log_path,
                          repair_attempts=title_repair_attempts(settings))
         if request_screen_title:
@@ -927,6 +1056,7 @@ def run(
     settings = _settings(config)
     title_repair_attempts(settings)  # refusé ici, avant tout appel LLM
     screen_title_style(settings)  # idem (SPEC-08c2)
+    screen_title_max_chars(settings)  # idem
     workers = parallel_workers(settings)
     language = transcript.get("language") or ""
     video_title = meta.get("title") or ""
@@ -947,7 +1077,7 @@ def run(
         moment, source = pair
         return _process_moment(
             moment, source, transcript, language, video_title, settings,
-            hook_words_max, screen_title_words_max, config, log_path, channel,
+            hook_words_max, screen_title_words_max, config, log_path, channel, meta,
         )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
