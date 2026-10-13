@@ -37,6 +37,7 @@ output_dir = "output"
 #
 # [captions]
 # screen_title_allow_emoji = false   # SPEC-6a86 (defaut) : titre d'ecran sobre, sans emoji
+# screen_title_max_chars = 0       # 0 (defaut) = pas de limite ; N = un titre d'ecran de plus de N caracteres est refuse (etude des vues : > 35 caracteres, mediane 80 vues contre 251, correlation)
 # screen_title_style = "citation"    # SPEC-08c2 : "citation" (defaut) "promesse" (annonce l'enjeu sans reveler la chute) ou "promesse_emoji" (promesse + « ... » + un emoji d'emotion, sans screen_title_allow_emoji)
 #
 # [tiktok]   # releves de statistiques (SPEC-47e2) : seulement quand on se sert de Clipper
