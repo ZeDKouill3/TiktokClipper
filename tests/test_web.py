@@ -12031,6 +12031,19 @@ def test_repartition_validate_replays_excluded_sources_edited_in_config_toml_aft
     assert "excluded_source" in resp.json()["detail"] and resp.json()["created"] == []
 
 
+def test_repartition_compute_reads_the_repartition_table_edited_in_config_toml_after_startup(tmp_path, isolated_cwd):
+    """13/10 : « Recalculer » prenait la config figée au démarrage de serve (max_per_source relevé à la main ignoré)."""
+    day = _rep_day()
+    c = _rep_client(tmp_path)  # l'app démarre sans exclusion
+    (tmp_path / "config.toml").write_text('[repartition]\nexcluded_sources = ["ma_chaine"]\n', encoding="utf-8")
+
+    resp = c.post("/api/repartition/compute", json={"day": day})
+
+    assert resp.status_code == 200, resp.text
+    assert all(not account["lines"] for account in resp.json()["accounts"]), resp.json()["accounts"]
+    assert any(e["reason"] == "excluded_source" for e in _rep_read(tmp_path, day)["excluded"])
+
+
 def test_repartition_validate_sees_an_exclusion_removed_from_config_toml_after_startup(tmp_path, isolated_cwd):
     day = _rep_day()
     _rep_two_accounts(tmp_path, day)

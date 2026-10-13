@@ -3526,7 +3526,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.post("/api/repartition/compute")
     def compute_repartition(body: RepartitionComputeBody | None = None) -> dict[str, Any]:
         day = _rep_day(body.day if body else None)
-        plan = _rep_call(repartition_mod.compute_plan, day, datetime.now(_PARIS), config=config, computed_by="web")
+        plan = _rep_call(repartition_mod.compute_plan, day, datetime.now(_PARIS), config=_rep_config(), computed_by="web")
         return _rep_view(plan, day)
 
     def _rep_new_line(line: RepartitionLineBody, settings: dict[str, Any], world: Any, stats: tuple[Any, Any]) -> dict[str, Any]:
