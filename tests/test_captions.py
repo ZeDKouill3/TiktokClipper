@@ -1985,3 +1985,79 @@ def test_screen_title_max_chars_invalid_is_a_named_error_before_any_llm_call(wor
         from clipper.captions import run as run_captions
         run_captions(VIDEO_ID, workspace, config=make_config(tmp_path, screen_title_max_chars=bad))
     assert fake.calls == []
+
+
+# --------------------------------------------------------------------------
+# TASK-fcb56296766e : screen_title / hook_text dans la langue de la video
+# --------------------------------------------------------------------------
+
+
+def _english_workspace(workspace):
+    (workspace / VIDEO_ID / "transcript.json").write_text(
+        json.dumps(make_transcript("en")), encoding="utf-8")
+    write_moments(workspace, moment(0))
+    write_parts(workspace, parts_record(0, "single", 1, [part(1, 0.0, 3.9)]))
+
+
+@pytest.mark.parametrize("style", ["citation", "promesse", "promesse_emoji"])
+def test_prompt_demands_screen_title_and_hook_text_in_the_video_language(workspace, tmp_path, style):
+    _english_workspace(workspace)
+    suffix = "... \U0001F605" if style == "promesse_emoji" else ""
+
+    fake, _ = run(workspace, make_config(tmp_path, screen_title_style=style),
+                  [answer(screen_title="He tries the boss alone" + suffix)])
+
+    prompt = fake.calls[0].prompt
+    assert "screen_title et hook_text" in prompt
+    assert "dans la langue de la video (en)" in prompt
+    assert "illustrations" in prompt and "transpose" in prompt
+
+
+def test_french_video_prompt_has_no_translation_demand(workspace, tmp_path):
+    write_moments(workspace, moment(0))
+    write_parts(workspace, parts_record(0, "single", 1, [part(1, 0.0, 3.9)]))
+
+    fake, _ = run(workspace, make_config(tmp_path), [answer()])
+
+    assert "transpose" not in fake.calls[0].prompt
+
+
+def test_french_screen_title_on_an_english_video_is_refused_and_asked_again(workspace, tmp_path):
+    _english_workspace(workspace)
+
+    fake, _ = run(workspace, make_config(tmp_path),
+                  [answer(screen_title="Même lui refuse de payer"),
+                   answer(screen_title="Even he refuses to pay")])
+
+    assert len(fake.calls) == 2
+    assert "langue de la video" in fake.calls[1].prompt
+    assert by_id(read_captions(workspace), "00")["screen_title"] == "Even he refuses to pay"
+
+
+def test_french_screen_title_on_an_english_video_fails_after_the_repairs(workspace, tmp_path):
+    from clipper.captions import run as run_captions
+
+    _english_workspace(workspace)
+    fake = FakeBackend([answer(screen_title="24 h sans dormir, il refuse")] * 2)
+
+    with llm.use_backend(fake), pytest.raises(llm.SchemaError, match="langue de la video"):
+        run_captions(VIDEO_ID, workspace, config=make_config(tmp_path))
+
+    assert not (workspace / VIDEO_ID / "captions.json").exists()
+
+
+def test_uncertain_language_screen_title_is_not_refused(workspace, tmp_path):
+    _english_workspace(workspace)
+
+    fake, _ = run(workspace, make_config(tmp_path), [answer(screen_title="Shroud vs Ninja")])
+
+    assert len(fake.calls) == 1
+
+
+def test_english_screen_title_on_a_french_video_is_untouched(workspace, tmp_path):
+    write_moments(workspace, moment(0))
+    write_parts(workspace, parts_record(0, "single", 1, [part(1, 0.0, 3.9)]))
+
+    fake, _ = run(workspace, make_config(tmp_path), [answer(screen_title="He tries the boss alone")])
+
+    assert len(fake.calls) == 1
