@@ -363,6 +363,24 @@ def _open_context(account: str, *, headless: bool, config: Config | None = None)
             pw.stop()
 
 
+def fresh_page(context: Any) -> Any:
+    """Onglet neuf du contexte, pour piloter une page. Jamais ``context.pages[0]`` : sur un profil dont la
+    session précédente a été tuée (``exit_type`` = Crashed, serveur relancé avec Chrome ouvert), Chrome
+    restaure puis referme des onglets au démarrage, et l'onglet préexistant disparaît en plein envoi
+    (« Target page, context or browser has been closed »). Les onglets restaurés sont fermés après
+    l'ouverture de la page neuve, jamais avant (fermer le dernier onglet fermerait Chrome)."""
+    stale = list(context.pages)
+    page = context.new_page()
+    for old in stale:
+        if old is page:
+            continue
+        try:
+            old.close()
+        except Exception as exc:  # noqa: BLE001 - onglet déjà refermé par Chrome : c'est le but
+            logger.debug("fermeture d'un onglet restauré : %s", type(exc).__name__)
+    return page
+
+
 def _login_url(url: str | None, config: Config | None) -> str:
     value = url if url is not None else str(_settings(config)["login_url"])
     parsed = urlparse(value)
