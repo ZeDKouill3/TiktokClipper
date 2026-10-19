@@ -1217,3 +1217,44 @@ def test_the_manual_ready_route_stays_405_and_names_pause_and_resume(config, vau
     resp = local_client(config).put(f"/api/accounts/{account['id']}/ready", json={"ready": True})
 
     assert resp.status_code == 405 and "pause" in resp.json()["detail"] and "resume" in resp.json()["detail"]
+
+
+# --------------------------------------------------------------------------
+# TASK-ef6e6c31363f : pays attendu de l'IP par compte
+# --------------------------------------------------------------------------
+
+
+def test_expected_country_is_stored_normalised_and_exposed(config, vault):
+    account = accounts.add_account(config, {"label": "UK", "expected_country": " gb "})
+    assert account["expected_country"] == "GB"
+    assert accounts.list_accounts(config)[0]["expected_country"] == "GB"
+    assert accounts.expected_country_of(config, account["id"]) == "GB"
+
+
+def test_account_without_expected_country_is_unchanged(config, vault):
+    account = accounts.add_account(config, {"label": "FR"})
+    assert account["expected_country"] == ""
+    assert accounts.expected_country_of(config, account["id"]) is None
+    assert accounts.expected_country_of(config, "inconnu") is None
+
+
+def test_expected_country_can_be_changed_and_cleared(config, vault):
+    account = accounts.add_account(config, {"label": "UK", "expected_country": "GB"})
+    assert accounts.update_account(config, account["id"], {"expected_country": "fr"})["expected_country"] == "FR"
+    assert accounts.update_account(config, account["id"], {"label": "Autre"})["expected_country"] == "FR"
+    assert accounts.update_account(config, account["id"], {"expected_country": ""})["expected_country"] == ""
+    assert accounts.expected_country_of(config, account["id"]) is None
+
+
+@pytest.mark.parametrize("bad", ["GBR", "G", "1F", "G B", 5, None])
+def test_expected_country_must_be_two_letters(config, vault, bad):
+    with pytest.raises(accounts.AccountsError, match="expected_country"):
+        accounts.add_account(config, {"label": "UK", "expected_country": bad})
+
+
+def test_expected_country_over_the_api(config, vault):
+    client = local_client(config)
+    created = client.post("/api/accounts", json={"label": "UK", "expected_country": "gb"})
+    assert created.status_code == 201 and created.json()["expected_country"] == "GB"
+    bad = client.put(f"/api/accounts/{created.json()['id']}", json={"expected_country": "GBR"})
+    assert bad.status_code == 422 and "expected_country" in bad.text

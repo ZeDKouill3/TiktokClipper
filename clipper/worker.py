@@ -1409,7 +1409,9 @@ class Worker:
         if service == "tiktok" and not self._connected(entry, name, account, paths["state_dir"]):
             return False  # YouTube : la connexion est « prete a publier » (derniere verification) ; Studio arrete sur Google
         try:
-            network.require_expected_country(self.config)
+            expected, account_label = accounts_mod.country_guard(self.config, account)
+            network.require_expected_country(self.config, expected=expected,
+                                             account=account_label if expected else None)
         except network.NetworkUnknown as exc:
             # service de geolocalisation injoignable : condition transitoire, l'entree attend et sera retentee ;
             # le compte reste « pret a publier » et le navigateur n'est pas ouvert (I2, revue nuit)

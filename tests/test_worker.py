@@ -5249,3 +5249,31 @@ def test_pipeline_queued_sorts_a_missing_retry_at_last(tmp_path):
     pipeline.save_state(broken, config=config)
 
     assert [s["video_id"] for s in pipeline.queued(config=config)] == [VIDEO_A, VIDEO_B]
+
+
+def test_uk_account_publishes_on_uk_ip_and_halts_on_fr_ip_naming_account_and_countries(tmp_path, monkeypatch):
+    """TASK-ef6e6c31363f : le pays attendu du compte prime sur [network] expected_country (FR)."""
+    config = _pub_env(tmp_path, monkeypatch)
+    _set_account_state(tmp_path, ACCOUNT, expected_country="GB")
+    _seed(tmp_path, "ma_chaine", "01", _ago(minutes=1))
+    pub = FakePublisher()
+    _geo("FR")
+
+    _pub_worker(config, pub).tick()
+
+    assert pub.calls == []
+    entry = _entries(tmp_path)[0]
+    assert entry["status"] == "failed" and entry["halted"] is True
+    assert entry["error"].startswith(f"compte {_account_state(tmp_path, ACCOUNT)['label']} : IP en France (attendu Royaume-Uni)")
+
+
+def test_uk_account_is_published_when_ip_is_in_the_uk(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch)
+    _set_account_state(tmp_path, ACCOUNT, expected_country="GB")
+    _seed(tmp_path, "ma_chaine", "01", _ago(minutes=1))
+    pub = FakePublisher()
+    _geo("GB")
+
+    _pub_worker(config, pub).tick()
+
+    assert len(pub.calls) == 1 and _entries(tmp_path)[0]["status"] == "published"

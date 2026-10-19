@@ -100,11 +100,11 @@ def _geo(url: str, cache_s: float) -> dict[str, Any]:
     return geo
 
 
-def status(config: Config | None = None) -> dict[str, Any]:
+def status(config: Config | None = None, expected: str | None = None) -> dict[str, Any]:
     """{ip, country, country_name, city, isp, ok, expected_country, checked_at, error}. ``ok`` : True (pays
     attendu), False (autre pays) ou None (inconnu : service injoignable ou réponse sans pays)."""
     settings = _settings(config)
-    expected = str(settings["expected_country"]).strip().upper()
+    expected = (expected or "").strip().upper() or str(settings["expected_country"]).strip().upper()
     base = {"expected_country": expected, "expected_country_name": COUNTRY_NAMES.get(expected, expected),
             "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "block_browser": bool(settings["block_browser"])}
     try:
@@ -116,16 +116,19 @@ def status(config: Config | None = None) -> dict[str, Any]:
     return {**base, **geo, "country_name": COUNTRY_NAMES.get(country, country), "ok": country == expected, "error": None}
 
 
-def require_expected_country(config: Config | None = None) -> None:
-    """Garde du navigateur piloté : ``NetworkError`` si ``block_browser`` et pays inconnu ou différent."""
+def require_expected_country(config: Config | None = None, *, expected: str | None = None,
+                             account: str | None = None) -> None:
+    """Pays attendu : ``expected`` (celui du compte piloté) s'il est renseigné, sinon ``[network]``;
+    ``account`` nomme le compte dans le message. Garde du navigateur piloté : ``NetworkError`` si ``block_browser`` et pays inconnu ou différent."""
     if not _settings(config)["block_browser"]:
         return
-    state = status(config)
+    state = status(config, expected)
     if state["ok"]:
         return
+    who = f"compte {account} : " if account else ""
     advice = "passe sur le partage de connexion du téléphone"
     if state["ok"] is None:
         raise NetworkUnknown(
-            f"pays de l'IP inconnu ({state['error']}), attendu {state['expected_country_name']} : {advice}"
+            f"{who}pays de l'IP inconnu ({state['error']}), attendu {state['expected_country_name']} : {advice}"
         )
-    raise NetworkError(f"IP en {state['country_name']} (attendu {state['expected_country_name']}) : {advice}")
+    raise NetworkError(f"{who}IP en {state['country_name']} (attendu {state['expected_country_name']}) : {advice}")

@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
-from clipper import network
+from clipper import accounts, network
 from clipper.config import Config
 
 logger = logging.getLogger(__name__)
@@ -323,7 +323,8 @@ def _open_context(account: str, *, headless: bool, config: Config | None = None)
     explicitement. Hors du pays attendu (``[network]``, TASK-30cc) ou pays inconnu : refus avant toute ouverture."""
     directory = profile_dir(account, config)
     try:
-        network.require_expected_country(config)
+        expected, label = accounts.country_guard(config, account) if config is not None else (None, None)
+        network.require_expected_country(config, expected=expected, account=label if expected else None)
     except network.NetworkUnknown as exc:
         raise BrowserUnavailable(str(exc)) from None
     except network.NetworkError as exc:

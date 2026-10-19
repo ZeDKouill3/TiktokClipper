@@ -862,3 +862,37 @@ def test_profile_is_looked_up_in_the_configured_browser_state_dir(cwd):
     assert browser.profile_status("ab12cd")["present"] is False  # défaut state/browser : rien là-bas
     assert browser._pilot_paths(config)[0] == cwd / "ailleurs" / "pilot.lock"
     assert browser.CONFIG_DEFAULTS["state_dir"] == "state/browser"
+
+
+# ------------------------------------------------ TASK-ef6e6c31363f : pays attendu par compte
+
+
+def _uk_account_config(cwd):
+    _config_file(cwd, '{"accounts": [{"id": "ab12cd", "label": "ClipManiaq3", "expected_country": "GB"}, '
+                      '{"id": "ef34ab", "label": "Compte FR"}]}')
+    return Config(mode="review", workspace_dir=cwd / "w", output_dir=cwd / "o")
+
+
+def test_open_context_uk_account_opens_on_uk_ip(cwd, monkeypatch):
+    context, _chromium, _pw = fake_playwright(monkeypatch)
+    network.use_fetcher(lambda url: {"ip": "5.6.7.8", "city": "London", "country": "GB", "org": "AS1 BT"})
+    with browser._open_context("ab12cd", headless=True, config=_uk_account_config(cwd)) as opened:
+        assert opened is context
+
+
+def test_open_context_uk_account_refuses_fr_ip_naming_account_and_countries(cwd, monkeypatch):
+    fake_playwright(monkeypatch)
+    with pytest.raises(browser.BrowserError) as caught:
+        with browser._open_context("ab12cd", headless=True, config=_uk_account_config(cwd)):
+            pytest.fail("le navigateur ne doit pas s'ouvrir")
+    assert str(caught.value) == ("compte ClipManiaq3 : IP en France (attendu Royaume-Uni) : "
+                                 "passe sur le partage de connexion du téléphone")
+
+
+def test_open_context_account_without_country_refuses_uk_ip_like_before(cwd, monkeypatch):
+    fake_playwright(monkeypatch)
+    network.use_fetcher(lambda url: {"ip": "5.6.7.8", "city": "London", "country": "GB", "org": "AS1 BT"})
+    with pytest.raises(browser.BrowserError) as caught:
+        with browser._open_context("ef34ab", headless=True, config=_uk_account_config(cwd)):
+            pytest.fail("le navigateur ne doit pas s'ouvrir")
+    assert str(caught.value) == "IP en Royaume-Uni (attendu France) : passe sur le partage de connexion du téléphone"

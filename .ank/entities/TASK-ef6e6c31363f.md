@@ -5,7 +5,7 @@ slug: pays-attendu-de-l-ip-par-compte-comptes-tiktok-u
 title: Pays attendu de l'IP par compte (comptes TikTok UK)
 created: 2026-10-19T07:36:58Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/network.py
   - clipper/browser.py
@@ -19,8 +19,15 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/224110ccde08@ebae81d
+    tree: scope/a1546431ddc4
+    criteria: 73f8ebe78736
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 Contexte : l'utilisateur veut publier des TikToks en anglais sur deux comptes UK (ClipManiaq3, clippyqaniaque), en pause depuis le 07/10 (0 vue sur ~30 posts). Aujourd'hui [network] expected_country vaut pour tous les comptes (FR) et browser._open_context appelle network.require_expected_country(config) sans savoir quel compte est piloté ; le worker fait aussi ce contrôle (worker.py ~ligne 1412).

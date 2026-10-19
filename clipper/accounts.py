@@ -190,6 +190,27 @@ def validate_timezone(name: Any) -> str:
     return name
 
 
+def validate_expected_country(value: Any) -> str:
+    """Pays attendu de l'IP d'un compte : code ISO a deux lettres (majuscules), "" = celui de [network]."""
+    if not isinstance(value, str) or (value.strip() and not re.fullmatch(r"[A-Za-z]{2}", value.strip())):
+        raise AccountsError(f"expected_country : code pays ISO à deux lettres attendu (GB, FR...), reçu {value!r}")
+    return value.strip().upper()
+
+
+def country_guard(config: Config, account_id: str) -> tuple[str | None, str | None]:
+    """``(pays attendu propre au compte ou None, libellé du compte ou None)`` : None = compte inconnu ou champ vide
+    (le garde réseau retombe alors sur [network] expected_country)."""
+    with _lock:
+        account = next((a for a in _read(config) if a.get("id") == account_id), None)
+    if account is None:
+        return None, None
+    return account.get("expected_country") or None, account.get("label") or account_id
+
+
+def expected_country_of(config: Config, account_id: str) -> str | None:
+    return country_guard(config, account_id)[0]
+
+
 def schedule_of(account: dict[str, Any]) -> dict[str, Any]:
     """Les creneaux d'un compte sous la forme que lit ``clipper.channel.next_slots`` : ``{"slots", "timezone"}``."""
     return {"slots": list(account.get("slots") or []), "timezone": account.get("timezone") or DEFAULT_TIMEZONE}
@@ -276,14 +297,15 @@ def _public(account: dict[str, Any]) -> dict[str, Any]:
                ready_to_publish=bool(account.get("ready_to_publish")),
                ready_note=account.get("ready_note"), paused_at=account.get("paused_at"), login=account.get("login"),
                r4_halt=account.get("r4_halt"), slots=list(account.get("slots") or []),
-               timezone=account.get("timezone") or DEFAULT_TIMEZONE)
+               timezone=account.get("timezone") or DEFAULT_TIMEZONE,
+               expected_country=account.get("expected_country") or "")
     return out
 
 
 def _clean(data: Any, *, creating: bool) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise AccountsError("corps invalide : un objet JSON est attendu")
-    unknown = set(data) - {*_FIELDS, "password", "service", "slots", "timezone"}
+    unknown = set(data) - {*_FIELDS, "password", "service", "slots", "timezone", "expected_country"}
     if unknown:
         raise AccountsError(f"champ(s) inconnu(s) : {', '.join(sorted(unknown))}")
     out: dict[str, Any] = {}
@@ -309,6 +331,8 @@ def _clean(data: Any, *, creating: bool) -> dict[str, Any]:
         out["slots"] = validate_slots(data["slots"])
     if "timezone" in data:
         out["timezone"] = validate_timezone(data["timezone"])
+    if "expected_country" in data:
+        out["expected_country"] = validate_expected_country(data["expected_country"])
     if "password" in data:
         password = data["password"]
         if not isinstance(password, str):
@@ -346,7 +370,8 @@ def add_account(config: Config, data: Any) -> dict[str, Any]:
         now = _now()
         account = {"id": account_id, **{k: fields.get(k, "") for k in _FIELDS},
                    "service": fields.get("service", DEFAULT_SERVICE), "has_password": bool(password), "created_at": now, "updated_at": now,
-                   "slots": fields.get("slots", []), "timezone": fields.get("timezone", DEFAULT_TIMEZONE)}
+                   "slots": fields.get("slots", []), "timezone": fields.get("timezone", DEFAULT_TIMEZONE),
+                   "expected_country": fields.get("expected_country", "")}
         try:
             _write(config, [*accounts, account])
         except AccountsError:
