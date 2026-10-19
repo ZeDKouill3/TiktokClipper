@@ -309,6 +309,10 @@ class StudioPage(FakePage):
             self.modals.append(FakeModal(self, "Continuer à publier ? Nous sommes encore en train de vérifier…",
                                          ["Annuler", "Publier maintenant"]))
 
+    def evaluate(self, script):
+        self.calls.append(("evaluate", script))
+        return True  # liste courte : tout tient dans la fenetre, le bas est deja atteint
+
     def wait_for_selector(self, selector, timeout=None, state=None):
         if selector == _sel()["stats"]["post_link"] and self.url.startswith(_sel()["expect"]["published_url_prefix"]) \
                 and self.content_links:
@@ -3677,3 +3681,63 @@ def test_a_unique_caption_link_is_taken_without_any_time_check_or_warning(tmp_pa
 
     assert result["post_id"] == "7300000000000000019"
     assert "portent la légende" not in caplog.text
+
+
+# ---------------------------------------------------------------- TASK-42a56837bbc6 : post programme loin dans la liste
+
+
+class ScrollingStudioPage(StudioPage):
+    """Page Publications virtualisee : les liens de post du DOM sont la fenetre courante de ``windows`` ; chaque
+    ``evaluate(scroll_script)`` descend d'une fenetre (vrai = bas atteint). Les posts programmes en avance sont
+    listes en premier (date decroissante) : le post tout juste programme est plus bas que la premiere fenetre."""
+
+    def __init__(self, windows, **kwargs):
+        super().__init__(**kwargs)
+        self.windows, self.scrolled = windows, 0
+
+    def goto(self, url, **kwargs):
+        super().goto(url, **kwargs)
+        self.scrolled = 0  # la page rechargee repart du haut
+
+    def evaluate(self, script):
+        self.calls.append(("evaluate", script))
+        self.scrolled = min(self.scrolled + 1, len(self.windows) - 1)
+        return self.scrolled == len(self.windows) - 1
+
+    def wait_for_selector(self, selector, timeout=None, state=None):
+        self.content_links = self.windows[self.scrolled]
+        return super().wait_for_selector(selector, timeout=timeout, state=state)
+
+    def query_selector_all(self, selector):
+        self.content_links = self.windows[self.scrolled]
+        return super().query_selector_all(selector)
+
+
+def _scheduled_far_down_windows():
+    ahead = [(f"Un autre clip programmé {n}", f"https://www.tiktok.com/@ma_chaine/video/73000000000000001{n:02d}")
+             for n in range(15)]
+    return [ahead[0:5], ahead[5:10], ahead[10:15], [("Ma legende #un #deux", LINK), ("Un clip plus ancien", OTHER_LINKS[0][1])]]
+
+
+def test_a_scheduled_post_listed_below_the_first_rows_is_found_by_scrolling_the_list(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch)
+    env.page = ScrollingStudioPage(_scheduled_far_down_windows())
+
+    result = env.publish(mode="scheduled", schedule_at=datetime(2026, 10, 3, 18, 0, tzinfo=timezone.utc))
+
+    assert result["post_id"] == "7300000000000000001" and result["post_url"] == LINK
+    assert result["state"] == "scheduled_on_tiktok" and "n'existe pas encore" not in (result["note"] or "")
+    assert len([c for c in env.page.calls if c[0] == "evaluate"]) == 3
+    assert not _lookup_polls(env.page, 10000)  # trouvé au premier essai : aucune relecture différée
+
+
+def test_a_post_really_absent_from_the_whole_scrolled_list_stays_unfound(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch, settings={"post_lookup_timeout_s": 0})
+    windows = _scheduled_far_down_windows()[:3] + [OTHER_LINKS]
+    env.page = ScrollingStudioPage(windows)
+
+    result = env.publish(mode="scheduled", schedule_at=datetime(2026, 10, 3, 18, 0, tzinfo=timezone.utc))
+
+    assert result["post_id"] is None and result["post_url"] is None  # jamais d'id inventé (ADR-ad2e)
+    assert "n'existe pas encore" in result["note"]
+    assert env.page.scrolled == len(windows) - 1  # toute la liste a été parcourue avant de conclure

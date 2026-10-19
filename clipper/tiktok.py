@@ -1053,18 +1053,34 @@ class _Flow:
                 return None, f"aucun lien de post affiché après {spent:g} s", spent
             self.harvest()
             published = _squash(" ".join([clip["caption"], *clip["hashtags"]]))
-            matches: list[tuple[str, str]] = []
-            for link in self.page.query_selector_all(selector):
-                text = _squash(str(link.inner_text())).rstrip("….").rstrip()
-                href = link.get_attribute("href") or ""
-                if text and (published.startswith(text) or text.startswith(published)) and _POST_ID_END.search(href):
-                    matches.append((urljoin(str(self.page.url), href), _POST_ID_END.search(href).group(1)))
-            if not matches:
-                return None, "aucun lien dont le texte correspond à la légende publiée", 0.0
-            if len(matches) == 1:
-                return matches[0][0], matches[0][1], 0.0
-            url, post_id = self._ambiguous_link(matches, target)
-            return url, post_id, 0.0
+            # La liste est virtualisee et triee par date decroissante : un post programme a une date future, loin
+            # sous les autres programmes ; on descend donc la liste comme le releve (``list_posts``) jusqu'au post
+            # ou jusqu'au bas (``stats_scroll_rounds`` pas au plus), au lieu de ne lire que les premieres lignes.
+            seen: set[str] = set()
+            idle = 0
+            for _ in range(int(self.settings["stats_scroll_rounds"]) + 1):
+                matches: list[tuple[str, str]] = []
+                fresh = False
+                for link in self.page.query_selector_all(selector):
+                    text = _squash(str(link.inner_text())).rstrip("….").rstrip()
+                    href = link.get_attribute("href") or ""
+                    found = _POST_ID_END.search(href)
+                    if found is not None and found.group(1) not in seen:
+                        seen.add(found.group(1))
+                        fresh = True
+                    if text and (published.startswith(text) or text.startswith(published)) and found is not None:
+                        matches.append((urljoin(str(self.page.url), href), found.group(1)))
+                if len(matches) == 1:
+                    return matches[0][0], matches[0][1], 0.0
+                if matches:
+                    url, post_id = self._ambiguous_link(matches, target)
+                    return url, post_id, 0.0
+                at_bottom = self.page.evaluate(self.sel["stats"]["scroll_script"]) is True
+                self.pause()
+                idle = 0 if fresh else idle + 1
+                if at_bottom and idle >= _SCROLL_IDLE:
+                    break
+            return None, "aucun lien dont le texte correspond à la légende publiée", 0.0
         except Exception as exc:  # noqa: BLE001 - dit dans la note, jamais avale
             return None, f"{type(exc).__name__} : {exc}", -1.0
 
