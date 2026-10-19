@@ -10,6 +10,48 @@ Notes de version détaillées : [`docs/releases/`](docs/releases/).
 
 ## [Non publié]
 
+## [0.8.0] - 2026-10-19
+
+Version du titre d'écran et de la publication fiabilisée : le titre d'écran d'un clip a trois styles
+(`citation`, `promesse`, `promesse_emoji`), un test A/B les compare par compte TikTok avec une
+rotation hebdomadaire, et les légendes suivent le jeu de la catégorie Twitch et la langue de la
+vidéo. Le format `split` centre le jeu et protège la bande « Partie N ». La veille contrôle la
+webcam sur les miniatures, la répartition de demain relit la config et écarte les titres trop
+longs, chaque compte peut avoir son pays d'IP attendu, et la publication TikTok et YouTube résiste
+à un profil Chrome tué en pleine session. Le zip s'appelle `Clipper-portable-0.8.0.zip` ; la
+mise à jour se fait en relançant `Installer.bat` depuis ce zip, tes données ne sont pas touchées. Notes
+détaillées : [`docs/releases/v0.8.0.md`](docs/releases/v0.8.0.md). Le mode auto de bout en bout est
+repoussé à la 0.9.0. Nouveaux réglages par table : `[captions]` : `screen_title_style`,
+`screen_title_max_chars` ; `[repartition]` : `title_ab_enabled`, `title_ab_start`,
+`title_ab_accounts`, `title_ab_styles` ; `[reframe]` : `split_gameplay_align` ; `[render]` :
+`title_split_center_y` ; `[veille]` : `webcam_check_max` ; clé de compte : `expected_country`.
+
+### Ajouté
+
+- Titre d'écran : réglage `[captions] screen_title_style` (SPEC-810f, qui succède à SPEC-08c2 et SPEC-6a86). `citation` (défaut, la phrase prononcée), `promesse` (annonce l'enjeu sans révéler l'issue, forme variée : une question sur deux au plus) ou `promesse_emoji` (promesse + « ... » + un seul emoji d'émotion, 🤔 refusé). Le contrat reste sobre, sans superlatif.
+- Test A/B des titres par compte (SPEC-042c) : `[repartition] title_ab_enabled`, `title_ab_start`, `title_ab_accounts`, `title_ab_styles`. Un style de titre par compte TikTok, en rotation hebdomadaire ; un clip n'est planifié que sur le compte de son style (le sidecar garde `screen_title_style` et `title_shown`), un clip sans style est refusé ; le style des nouvelles vidéos est le moins fourni (`title_style` dans `pipeline.json`).
+- Outil `tools/retitle_stock.py` : retitre le stock de clips prêts dans un style (`--style`, `--max-chars`), seul `screen_title` est patché ; sortie console en UTF-8 pour les emojis de `promesse_emoji`.
+- Outil `tools/recaption_stock.py` : régénère la légende et les hashtags des clips prêts jamais publiés au mauvais jeu (essai à blanc, sauvegarde, rapport).
+- Légendes : le prompt reçoit la catégorie Twitch du chapitre du clip ; `[captions] screen_title_max_chars` (0 = pas de limite) refuse un titre d'écran trop long (étude des vues : au-delà de 35 caractères, médiane de 80 vues contre 251).
+- Split : `[reframe] split_gameplay_align` (jeu centré) et `[render] title_split_center_y` (titre posé sur la séparation), avec leurs libellés français dans la console.
+- Veille : contrôle de la webcam sur les miniatures avant le choix de Claude (SPEC-fefc), borné par `[veille] webcam_check_max`.
+- Comptes : champ facultatif « Pays attendu de l'IP » par compte (`expected_country`, code ISO à deux lettres), appliqué par le garde du navigateur et par le worker ; vide, le garde retombe sur `[network] expected_country`.
+
+### Modifié
+
+- Facecam : le prompt dit que `null` est la bonne réponse quand aucun rectangle ne montre le streamer.
+- Répartition : « Recalculer » relit la table `[repartition]` de `config.toml` à chaque appel, comme la validation, au lieu de la config figée au démarrage de `serve` ; les clips dont le titre d'écran dépasse `[captions] screen_title_max_chars` sont écartés du plan (refus tracés dans `plan.title_too_long` et dans les notes, simple avertissement pour une ligne manuelle).
+- Légendes : le titre d'écran et le texte d'accroche sont écrits dans la langue de la vidéo ; un validateur local fr/en refuse un titre manifestement français sur une vidéo non française.
+- Conventions du dépôt : `AGENTS.md` cite SPEC-810f et SPEC-042c ; SPEC-810f, SPEC-042c et SPEC-fefc sont ratifiées ; les fixtures de `tools/ank-viz` citent SPEC-810f au lieu des specs remplacées ; `config.example.toml` documente les nouveaux réglages (la copie embarquée dans `clipper/assets/` reste identique).
+
+### Corrigé
+
+- Légendes : une légende « Sur X, » ou « X vu par » dont X n'est ni la catégorie Twitch ni dans le titre de la VOD est refusée (clips légendés au mauvais jeu).
+- Split : un badge ou des sous-titres posés sur la bande « Partie N » sont refusés par la validation de géométrie, avec une erreur qui nomme la clé, la bande et le rectangle (« Partie 1 » s'affichait par-dessus les sous-titres).
+- Render : un re-rendu forcé garde les champs de publication du sidecar (`tiktok_post`, `youtube_post`, `removed_from_platform`, `edited_at`).
+- TikTok : un post programmé est retrouvé en défilant la liste Publications (virtualisée, triée par date décroissante) au lieu de conclure « à vérifier » à tort ; le premier envoi n'utilise plus l'onglet restauré par Chrome après un profil tué (`browser.fresh_page`).
+- YouTube : ouvre un onglet neuf au lieu de `context.pages[0]` (connexion et publication), comme TikTok.
+
 ## [0.7.0] - 2026-10-11
 
 Version de la console v3 : tous les écrans refaits en thème clair, avec la fiche clip en
@@ -1293,7 +1335,8 @@ verticaux sous-titrés, en local.
 - Aucune publication automatique sur TikTok : le dépôt produit les clips
   et leurs métadonnées, la mise en ligne reste manuelle.
 
-[Non publié]: https://github.com/ZeDKouill3/TiktokClipper/compare/v0.7.0...HEAD
+[Non publié]: https://github.com/ZeDKouill3/TiktokClipper/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/ZeDKouill3/TiktokClipper/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/ZeDKouill3/TiktokClipper/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/ZeDKouill3/TiktokClipper/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/ZeDKouill3/TiktokClipper/compare/v0.5.2...v0.5.3

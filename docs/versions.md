@@ -22,7 +22,8 @@ Numérotation : versionnage sémantique, `MAJEUR.MINEUR.CORRECTIF`.
 | v0.5.3 | Veille : section Sorties de jeux (IGDB, hypes, étiquette Portage), jeu des VOD YouTube déduit du titre ; Download : VOD abonnés = échec définitif, réessais rapides sur coupure réseau Twitch ([détails](CHANGELOG.md)) | publiée |
 | v0.6.0 | Veille (historique de tendance, Steam officiel, calendrier des sorties), formats stream et webcam, styles gaming (candidats d'action), fiche clip, alerte 0 vue, préchargement du téléchargement, publication TikTok plus robuste ([détails](CHANGELOG.md)) | publiée |
 | v0.7.0 | Console v3 (tous les écrans refaits), répartition automatique du lendemain, apprentissage branché sur les relevés réels, modération TikTok des légendes, amorce de gameplay, veille avec style par défaut, corrections de l'audit complet ([notes](releases/v0.7.0.md)) | publiée |
-| v0.8.0 | Mode auto de bout en bout : vidéo en entrée, clips publiés sans intervention | après une semaine d'usage réel |
+| v0.8.0 | Titre d'écran en trois styles (citation, promesse, promesse + emoji) et test A/B par compte TikTok, légendes au bon jeu et dans la langue de la vidéo, split (jeu centré, bande « Partie N » protégée), contrôle webcam de la veille, pays d'IP par compte, publication TikTok et YouTube plus robuste ([notes](releases/v0.8.0.md)) | publiée |
+| v0.9.0 | Mode auto de bout en bout : vidéo en entrée, clips publiés sans intervention | après une semaine d'usage réel |
 | v1.0.0 | Stable | quand tous les critères ci-dessous sont tenus |
 
 ## Critères de la v1.0.0

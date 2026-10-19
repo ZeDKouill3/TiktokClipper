@@ -188,7 +188,7 @@ def test_release_notes_have_the_expected_structure():
 @pytest.mark.skipif(not HAS_NOTES, reason=NO_NOTES_REASON)
 def test_release_notes_cover_the_upgrade_steps():
     text = _read(NOTES)
-    for needle in ("uv pip install", "config.toml", "[repartition]", "lead_in_seconds", "default_channel",
+    for needle in ("uv pip install", "config.toml", "[repartition]", "screen_title_style", "title_ab_enabled",
                    "réseau non résidentiel", "cookies", "captcha", "Installer.bat"):
         assert needle in text, f"manque dans les notes : {needle}"
 
@@ -199,7 +199,7 @@ def test_release_notes_upgrade_section_names_the_new_settings():
     upgrade = re.search(r"^## Mettre à jour depuis la .*?$(.*?)(?=^## )", text, re.S | re.M)
     assert upgrade, "section « Mettre à jour » absente"
     body = upgrade.group(1)
-    assert "[repartition]" in body and "lead_in_seconds" in body and "default_channel" in body
+    assert "[repartition]" in body and "screen_title_style" in body and "title_ab_enabled" in body
 
 
 @pytest.mark.skipif(not HAS_NOTES, reason=NO_NOTES_REASON)
@@ -275,13 +275,13 @@ def test_readme_portable_zip_points_to_the_release_with_the_current_version():
 def test_versions_row_for_the_current_version_names_the_release_headline():
     lines = _read(VERSIONS).splitlines()
     row = next(line for line in lines if line.startswith(f"| {TAG} "))
-    assert "Console v3" in row
+    assert "Titre d'écran" in row
 
 
 REQUIRED_CHANGELOG_TERMS = (
-    f"Clipper-portable-{VERSION}.zip", "Installer.bat", "mise à jour", "Console v3", "Plan de demain",
-    "[repartition]", "lead_in_seconds", "default_channel", "moderation_risk_terms", "retention_min_n",
-    "Audit complet du 10/10", "docs/releases/v0.7.0.md",
+    f"Clipper-portable-{VERSION}.zip", "Installer.bat", "mise à jour", "screen_title_style", "title_ab_enabled",
+    "[repartition]", "screen_title_max_chars", "split_gameplay_align", "title_split_center_y",
+    "webcam_check_max", "expected_country", "retitle_stock", "recaption_stock", "docs/releases/v0.8.0.md",
 )
 
 
