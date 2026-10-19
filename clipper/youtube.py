@@ -288,7 +288,7 @@ def verify_login(
     sel = selectors or load_selectors()
     open_profile = opener or functools.partial(browser._open_context, config=config)  # pilot_wait_s du config
     with open_profile(account, headless=False) as context:  # visible : jamais de navigateur cache (ADR-58c0)
-        page = context.pages[0] if context.pages else context.new_page()
+        page = browser.fresh_page(context)  # jamais context.pages[0] : onglet restauré par Chrome (profil Crashed)
         check = _Check(page, account, sel, settings, now=now or datetime.now(timezone.utc), sleep=sleep,
                        rng=rng or random.Random(), config=config)
         page.goto(str(sel["urls"]["studio"]))
@@ -723,7 +723,7 @@ def publish(
     sel = selectors or load_selectors()
     open_profile = opener or functools.partial(browser._open_context, config=config)  # pilot_wait_s du config
     with open_profile(account, headless=False) as context:  # visible : jamais de navigateur cache (ADR-58c0)
-        page = context.pages[0] if context.pages else context.new_page()
+        page = browser.fresh_page(context)  # jamais context.pages[0] : onglet restauré par Chrome (profil Crashed)
         flow = _Flow(page, account, sel, settings, now=now, sleep=sleep, rng=rng or random.Random(), on_tick=on_tick,
                      config=config)
         try:
