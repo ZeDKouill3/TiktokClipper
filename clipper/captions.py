@@ -403,6 +403,12 @@ def _prompt(
         else "aucun emoji"
     )
     rules = [f"Reponds entierement dans la langue de la video ({language or 'celle de la transcription'})."]
+    if _foreign_language(language):
+        rules.append(
+            f"screen_title et hook_text sont ecrits dans la langue de la video ({language}), jamais en "
+            "francais, meme si les consignes et les exemples ci-dessous sont en francais : ces exemples "
+            f"sont des illustrations de la forme attendue, transpose-les en {language}."
+        )
     if title is None:
         rules.append("title : court, accrocheur, sans hashtag ni exces d'emoji.")
     rules.append(
@@ -796,6 +802,42 @@ def _validate_promesse_emoji(screen_title: str) -> None:
     _validate_screen_title_emoji(screen_title, True)  # ZWJ et drapeau refuses
 
 
+_FR_WORDS = frozenset(
+    "le la les un une des du de et est il elle ils elles lui je tu nous vous sans pour dans avec sur "
+    "pas ne ce cette qui que mais ou ses leur leurs tout tous fait veut peut mon ma mes ton ta tes "
+    "notre votre comme entre apres avant jamais toujours encore meme deja".split()
+)
+_EN_WORDS = frozenset(
+    "the a an and is are was were he she they his her their with without for to of in on it its this "
+    "that no not can just why what how who you we i my your our be been has have but or at by from "
+    "after before never always still even already".split()
+)
+_FR_ONLY_LETTERS = frozenset("éèêëàâùûçôîï")
+
+
+def _foreign_language(language: str) -> bool:
+    """Vrai si la video n'est pas en francais (langue connue du transcript)."""
+    return bool(language) and language.lower() != "fr"
+
+
+def _validate_screen_title_language(screen_title: str, language: str) -> None:
+    """TASK-fcb56296766e : sur une video non francaise, un titre d'ecran
+    manifestement francais est refuse (renvoye au modele). Detection locale
+    par mots outils ; en cas de doute, rien n'est refuse."""
+    if not _foreign_language(language):
+        return
+    tokens = [_normalize_word(t) for t in _WORD_RE.findall(screen_title)]
+    fr = sum(1 for t in tokens if t in _FR_WORDS)
+    en = sum(1 for t in tokens if t in _EN_WORDS)
+    if any(c in _FR_ONLY_LETTERS for c in screen_title.lower()):
+        fr += 1
+    if fr >= 2 and fr > en:
+        raise llm.SchemaError(
+            f"screen_title est en francais alors que la langue de la video est {language!r} : "
+            f"reecris-le dans la langue de la video : {screen_title!r}"
+        )
+
+
 def _validate_screen_title(
     screen_title: str, max_words: int, forbidden_words: list[str], allow_emoji: bool,
     target_words: int | None = None, style: str = "citation",
@@ -828,6 +870,7 @@ def _check_answer(
     screen_title_max_chars: int = 0,
     category: str | None = None,
     video_title: str = "",
+    language: str = "",
 ):
     """Controle passe a llm.ask : ce qui le refuse est renvoye au modele
     pour correction, comme une reponse hors schema. ``require_screen_title``
@@ -842,6 +885,7 @@ def _check_answer(
         _validate_sober_text_emoji(answer["caption"], "caption", caption_allow_emoji)
         _validate_sober_text_emoji(answer["hook_text"], "hook_text", caption_allow_emoji)
         if require_screen_title:
+            _validate_screen_title_language(answer["screen_title"], language)
             _validate_screen_title_length(answer["screen_title"], screen_title_max_chars)
             _validate_screen_title(
                 answer["screen_title"], screen_title_words_max,
@@ -1000,7 +1044,7 @@ def _process_moment(
             moderation_risk_terms=list(settings["moderation_risk_terms"]),
             screen_title_style=globals()["screen_title_style"](settings),
             screen_title_max_chars=screen_title_max_chars(settings),
-            category=category, video_title=video_title,
+            category=category, video_title=video_title, language=language,
         )
         text = _part_text(transcript, part["start"], part["end"])
         prompt = _prompt(language, video_title, source, part, parts_total, text, settings,
