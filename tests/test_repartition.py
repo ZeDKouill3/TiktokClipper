@@ -1294,3 +1294,82 @@ def test_ab_least_supplied_style_ties_go_to_the_first_in_config_order():
     assert repartition.least_supplied_style({"citation": 1, "promesse": 1, "promesse_emoji": 1},
                                             AB_STYLES) == "citation"
     assert repartition.least_supplied_style({}, ["promesse", "citation"]) == "promesse"
+
+
+# ---------------------------------------------------------------- plafond du titre d'ecran ([captions] screen_title_max_chars)
+
+
+def _titled(config, video, title, clip="01", **kwargs) -> None:
+    """Un clip pret dont le sidecar porte le titre d'ecran `title`."""
+    _clip(config, video, clip, **kwargs)
+    path = Path(config.output_dir) / video / f"{clip}.json"
+    sidecar = json.loads(path.read_text(encoding="utf-8"))
+    sidecar["screen_title"] = title
+    path.write_text(json.dumps(sidecar), encoding="utf-8")
+
+
+def _capped(tmp_path, cap, **overrides) -> Config:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    config = _config(tmp_path, **overrides)
+    if cap is not None:
+        config._sections["captions"] = {"screen_title_max_chars": cap}
+    _accounts(config, _acc("a"))
+    return config
+
+
+def test_title_cap_excludes_a_too_long_title_with_an_explicit_refusal(tmp_path):
+    config = _capped(tmp_path, 10)
+    _titled(config, "V1", "x" * 11, game="g1", score=90)  # un de trop
+    _titled(config, "V2", "x" * 10, game="g2", score=50)  # pile au plafond : garde
+
+    plan = _plan(config)
+
+    assert _line_for(plan, "a", "V1") is None
+    assert _line_for(plan, "a", "V2") is not None
+    assert plan["title_too_long"] == [{"video_id": "V1", "clip_id": "01", "length": 11, "max_chars": 10}]
+    assert any("V1/01" in n and "11" in n and "10" in n for n in plan["notes"])
+
+
+def test_title_cap_zero_or_absent_means_no_filter(tmp_path):
+    for cap in (0, None):
+        config = _capped(tmp_path / str(cap), cap)
+        _titled(config, "V1", "x" * 200, game="g1")
+
+        plan = _plan(config)
+
+        assert _line_for(plan, "a", "V1") is not None
+        assert plan["title_too_long"] == []
+
+
+def test_title_cap_clip_without_screen_title_is_kept(tmp_path):
+    config = _capped(tmp_path, 10)
+    _clip(config, "V1", game="g1")
+
+    assert _line_for(_plan(config), "a", "V1") is not None
+
+
+def test_title_cap_invalid_value_is_a_named_error_never_ignored(tmp_path):
+    for bad in (-1, "35", True):
+        config = _capped(tmp_path / str(bad), bad)
+        _titled(config, "V1", "x", game="g1")
+
+        with pytest.raises(repartition.RepartitionError, match="screen_title_max_chars"):
+            _plan(config)
+
+
+def test_title_cap_manual_line_gets_a_warning_not_a_refusal(tmp_path):
+    config = _capped(tmp_path, 10)
+    _titled(config, "V1", "x" * 11, game="g1")
+    _titled(config, "V2", "x" * 10, game="g2")
+    long_line = _line("V1", "01", "jeu:g1", "2026-10-10T09:00:00+02:00")
+    ok_line = _line("V2", "01", "jeu:g2", "2026-10-10T10:00:00+02:00")
+    plan = {"accounts": [{"account": "a", "lines": [long_line, ok_line]}]}
+    world = repartition.World(config)
+
+    repartition.line_warnings(plan, DAY.isoformat(), repartition.read_settings(config), world, [])
+    error = repartition.line_error(world, "a", DAY, video_id="V1", clip_id="01",
+                                   slot_at=datetime(2026, 10, 10, 9, 0, tzinfo=PARIS), entries=[])
+
+    assert "11" in long_line["warning"] and "10" in long_line["warning"] and "titre" in long_line["warning"]
+    assert ok_line["warning"] is None
+    assert error is None
