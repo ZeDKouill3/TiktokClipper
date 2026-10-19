@@ -1488,7 +1488,7 @@ class BrowserBackend:
                 config: Config | None = None) -> dict[str, Any]:
         open_profile = opener or browser._open_context
         with open_profile(account, headless=False) as context:  # visible : jamais de navigateur cache (ADR-1a58)
-            page = context.pages[0] if context.pages else context.new_page()
+            page = browser.fresh_page(context)
             flow = _Flow(page, account, selectors, settings, now=now, sleep=sleep, rng=rng, on_tick=on_tick,
                          harvest=True, config=config)
             try:
@@ -1504,7 +1504,7 @@ class BrowserBackend:
                     config: Config | None = None) -> dict[str, Any]:
         open_profile = opener or browser._open_context
         with open_profile(account, headless=False) as context:
-            page = context.pages[0] if context.pages else context.new_page()
+            page = browser.fresh_page(context)
             flow = _Flow(page, account, selectors, settings, now=now, sleep=sleep, rng=rng, on_tick=on_tick,
                          config=config)
             try:
