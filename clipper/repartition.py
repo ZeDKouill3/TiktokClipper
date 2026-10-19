@@ -392,6 +392,19 @@ class World:
         number = _CLIP_NUMBER.match(clip_id)
         return bool(moments and number and moments.get(int(number[1])))
 
+    def title_cap(self) -> int:
+        """Plafond ``[captions] screen_title_max_chars`` (0 = aucun filtre), lu dans la config sans importer
+        ``clipper.captions`` (ADR-b16b). Une valeur hors domaine est une ``RepartitionError``, jamais ignorée."""
+        value = self.config.section("captions").get("screen_title_max_chars", 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise RepartitionError(f"[captions] screen_title_max_chars doit être un entier >= 0, reçu {value!r}")
+        return value
+
+    def title_length(self, video_id: str, clip_id: str) -> int | None:
+        """Longueur du ``screen_title`` du sidecar, ``None`` sans titre texte."""
+        title = publish.read_sidecar(self.output, video_id, clip_id).get("screen_title")
+        return len(title) if isinstance(title, str) else None
+
     def queued_videos(self) -> set[str]:
         queue = _read_json(Path(str(self.config.section("worker")["queue_path"])), [])
         if not isinstance(queue, list):
@@ -471,10 +484,14 @@ def clip_exclusion(world: World, video_id: str, clip_id: str, excluded_sources: 
 
 
 def _pool(world: World, active: list[dict[str, Any]], settings: dict[str, Any], notes: list[str],
-          day: date, ab_refused: list[dict[str, str]]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+          day: date, ab_refused: list[dict[str, str]],
+          title_refused: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     """Clips choisissables (R2) avec les comptes qui peuvent les prendre, et les exclusions comptees par raison.
     Test A/B des titres : un compte du test ne garde que les clips dont le style est le sien ce jour-là ; chaque refus
-    est ajouté à ``ab_refused`` (et, pour un clip sans style, dit dans ``notes``)."""
+    est ajouté à ``ab_refused`` (et, pour un clip sans style, dit dans ``notes``).
+    Un titre d'écran plus long que ``[captions] screen_title_max_chars`` (si > 0) écarte le clip : refus dans
+    ``title_refused`` et dans ``notes``."""
+    cap = world.title_cap()
     clips: dict[tuple[str, str], dict[str, Any]] = {}
     for acc in active:
         units = publish.available_series_clips(
@@ -499,6 +516,12 @@ def _pool(world: World, active: list[dict[str, Any]], settings: dict[str, Any], 
         reason = clip_exclusion(world, key[0], key[1], settings["excluded_sources"], queued)
         if reason:
             excluded.append({"video_id": key[0], "clip_id": key[1], "reason": reason})
+            continue
+        length = world.title_length(key[0], key[1]) if cap else None
+        if length is not None and length > cap:
+            title_refused.append({"video_id": key[0], "clip_id": key[1], "length": length, "max_chars": cap})
+            notes.append(f"{key[0]}/{key[1]} : titre d'écran de {length} caractères, plafond {cap} "
+                         "([captions] screen_title_max_chars) : clip écarté")
             continue
         clip["title_style"] = clip_title_style(world.output, key[0], key[1]) if settings["title_ab_enabled"] else None
         for account_id in sorted(clip["accounts"]):
@@ -571,7 +594,8 @@ def _build(day: date, now: datetime, settings: dict[str, Any], config: Config, c
 
     ab_styles = {a["id"]: style for a in active if (style := title_style_for(a["id"], day, settings))}
     ab_refused: list[dict[str, str]] = []
-    pool, excluded = _pool(world, active, settings, notes, day, ab_refused)
+    title_refused: list[dict[str, Any]] = []
+    pool, excluded = _pool(world, active, settings, notes, day, ab_refused, title_refused)
     by_source, every = source_stats(world, active, now, settings)
     if not every:
         notes.append("aucun relevé récent")
@@ -632,7 +656,7 @@ def _build(day: date, now: datetime, settings: dict[str, Any], config: Config, c
     notes.extend(world.notes)
     plan = {"day": day.isoformat(), "computed_at": now.isoformat(), "computed_by": computed_by,
             "status": "proposed", "accounts": plan_accounts, "pool": len(pool), "excluded": excluded,
-            "notes": notes, "validated_at": None, "created": []}
+            "notes": notes, "validated_at": None, "created": [], "title_too_long": title_refused}
     if ab_styles:
         plan["title_ab"] = {"start": settings["title_ab_start"], "styles": ab_styles, "refused": ab_refused}
     return plan
@@ -804,6 +828,7 @@ def line_warnings(plan: dict[str, Any], day: date | str, settings: dict[str, Any
             key = (entry["account"], world.source(entry["video_id"])["source_key"])
             counts[key] = counts.get(key, 0) + 1
     created = {(made["account"], made["video_id"], made["clip_id"]) for made in plan.get("created") or []}
+    cap = world.title_cap()
     every = sorted(((line, account["account"]) for account in plan["accounts"] for line in account["lines"]),
                    key=lambda found: datetime.fromisoformat(found[0]["slot_at"]))
     explorations = 0
@@ -825,4 +850,7 @@ def line_warnings(plan: dict[str, Any], day: date | str, settings: dict[str, Any
                 notes.append(f"plus de {settings['exploration_per_day']} clip(s) d'exploration par jour")
             if line["prime"]:
                 notes.append("clip d'exploration sur un créneau du soir")
+        length = world.title_length(line["video_id"], line["clip_id"]) if cap else None
+        if length is not None and length > cap:
+            notes.append(f"titre d'écran de {length} caractères, plafond {cap} ([captions] screen_title_max_chars)")
         line["warning"] = "; ".join(notes) or None
