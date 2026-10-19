@@ -813,6 +813,9 @@ _EN_WORDS = frozenset(
     "after before never always still even already".split()
 )
 _FR_ONLY_LETTERS = frozenset("éèêëàâùûçôîï")
+# Elision en debut de mot (n'obeit, l'arme, qu'il) : francaise ; « don't »,
+# « it's » ne comptent pas (l'apostrophe y suit une lettre interieure).
+_FR_ELISION_RE = re.compile(r"\b(?:n|l|d|qu|j|c|s|m|t)['’][^\W\d_]", re.IGNORECASE)
 
 
 def _foreign_language(language: str) -> bool:
@@ -830,6 +833,8 @@ def _validate_screen_title_language(screen_title: str, language: str) -> None:
     fr = sum(1 for t in tokens if t in _FR_WORDS)
     en = sum(1 for t in tokens if t in _EN_WORDS)
     if any(c in _FR_ONLY_LETTERS for c in screen_title.lower()):
+        fr += 1
+    if _FR_ELISION_RE.search(screen_title):
         fr += 1
     if fr >= 2 and fr > en:
         raise llm.SchemaError(

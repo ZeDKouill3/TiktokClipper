@@ -2046,6 +2046,26 @@ def test_french_screen_title_on_an_english_video_fails_after_the_repairs(workspa
     assert not (workspace / VIDEO_ID / "captions.json").exists()
 
 
+def test_french_elision_and_accent_title_on_an_english_video_is_refused(workspace, tmp_path):
+    _english_workspace(workspace)
+
+    fake, _ = run(workspace, make_config(tmp_path, screen_title_style="promesse_emoji"),
+                  [answer(screen_title="Son personnage n'obéit plus... 😅"),
+                   answer(screen_title="His character stops obeying... 😅")])
+
+    assert len(fake.calls) == 2
+    assert "langue de la video" in fake.calls[1].prompt
+
+
+def test_english_contractions_are_not_french_elisions(workspace, tmp_path):
+    _english_workspace(workspace)
+
+    fake, _ = run(workspace, make_config(tmp_path),
+                  [answer(screen_title="He can't believe it's café time")])
+
+    assert len(fake.calls) == 1
+
+
 def test_uncertain_language_screen_title_is_not_refused(workspace, tmp_path):
     _english_workspace(workspace)
 
