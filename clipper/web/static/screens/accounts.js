@@ -438,7 +438,7 @@ function accWireList(body) {
 
 function accOpenForm(account) {
   const editing = Boolean(account);
-  const a = account || { label: "", platform: "", username: "", notes: "", has_password: false, service: "tiktok", slots: [], timezone: ACC_DEFAULT_TZ };
+  const a = account || { label: "", platform: "", username: "", notes: "", has_password: false, service: "tiktok", slots: [], timezone: ACC_DEFAULT_TZ, expected_country: "" };
   let slots = (a.slots || []).map((s) => ({ ...s }));
   drawer.open(`
     <div class="drawer-head">
@@ -465,6 +465,8 @@ function accOpenForm(account) {
           <div data-acc-slots-box>${accSlotsEditor(slots)}</div>
           <span class="muted">Créneaux hebdomadaires de ce compte : le calendrier de Publication les propose. Facultatifs.</span></div>
         <div class="field"><label for="acc-timezone">Fuseau horaire des créneaux</label><input class="input mono" id="acc-timezone" name="timezone" maxlength="60" value="${esc(a.timezone || ACC_DEFAULT_TZ)}" placeholder="${ACC_DEFAULT_TZ}"></div>
+        <div class="field"><label for="acc-expected-country">Pays attendu de l'IP (facultatif)</label><input class="input mono" id="acc-expected-country" name="expected_country" maxlength="2" value="${esc(a.expected_country || "")}" placeholder="GB" autocomplete="off">
+          <span class="muted">Code ISO à deux lettres (GB pour un compte UK). Vide : le pays de Réglages &gt; Réseau. Le navigateur de ce compte refuse de s'ouvrir sur une IP d'un autre pays.</span></div>
         <div class="field"><label for="acc-notes">Notes</label><textarea class="input" id="acc-notes" name="notes" rows="2" maxlength="2000" placeholder="ma_chaine, usage, rappel...">${esc(a.notes)}</textarea></div>
       </form>
     </div>
@@ -504,7 +506,7 @@ function accOpenForm(account) {
       $("#acc-form", el).onsubmit = async (e) => {
         e.preventDefault();
         const payload = { service: $("#acc-service", el).value, label: $("#acc-label", el).value, platform: $("#acc-platform", el).value, username: $("#acc-username", el).value, notes: $("#acc-notes", el).value,
-          slots: accReadSlots(slotsBox), timezone: $("#acc-timezone", el).value.trim() };
+          slots: accReadSlots(slotsBox), timezone: $("#acc-timezone", el).value.trim(), expected_country: $("#acc-expected-country", el).value.trim() };
         const password = $("#acc-password", el).value;
         const clear = $("#acc-clear", el);
         if (password) payload.password = password;

@@ -175,3 +175,40 @@ def test_unknown_country_is_a_distinct_error_from_a_wrong_country():
     with pytest.raises(network.NetworkError) as exc:
         network.require_expected_country()
     assert not isinstance(exc.value, network.NetworkUnknown)
+
+
+# ------------------------------------------------------------ TASK-ef6e6c31363f : pays attendu par compte
+
+
+def test_require_with_account_country_passes_uk_ip_even_if_config_says_fr():
+    network.use_fetcher(_uk)
+    network.require_expected_country(expected="gb")  # défaut [network] = FR, le compte prime
+
+
+def test_require_with_account_country_refuses_fr_ip_naming_account_and_both_countries():
+    network.use_fetcher(_fr)
+    with pytest.raises(network.NetworkError) as exc:
+        network.require_expected_country(expected="GB", account="ClipManiaq3")
+    assert str(exc.value) == (
+        "compte ClipManiaq3 : IP en France (attendu Royaume-Uni) : passe sur le partage de connexion du téléphone"
+    )
+
+
+def test_require_with_account_country_unknown_ip_is_network_unknown():
+    def boom(url):
+        raise OSError("down")
+
+    network.use_fetcher(boom)
+    with pytest.raises(network.NetworkUnknown) as exc:
+        network.require_expected_country(expected="GB", account="ClipManiaq3")
+    assert "compte ClipManiaq3" in str(exc.value)
+    assert "attendu Royaume-Uni" in str(exc.value)
+
+
+def test_require_without_account_country_keeps_config_value():
+    network.use_fetcher(_uk)
+    with pytest.raises(network.NetworkError):
+        network.require_expected_country(expected=None)
+    network.reset()
+    network.use_fetcher(_fr)
+    network.require_expected_country(expected="")
