@@ -639,10 +639,10 @@ def _repartition_section() -> str:
     return text[start:body + following.start()] if following else text[start:]
 
 
-def _unreleased_changelog() -> str:
-    """Section de la version en cours : [Non publié] est vide juste après une publication."""
+def _unreleased_changelog(version: str | None = None) -> str:
+    """Section d'une version (par défaut la version en cours : [Non publié] est vide juste après une publication)."""
     text = CHANGELOG.read_text(encoding="utf-8")
-    start = text.index(f"## [{_current_version()}]")
+    start = text.index(f"## [{version or _current_version()}]")
     following = re.search(r"^## \[", text[start + 1:], flags=re.MULTILINE)
     return text[start:start + 1 + following.start()] if following else text[start:]
 
@@ -678,14 +678,14 @@ def test_readme_repartition_defaults_match_config_defaults():
 
 
 def test_changelog_unreleased_lists_the_5_of_5_repartition_entry():
-    unreleased = _unreleased_changelog()
+    unreleased = _unreleased_changelog("0.7.0")  # publiée en 0.7.0
     marker = "Répartition automatique (5/5, SPEC-78dc"
     assert marker in unreleased
     assert "README" in unreleased.split(marker, 1)[1].split("\n", 1)[0]
 
 
 def test_changelog_unreleased_says_the_bonus_min_age_changed():
-    unreleased = _unreleased_changelog()
+    unreleased = _unreleased_changelog("0.7.0")  # publiée en 0.7.0
     assert "bonus_min_age_h" in unreleased and "Modifié" in unreleased
 
 

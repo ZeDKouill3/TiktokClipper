@@ -37,7 +37,8 @@ def candidates(n=3):
 
 
 def make_config(jury_table=None, llm_table=None):
-    sections = {}
+    # Jamais le vrai state/jury_weights.json (recalibre par les releves) : sans poids par defaut.
+    sections = {"jury_calibration": {"weights_path": "tests/__absent__/jury_weights.json"}}
     if jury_table is not None:
         sections["jury"] = jury_table
     if llm_table is not None:
