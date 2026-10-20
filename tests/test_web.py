@@ -2063,6 +2063,8 @@ def _clips_setup(tmp_path):
     _write_clip(tmp_path, CLIPS_VIDEO, _clip_sidecar("02", qa_status="rejected", ready=False, issues=["sous-titres hors zone"]))
     _write_clip(tmp_path, CLIPS_VIDEO, _clip_sidecar("03"))
     _write_clip(tmp_path, "othervideo01", {**_clip_sidecar("01"), "video_id": "othervideo01"})
+    (tmp_path / "workspace" / CLIPS_VIDEO / "captions.json").write_text(json.dumps({"video_id": CLIPS_VIDEO, "clips": [
+        {"id": cid, "screen_title": f"Titre {cid}"} for cid in ("01", "02", "03")]}), encoding="utf-8")
     _write_publish(tmp_path, "ma_chaine", [
         _entry("01", "scheduled", slot_at="2026-10-02T18:00:00+00:00"),
         _entry("03", "failed", error="quota depasse"),
@@ -2251,6 +2253,21 @@ def test_patch_screen_title_enqueues_a_targeted_render_after_confirmation(tmp_pa
     assert resp.status_code == 202
     assert calls == [(CLIPS_VIDEO, "ma_chaine", "render", ["render", "qa"])]
     assert resp.json()["rerender"]["action"] == "render"
+    # le nouveau titre est dans captions.json, que render relit (sinon l'ancien titre est redessiné)
+    captions = json.loads((tmp_path / "workspace" / CLIPS_VIDEO / "captions.json").read_text(encoding="utf-8"))
+    assert [c["screen_title"] for c in captions["clips"]] == ["Nouveau titre", "Titre 02", "Titre 03"]
+
+
+def test_patch_screen_title_without_captions_json_is_409_and_nothing_is_rerendered(tmp_path, isolated_cwd, monkeypatch):
+    from clipper import worker
+
+    _clips_setup(tmp_path)
+    (tmp_path / "workspace" / CLIPS_VIDEO / "captions.json").unlink()
+    monkeypatch.setattr(worker, "enqueue", lambda *a, **kw: pytest.fail("titre non écrit : pas de re-rendu"))
+
+    resp = client(tmp_path).patch(f"/api/clips/{CLIPS_VIDEO}/01", json={"screen_title": "Nouveau", "confirm": True})
+
+    assert resp.status_code == 409 and "captions.json" in resp.json()["detail"]
 
 
 def test_patch_caption_and_screen_title_does_both(tmp_path, isolated_cwd, monkeypatch):

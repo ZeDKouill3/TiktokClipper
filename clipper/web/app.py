@@ -3077,6 +3077,12 @@ def create_app(config: Config | None = None) -> FastAPI:
                     output_dir=Path(config.output_dir), state_dir=_publish_dir(config))
             except publish_mod.PublishError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if retitle:
+            try:
+                publish_mod.edit_screen_title(video_id, clip_id, body.screen_title,
+                                              workspace_dir=config.workspace_dir)
+            except publish_mod.PublishError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
         entry = _enqueue_clip_render(video_id, config) if retitle else None
         clip = _clip_view(sidecar, channel, _publish_entries(config, channel).get((video_id, clip_id)),
                           _moments_jury_confidences(config, video_id),

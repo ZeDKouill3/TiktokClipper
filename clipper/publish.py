@@ -1154,6 +1154,27 @@ def edit_caption(
     return sidecar
 
 
+def edit_screen_title(
+    video_id: str,
+    clip_id: str,
+    screen_title: str,
+    *,
+    workspace_dir: str | Path = "workspace",
+) -> None:
+    """Reecrit le titre d'ecran du clip dans captions.json, que render relit : sans cela le re-rendu demande
+    par l'ecran Clips redessinait l'ancien titre (releve reel 2026-10-20, xqc/09). ``PublishError`` si
+    captions.json ou le clip y manque."""
+    path = Path(workspace_dir) / video_id / "captions.json"
+    if not path.is_file():
+        raise PublishError(f"captions.json introuvable pour {video_id} ({path}) : titre d'écran non modifiable")
+    captions = json.loads(path.read_text(encoding="utf-8"))
+    clip = next((c for c in captions.get("clips") or [] if c.get("id") == clip_id), None)
+    if clip is None:
+        raise PublishError(f"clip {clip_id} absent de captions.json pour {video_id} : titre d'écran non modifiable")
+    clip["screen_title"] = screen_title
+    channel_mod.atomic_write_json(path, captions)
+
+
 def list_pending(
     channel: str,
     *,
