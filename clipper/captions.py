@@ -807,7 +807,7 @@ def _validate_promesse_emoji(screen_title: str) -> None:
 _FR_WORDS = frozenset(
     "le la les un une des du de et est il elle ils elles lui je tu nous vous sans pour dans avec sur "
     "pas ne ce cette qui que mais ou ses leur leurs tout tous fait veut peut mon ma mes ton ta tes "
-    "notre votre comme entre apres avant jamais toujours encore meme deja".split()
+    "notre votre comme entre apres avant jamais toujours encore meme deja en au aux sa tres".split()
 )
 _EN_WORDS = frozenset(
     "the a an and is are was were he she they his her their with without for to of in on it its this "
@@ -815,9 +815,9 @@ _EN_WORDS = frozenset(
     "after before never always still even already".split()
 )
 _FR_ONLY_LETTERS = frozenset("éèêëàâùûçôîï")
-# Elision en debut de mot (n'obeit, l'arme, qu'il) : francaise ; « don't »,
-# « it's » ne comptent pas (l'apostrophe y suit une lettre interieure).
-_FR_ELISION_RE = re.compile(r"\b(?:n|l|d|qu|j|c|s|m|t)['’][^\W\d_]", re.IGNORECASE)
+# Elision en debut de mot (n'obeit, l'arme, qu'il) : francaise, vaut deux indices ; « don't »,
+# « it's » ne comptent pas (l'apostrophe y suit une lettre interieure), « c'mon » non plus.
+_FR_ELISION_RE = re.compile(r"\b(?!c['’]mon\b)(?:n|l|d|qu|j|c|s|m|t)['’][^\W\d_]", re.IGNORECASE)
 
 
 def _foreign_language(language: str) -> bool:
@@ -837,7 +837,7 @@ def _validate_screen_title_language(screen_title: str, language: str) -> None:
     if any(c in _FR_ONLY_LETTERS for c in screen_title.lower()):
         fr += 1
     if _FR_ELISION_RE.search(screen_title):
-        fr += 1
+        fr += 2
     if fr >= 2 and fr > en:
         raise llm.SchemaError(
             f"screen_title est en francais alors que la langue de la video est {language!r} : "

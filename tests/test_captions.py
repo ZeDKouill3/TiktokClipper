@@ -2067,11 +2067,30 @@ def test_french_elision_and_accent_title_on_an_english_video_is_refused(workspac
     assert "langue de la video" in fake.calls[1].prompt
 
 
+def test_french_elision_without_accent_on_an_english_video_is_refused(workspace, tmp_path):
+    _english_workspace(workspace)
+
+    fake, _ = run(workspace, make_config(tmp_path, screen_title_style="promesse_emoji"),
+                  [answer(screen_title="Dernier essai, l'avenir en jeu... \U0001F62C"),
+                   answer(screen_title="One last try, all in... \U0001F62C")])
+
+    assert len(fake.calls) == 2
+    assert "langue de la video" in fake.calls[1].prompt
+
+
 def test_english_contractions_are_not_french_elisions(workspace, tmp_path):
     _english_workspace(workspace)
 
     fake, _ = run(workspace, make_config(tmp_path),
                   [answer(screen_title="He can't believe it's café time")])
+
+    assert len(fake.calls) == 1
+
+
+def test_cmon_is_not_a_french_elision(workspace, tmp_path):
+    _english_workspace(workspace)
+
+    fake, _ = run(workspace, make_config(tmp_path), [answer(screen_title="C'mon, one more round")])
 
     assert len(fake.calls) == 1
 
