@@ -116,6 +116,9 @@ content_check_ok = "text=/Aucun problème constaté/"
 # reessayer plus tard. » + lien « Reessayer » (vise par son texte).
 content_check_error = "text=/Une erreur est survenue/"
 content_check_retry = 'text=/^\s*Réessayer\s*$/'
+# Limite quotidienne (releves reels 2026-10-04 et 2026-10-20) : « Tu as atteint la limite de verifications pour
+# aujourd'hui. Reessaie demain. » sous l'interrupteur.
+content_check_limit = "text=/limite de vérifications/i"
 # :has-text ignore la casse et cherche un fragment : « Aucun problème constaté » contient « problème constaté ».
 content_check_problem = "div:has-text('problème constaté'):not(:has-text('Aucun problème')), div:has-text('problème détecté'):not(:has-text('Aucun problème'))"
 # Interrupteur de la verification de contenu : le libelle exact, puis l'interrupteur du bloc le plus proche.

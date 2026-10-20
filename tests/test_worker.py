@@ -1504,6 +1504,21 @@ def test_a_content_check_timeout_fails_the_clip_and_does_not_halt_the_account(tm
     assert _entries(tmp_path)[1]["status"] == "published"
 
 
+def test_the_daily_content_check_limit_halts_the_account_on_the_first_clip(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch, tiktok_settings={"max_posts_per_day": 5, "min_gap_minutes": 0})
+    _seed(tmp_path, "ma_chaine", "01", _ago(minutes=2))
+    _seed(tmp_path, "ma_chaine", "02", _ago(minutes=1))
+    pub = FakePublisher(error=tiktok.TikTokStop("content_check_limit", "limite quotidienne atteinte", None))
+    w = _pub_worker(config, pub)
+
+    w.tick()
+    w.tick()  # 02 n'est pas tenté : la limite vaut pour tout le compte
+
+    first, second = _entries(tmp_path)
+    assert first["status"] == "failed" and first["halted"] is True
+    assert len(pub.calls) == 1 and second["status"] == "scheduled"
+
+
 def test_two_content_check_stops_in_a_row_on_two_clips_halt_the_account(tmp_path, monkeypatch):
     config = _pub_env(tmp_path, monkeypatch, tiktok_settings={"max_posts_per_day": 5, "min_gap_minutes": 0})
     _seed(tmp_path, "ma_chaine", "01", _ago(minutes=3))

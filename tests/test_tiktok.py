@@ -1035,6 +1035,19 @@ def test_content_check_timeout_is_an_explicit_r4_failure(tmp_path, monkeypatch):
     assert env.page.waits == 2 and env.page.posted == []
 
 
+def test_content_check_daily_limit_stops_at_once_without_waiting_for_the_timeout(tmp_path, monkeypatch):
+    # Relevé réel 2026-10-20 : « Tu as atteint la limite de vérifications pour aujourd'hui. Réessaie demain. »
+    # en mode wait, deux fois 900 s d'attente pour rien avant l'arrêt du compte.
+    env = Env(tmp_path, monkeypatch, page_kwargs={"check": "running"})
+    env.page.present.add(_sel()["selectors"]["content_check_limit"])
+
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        env.publish()
+
+    assert stop.value.code == "content_check_limit" and "demain" in str(stop.value)
+    assert env.page.waits == 0 and env.page.posted == []
+
+
 def test_content_check_timeout_defaults_to_900_seconds_and_is_validated(tmp_path):
     assert tiktok.CONFIG_DEFAULTS["content_check_timeout_s"] == 900
     for bad in (0, -1, "900", True):

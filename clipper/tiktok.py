@@ -119,7 +119,8 @@ class TikTokError(Exception):
 
 class TikTokStop(TikTokError):
     """Arret sur de la page (SPEC-9225 R4). ``code`` : captcha | verification | login |
-    element_missing | unexpected_page | content_check | content_check_refused | publish_unconfirmed ; ``capture`` : la capture d'ecran, ou None."""
+    element_missing | unexpected_page | content_check | content_check_limit | content_check_refused | publish_unconfirmed ;
+    ``capture`` : la capture d'ecran, ou None."""
 
     def __init__(self, code: str, reason: str, capture: Path | None = None) -> None:
         super().__init__(reason)
@@ -783,7 +784,7 @@ class _Flow:
         switch = self.page.query_selector(self.sel["selectors"]["content_check_switch"])
         if switch is None:
             raise self.stop("element_missing", "interrupteur « Vérification de contenu simple » introuvable")
-        limit_reached = self.page.query_selector("text=/limite de vérifications/i") is not None
+        limit_reached = self.page.query_selector(self.sel["selectors"]["content_check_limit"]) is not None
         if switch.is_checked() and (switch.is_disabled() or limit_reached):
             # Limite quotidienne de vérifications atteinte : TikTok grise l'interrupteur (« Tu as atteint la
             # limite de vérifications pour aujourd'hui »), aucune vérification ne tourne, rien à couper.
@@ -854,6 +855,11 @@ class _Flow:
             if not running and self.shown(sel["content_check_ok"]):
                 logger.info("TikTok %s : vérification de contenu sans problème constaté", self.account)
                 return
+            # Limite quotidienne atteinte (relevé réel 2026-10-20, 20 publications dans la journée) : aucun scan ne
+            # tournera avant demain, attendre le délai ne sert à rien ; le compte s'arrête tout de suite.
+            if self.shown(sel["content_check_limit"]):
+                raise self.stop("content_check_limit", "limite quotidienne de vérifications de contenu atteinte "
+                                                       "(« Réessaie demain ») : compte à reprendre demain")
             if waited >= timeout:
                 raise self.stop("content_check", f"vérification de contenu non terminée après {timeout:g} s "
                                                  f"([tiktok] content_check_timeout_s)")
