@@ -124,8 +124,9 @@ content_check_switch = "text=\"Vérification de contenu simple\" >> xpath=ancest
 post_button = "button[data-e2e='post_video_button']"
 # Abandon du brouillon (non utilise : un arret laisse la page telle quelle, avec sa capture).
 discard_button = "button[data-e2e='discard_post_button']"
-# Preuve de secours d'une publication : le message « Video publiee » (la preuve principale est la navigation).
-published_marker = "div:has-text('Vidéo publiée')"
+# Preuve de secours d'une publication : le message « Video publiee », ou la fenetre « Video programmee ! »
+# d'un post programme (20/10 : affichee a la place de la navigation) ; la preuve principale est la navigation.
+published_marker = "div:has-text('Vidéo publiée'), div:has-text('Vidéo programmée')"
 
 [labels]
 # Texte du bouton final selon le mode ; un autre texte = page inattendue, arret.

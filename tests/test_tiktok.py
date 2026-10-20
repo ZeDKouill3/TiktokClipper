@@ -1444,6 +1444,7 @@ def test_selectors_file_carries_the_publication_proof_post_link_and_analytics_ma
     data = _sel()
     assert data["expect"]["published_url_prefix"] == "https://www.tiktok.com/tiktokstudio/content"
     assert "Vidéo publiée" in data["selectors"]["published_marker"]
+    assert "Vidéo programmée" in data["selectors"]["published_marker"]  # fenetre d'un post programme
     assert data["continue_publish"] == {"dialog": "Continuer à publier", "cancel": "Annuler"}
     assert data["stats"]["post_link"] == "a[href*='/video/']"
     assert data["urls"]["analytics"] == "https://www.tiktok.com/tiktokstudio/analytics/{post_id}?qa_enter_from=analytics"
