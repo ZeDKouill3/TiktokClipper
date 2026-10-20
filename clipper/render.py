@@ -182,6 +182,8 @@ CONFIG_DEFAULTS: dict[str, object] = {
     "cta_handle": "",
     "cta_seconds": 2.0,
     "cta_text": "Abonne-toi !",
+    # Bande « Partie N » d'une série ; {n} = numéro de partie (preset EN : "Part {n}").
+    "part_label": "Partie {n}",
     # Pseudo de chaîne, sous le titre d'écran, dans la même bande floue du
     # haut (texte discret, sans encadré) : tailles en pixels d'em.
     "cta_handle_font_size": 32,
@@ -1527,7 +1529,7 @@ def render(
                 badge_input = len(extra_inputs)
             if clip["parts_total"] > 1:
                 part_path = scratch_dir / "part.txt"
-                part_path.write_text(f"Partie {clip['part']}", encoding="utf-8")
+                part_path.write_text(str(settings["part_label"]).format(n=clip["part"]), encoding="utf-8")
             if cta_applies:
                 card_png = scratch_dir / "cta_card.png"
                 cta_card_png(str(settings["cta_text"]), reframe_data["text_zones"]["subtitles"], settings, card_png)

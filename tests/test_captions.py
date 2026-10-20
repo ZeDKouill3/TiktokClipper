@@ -704,6 +704,16 @@ def test_multipart_title_is_requested_once_and_every_part_gets_the_suffix(worksp
     assert len(fake.calls) == 3
 
 
+def test_multipart_title_suffix_follows_part_title_suffix(workspace, tmp_path):
+    write_moments(workspace, moment(0))
+    write_parts(workspace, parts_record(0, "multipart", 2, [part(1, 0.0, 1.0), part(2, 5.0, 6.0)]))
+
+    run(workspace, make_config(tmp_path, part_title_suffix=" (Part {n})"),
+        [answer(title="Big story"), answer(include_title=False, include_screen_title=False)])
+
+    assert [c["title"] for c in read_captions(workspace)["clips"]] == ["Big story (Part 1)", "Big story (Part 2)"]
+
+
 def test_multipart_only_the_first_call_schema_requires_title(workspace, tmp_path):
     write_moments(workspace, moment(0))
     write_parts(

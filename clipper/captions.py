@@ -85,6 +85,8 @@ from clipper import llm
 
 CONFIG_DEFAULTS: dict[str, object] = {
     "title_max_chars": 100,
+    # Suffixe du title d'une serie ; {n} = numero de partie (preset EN : " (Part {n})").
+    "part_title_suffix": " (Partie {n})",
     "caption_max_chars": 300,
     "hashtags_max": 8,
     "hook_words_max": 8,
@@ -1029,7 +1031,7 @@ def _process_moment(
         request_title = title is None
         schema_settings = settings
         if request_title and parts_total > 1:
-            suffix_len = len(f" (Partie {parts_total})")
+            suffix_len = len(str(settings["part_title_suffix"]).format(n=parts_total))
             schema_settings = {
                 **settings,
                 "title_max_chars": max(1, int(settings["title_max_chars"]) - suffix_len),
@@ -1061,7 +1063,7 @@ def _process_moment(
             screen_title = answer["screen_title"]
         if request_title:
             title = answer["title"]
-        final_title = title if parts_total == 1 else f"{title} (Partie {part['part']})"
+        final_title = title if parts_total == 1 else title + str(settings["part_title_suffix"]).format(n=part["part"])
         clips.append({
             "id": _clip_id(moment["id"], part["part"], parts_total),
             "moment_id": moment["id"],

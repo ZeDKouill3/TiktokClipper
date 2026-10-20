@@ -176,6 +176,7 @@ const FIELD_LABELS = {
   "render.cta_handle": "Pseudo de l'appel à l'abonnement",
   "render.cta_seconds": "Durée de l'appel à l'abonnement (secondes)",
   "render.cta_text": "Texte de l'appel à l'abonnement",
+  "render.part_label": "Bande « Partie N » ({n} = numéro)",
   "render.cta_handle_font_size": "Taille du pseudo de l'appel",
   "render.cta_handle_font_size_min": "Taille minimale du pseudo de l'appel",
   "render.cta_handle_font_size_step": "Pas de réduction du pseudo de l'appel",

@@ -1141,6 +1141,25 @@ def test_letterbox_partie_text_is_partie_n(tmp_path, letterbox_dir, monkeypatch,
     assert seen == ["Partie 2"]
 
 
+def test_letterbox_part_label_follows_render_part_label(tmp_path, letterbox_dir, monkeypatch, cpu_device):
+    from clipper.render import render
+
+    (letterbox_dir / f"{VIDEO_ID}.mp4").write_bytes(b"")
+    (letterbox_dir / "captions.json").write_text(
+        json.dumps(_captions_json(part=2, parts_total=3)), encoding="utf-8")
+    seen = []
+
+    def run(cmd, cwd, out_path):
+        seen.append((Path(cwd) / "part.txt").read_text(encoding="utf-8"))
+        Path(out_path).write_bytes(b"mp4")
+
+    monkeypatch.setattr("clipper.render._exec_ffmpeg", run)
+    render(VIDEO_ID, CLIP_ID, workspace_dir=letterbox_dir.parent, output_dir=tmp_path / "output",
+           config=make_config(part_label="Part {n}"))
+
+    assert seen == ["Part 2"]
+
+
 def test_letterbox_partie_too_big_for_its_zone_is_an_explicit_error(tmp_path, letterbox_dir, fake_ffmpeg, cpu_device):
     from clipper.render import RenderError, render
 
