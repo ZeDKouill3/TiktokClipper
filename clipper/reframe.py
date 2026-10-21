@@ -2210,9 +2210,12 @@ def _stable_face_over_null(
     de la video (``periods`` : candidats de chacune), est retenu malgre la
     reponse de Claude (override journalise). Renvoie (retenu | None, ecartes) :
     les candidats stables mais non persistants (visages de menus) ne
-    contredisent pas Claude ; plusieurs persistants = erreur explicite (ADR-ad2e).
+    contredisent pas Claude. Plusieurs persistants : aucun ne peut etre choisi
+    sans deviner, Claude fait foi (photos des joueurs sur l'ecran d'attente d'un
+    tournoi, Knockout Series 21/10) et ils sont rendus comme ecartes.
     Avec au plus une periode, rien n'est persistant : jamais d'override, tous
-    les candidats stables sont rendus comme ecartes (TASK-cee612eefa16)."""
+    les candidats stables sont rendus comme ecartes (TASK-cee612eefa16).
+    Le troisieme element dit pourquoi les ecartes ne renversent pas Claude."""
     top = max(c["support"] for c in candidates)
     floor = float(settings["facecam_face_stable_share"]) * top - 1e-9
     stable = [c for c in candidates if c["support"] >= floor and (c.get("face_support") or 0) >= floor]
@@ -2222,15 +2225,12 @@ def _stable_face_over_null(
         # passent pour des visages, cas Hellraiser, audit 10/10 image-I1) :
         # Claude fait foi, pas d'erreur bloquante ; l'appelant journalise les
         # candidats ecartes.
-        return None, stable
+        return None, stable, "une seule periode a des candidats, persistance non prouvee, Claude fait foi"
     keep = [c for c in stable if _persistent(c, periods, settings, same_content)]
-    dropped = [c for c in stable if c not in keep]
     if len(keep) > 1:
-        raise ReframeError(
-            "[reframe] Claude a repondu aucune webcam alors que plusieurs candidats visage stables et persistants "
-            f"existent ({sorted(c['id'] for c in keep)}) : choix impossible sans deviner"
-        )
-    return (keep[0] if keep else None), dropped
+        return None, stable, (f"plusieurs persistants ({sorted(c['id'] for c in keep)}), choix impossible sans "
+                              "deviner, Claude fait foi")
+    return (keep[0] if keep else None), [c for c in stable if c not in keep], "pas persistants sur la video"
 
 
 def _same_content_across(period_inputs: Sequence[dict[str, Any]], settings: dict[str, Any]) -> Callable[..., bool]:
@@ -2415,16 +2415,11 @@ def detect_facecam(
             chosen = None
             better = None
             if answer["webcam"] is None:
-                better, dropped = _stable_face_over_null(
+                better, dropped, why = _stable_face_over_null(
                     candidates, settings, [i["candidates"] for i in period_inputs if i["candidates"]],
                     _same_content_across(period_inputs, settings),
                 )
                 if dropped:
-                    single = sum(1 for i in period_inputs if i["candidates"]) <= 1
-                    why = (
-                        "une seule periode a des candidats, persistance non prouvee, Claude fait foi" if single
-                        else "pas persistants sur la video"
-                    )
                     log.warning(
                         "%s : periode %d, candidat(s) visage %s ecarte(s) : stables ici mais %s (visages du jeu ou "
                         "du decor, pas une webcam)", video_id, index, sorted(c["id"] for c in dropped), why,

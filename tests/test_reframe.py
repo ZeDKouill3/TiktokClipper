@@ -3132,17 +3132,23 @@ def test_null_answer_with_two_stable_faces_on_a_single_period_is_trusted_and_log
     assert "ecarte" in caplog.text and "une seule periode" in caplog.text
 
 
-def test_null_answer_with_two_persistent_faces_over_several_periods_is_an_explicit_error(
-    tmp_path, video_dir, monkeypatch
+def test_null_answer_with_two_persistent_faces_over_several_periods_is_trusted_and_logged(
+    tmp_path, video_dir, monkeypatch, caplog
 ):
-    from clipper.reframe import ReframeError
-
+    """21/10 (Knockout Series, Rocket League) : les photos des joueurs de
+    l'ecran d'attente d'un tournoi sont des visages stables et persistants.
+    Plusieurs persistants ne se departagent pas sans deviner : Claude fait foi,
+    la video n'est plus bloquee, les candidats ecartes sont nommes."""
     _same_content_everywhere(monkeypatch)
     twice = [MENUS[0], MENUS[0]]  # memes rectangles dans les deux periodes : persistants
     _menu_faces_period(monkeypatch, video_dir, menus_per_period=[twice[0][:1], twice[1][:1]])
-    with pytest.raises(ReframeError, match="plusieurs"):
-        run_detect(tmp_path, [webcam_answer(None)] * 2)
-    assert not (tmp_path / "workspace" / VIDEO_ID / "facecam.json").exists()
+    with caplog.at_level("WARNING"):
+        path, _ = run_detect(tmp_path, [webcam_answer(None, "photos des joueurs")] * 2)
+
+    for period in load(path)["periods"]:
+        assert period["facecam"] is None and period.get("override") is None
+        assert "aucune webcam" in period["reason"] and "plusieurs persistants" in period["reason"]
+    assert "plusieurs persistants" in caplog.text
 
 
 def test_null_answer_without_a_stable_face_stays_letterbox(tmp_path, video_dir, monkeypatch):
@@ -3490,11 +3496,11 @@ def test_stable_face_over_null_never_overrides_on_a_single_period():
     from clipper import reframe
 
     s = dict(reframe.CONFIG_DEFAULTS)
-    better, dropped = reframe._stable_face_over_null([_HUD, _CLOUD], s, periods=[[_HUD, _CLOUD]])
+    better, dropped, _ = reframe._stable_face_over_null([_HUD, _CLOUD], s, periods=[[_HUD, _CLOUD]])
     assert better is None and [c["id"] for c in dropped] == [4]
-    better, dropped = reframe._stable_face_over_null([_HUD, _CLOUD], s, periods=())
+    better, dropped, _ = reframe._stable_face_over_null([_HUD, _CLOUD], s, periods=())
     assert better is None and [c["id"] for c in dropped] == [4]
-    better, dropped = reframe._stable_face_over_null([_HUD, _CLOUD], s, periods=[[_HUD, _CLOUD], [_CLOUD]])
+    better, dropped, _ = reframe._stable_face_over_null([_HUD, _CLOUD], s, periods=[[_HUD, _CLOUD], [_CLOUD]])
     assert better is _CLOUD and dropped == []
 
 
