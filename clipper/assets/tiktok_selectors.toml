@@ -106,6 +106,13 @@ schedule_date_picker = "[data-e2e='schedule_container'] div[role='combobox'][ari
 schedule_time_picker = "[data-e2e='schedule_container'] div[role='combobox'][aria-label='Select time']"
 schedule_fields = "[data-e2e='schedule_container'] div[role='combobox'][aria-label='Select date'], [data-e2e='schedule_container'] input.TUXTextInputCore-input"
 schedule_timezone = "[data-e2e='schedule_container'] .timezone-select input.Select__searchInput"
+# Calendrier DatePicker de la liste date (releve reel 2026-10-26 17:19, portail div.Picker__panel.schedule-picker-panel) : titre
+# mois / annee (boutons), fleches (1re = mois precedent, 2e = suivant), jours du mois affiche non grises seulement
+# (data-outside=false : les jours du mois voisin sont aussi grises, disabled ; data-disabled=false : jours passes exclus).
+datepicker_month = "div.schedule-picker-panel button.DatePicker__titleMonth"
+datepicker_year = "div.schedule-picker-panel button.DatePicker__titleYear"
+datepicker_nav = "div.schedule-picker-panel button.DatePicker__nav"
+datepicker_day = "div.schedule-picker-panel button.DatePicker__day[data-outside='false'][data-disabled='false']"
 picker_option = "[role='option']"
 picker_value = "span.Picker__value"
 # Calendrier : titres du mois et de l'annee, fleches (la 1re = mois precedent, la 2e = suivant),
@@ -166,8 +173,8 @@ months_short = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "aoû
 [modal]
 # Fenetres et bulles surgissantes (A VERIFIER : generique). Chacune doit etre connue ([popups]),
 # sinon arret R4. Bouton : {label} est remplace par le libelle du [popups] (sans guillemet double).
-# Un menu deroulant ouvert (visibilite...) porte aussi role=dialog : il contient des role=option, exclu.
-container = "[role='dialog']:not(:has([role='option'])), [aria-modal='true']:not(:has([role='option'])), .TUXModal-overlay:not(:has([role='option']))"
+# Un menu deroulant ouvert (visibilite...) porte aussi role=dialog : il contient des role=option, exclu. Le panneau de\n# programmation ouvert (div.Picker__panel.schedule-picker-panel : calendrier DatePicker de la date, liste de l'heure) est\n# aussi un role=dialog, dans un portail : c'est le selecteur lui-meme, pas une fenetre surgissante (releve 2026-10-26).
+container = "[role='dialog']:not(:has([role='option'])):not(:has(.schedule-picker-panel)), [aria-modal='true']:not(:has([role='option'])):not(:has(.schedule-picker-panel)), .TUXModal-overlay:not(:has([role='option'])):not(:has(.schedule-picker-panel))"
 button = "button:has-text(\"{label}\"), [role='button']:has-text(\"{label}\")"
 # Fenetre « Activer les verifications automatiques du contenu ? » (releve reel 2026-10-08) : un TUXModal-overlay dans un
 # portail, SANS role=dialog ni aria-modal (d'ou le 3e terme du conteneur). Fragment de son texte, pour signaler sa fermeture.

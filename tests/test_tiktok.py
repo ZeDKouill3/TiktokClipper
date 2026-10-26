@@ -3766,7 +3766,9 @@ def test_a_post_really_absent_from_the_whole_scrolled_list_stays_unfound(tmp_pat
 from html.parser import HTMLParser
 
 SCHEDULE_LISTS_FIXTURE = ROOT / "tests" / "fixtures" / "tiktok" / "studio_schedule_lists_20261026.html"
-_VOID = {"input", "br", "img", "meta", "link", "hr"}
+# Page REELLE entiere (releve 2026-10-26 17:19, ClippTVFR) au moment de l'arret : la liste date est ouverte sur son calendrier.
+CALENDAR_OPEN_FIXTURE = ROOT / "tests" / "fixtures" / "tiktok" / "studio_schedule_calendar_open_20261026.html"
+_VOID ={"input", "br", "img", "meta", "link", "hr"}
 
 
 class _Node:
@@ -3860,23 +3862,38 @@ class DomElement:
         return DomElement(self.page, hits[0]) if hits else None
 
 
+def _CALENDAR_PORTAL():
+    """Le HTML du calendrier (div role=dialog du portail) tel que la capture reelle le contient."""
+    raw = CALENDAR_OPEN_FIXTURE.read_text(encoding="utf-8")
+    start = raw.index('<div tabindex="-1" data-floating-ui-focusable="" id=":r61:" role="dialog"')
+    depth = 0
+    for match in re.finditer(r"<(/?)div\b[^>]*>", raw[start:]):
+        depth += -1 if match[1] else 1
+        if depth == 0:
+            return raw[start:start + match.end()]
+    raise AssertionError("calendrier de la capture non refermé")
+
+
 class ScheduleListsPage:
     """Le bloc reel « Quand publier » ; ouvrir une liste propose des [role='option'] simules, en choisir un met sa
     valeur dans span.Picker__value (comme la page)."""
 
     url = "https://www.tiktok.com/tiktokstudio/upload"
 
-    def __init__(self, html=None, *, step=15):
+    def __init__(self, html=None, *, step=15, unknown_time_panel=False):
         builder = _Builder()
         builder.feed(html if html is not None else SCHEDULE_LISTS_FIXTURE.read_text(encoding="utf-8"))
-        self.root, self.step = builder.root, step
+        self.root, self.step, self.unknown_time_panel = builder.root, step, unknown_time_panel
         self.clicks: list[_Node] = []
         self.options: list[_Node] = []
         self.open_picker: _Node | None = None
+        self.calendar: _Node | None = None
 
     def _elements(self, css):
         if css == "[role='option']":
             return [DomElement(self, o) for o in self.options]
+        if css == _sel()["modal"]["container"]:
+            return self._modal_containers(css)
         return [DomElement(self, n) for n in _select([self.root], css)]
 
     def query_selector(self, css):
@@ -3906,14 +3923,86 @@ class ScheduleListsPage:
         field = next(n for n in self.root.descendants() if "Select__searchInput" in n.attrs.get("class", ""))
         field.attrs["value"] = label
 
+    def _modal_containers(self, css):
+        """``[modal] container`` rejoue : « base:not(:has(x)) » = les noeuds de base sans descendant x."""
+        found = []
+        for alternative in css.split(", "):
+            base = re.sub(r":not\(:has\([^)]*\)\)", "", alternative)
+            excluded = re.findall(r":not\(:has\(([^)]*)\)\)", alternative)
+            for node in _select([self.root], base):
+                if not any(_select([node], x) for x in excluded):
+                    found.append(node)
+        return [DomElement(self, n) for n in found]
+
+    def _calendar_days(self, panel):
+        return [n for n in panel.descendants() if "DatePicker__day" in n.attrs.get("class", "").split()]
+
+    def _open_calendar(self):
+        """Le calendrier REEL (portail de la capture 2026-10-26) ajoute a la page, comme au clic sur la liste date."""
+        raw = _CALENDAR_PORTAL()
+        builder = _Builder()
+        builder.feed(raw)
+        panel = builder.root.children[0]
+        panel.parent = self.root
+        self.root.children.append(panel)
+        self.calendar = panel
+
+    def _step_month(self, panel, delta):
+        title = {n.attrs["class"]: n for n in panel.descendants() if n.attrs.get("class") in ("DatePicker__titleMonth", "DatePicker__titleYear")}
+        months = _sel()["calendar"]["months"]
+        index = months.index(title["DatePicker__titleMonth"].text().casefold()) + delta
+        year = int(title["DatePicker__titleYear"].text()) + index // 12
+        index %= 12
+        title["DatePicker__titleMonth"].parts, title["DatePicker__titleMonth"].children = [months[index].capitalize()], []
+        title["DatePicker__titleYear"].parts, title["DatePicker__titleYear"].children = [str(year)], []
+        days = next(n for n in panel.descendants() if n.attrs.get("class") == "DatePicker__days")
+        first = datetime(year, index + 1, 1)
+        start = first - timedelta(days=(first.weekday() + 1) % 7)   # grille commencant le dimanche
+        html = ""
+        for offset in range(42):
+            day = start + timedelta(days=offset)
+            outside = day.month != index + 1
+            past = not datetime(2026, 10, 26).date() <= day.date() <= datetime(2026, 11, 9).date()   # fenetre de programmation
+            html += (f'<div role="gridcell" class="DatePicker__dayCell"><button type="button" class="DatePicker__day" '
+                     f'{"disabled" if outside or past else ""} aria-label="{day.day} {months[day.month - 1]} {day.year}" '
+                     f'data-outside="{str(outside).lower()}" data-disabled="{str(outside or past).lower()}">{day.day}</button></div>')
+        builder = _Builder()
+        builder.feed(html)
+        days.children = builder.root.children
+        for child in days.children:
+            child.parent = days
+
     def on_click(self, node):
-        if node.attrs.get("role") == "combobox" and node.attrs.get("aria-label", "").startswith("Select "):
+        if node.attrs.get("class") == "DatePicker__nav":
+            self._step_month(self.calendar, 1 if node.attrs["aria-label"] == "Next month" else -1)
+        elif node.attrs.get("class") == "DatePicker__day":
+            if "disabled" in node.attrs:
+                return   # un bouton grise ne reagit pas
+            title = {n.attrs["class"]: n.text() for n in self.calendar.descendants()
+                     if n.attrs.get("class") in ("DatePicker__titleMonth", "DatePicker__titleYear")}
+            short = _sel()["calendar"]["months_short"][_sel()["calendar"]["months"].index(title["DatePicker__titleMonth"].casefold())]
+            shown = next(n for n in self.open_picker.descendants() if "Picker__value" in n.attrs.get("class", ""))
+            shown.parts, shown.children = [f"{node.text()} {short} {title['DatePicker__titleYear']}"], []
+            self.open_picker.attrs["aria-expanded"] = "false"
+            self.root.children.remove(self.calendar)
+            self.calendar, self.open_picker = None, None
+        elif node.attrs.get("role") == "combobox" and node.attrs.get("aria-label", "").startswith("Select "):
             self.open_picker = node
             node.attrs["aria-expanded"] = "true"
             if node.attrs["aria-label"] == "Select date":
-                texts = [f"{d} oct. 2026" for d in range(26, 32)] + [f"{d} nov. 2026" for d in range(1, 10)]
-            else:
-                texts = [f"{h:02d}:{m:02d}" for h in range(24) for m in range(0, 60, self.step)]
+                self._open_calendar()
+                return
+            if self.unknown_time_panel:
+                panel = _Node("div", {"role": "dialog"}, self.root)
+                inner = _Node("div", {"class": "Picker__panel w-auto schedule-picker-panel Dropdown__content"}, panel)
+                panel.children.append(inner)
+                row = _Node("li", {"class": "TimeWheel__row"}, inner)
+                row.parts.append("17 h 15")
+                inner.children.append(row)
+                self.root.children.append(panel)
+                self.calendar = panel
+                return
+            texts = [f"{h:02d}:{m:02d}" for h in range(24) for m in range(0, 60, self.step)]
             self.options = []
             for text in texts:
                 option = _Node("div", {"role": "option"})
@@ -4020,3 +4109,117 @@ def test_schedule_later_stops_when_the_page_does_not_keep_the_value(tmp_path, mo
         flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
 
     assert stop.value.code == "unexpected_page" and "non prise en compte" in str(stop.value)
+
+
+# ---------------------------------------------------------------- nouvelle page Studio : la date s'ouvre en calendrier
+# TASK-79f826c7b2b0 : 1er essai reel 2026-10-26 17:19 (ClippTVFR). Le calendrier ci-dessous est celui de la capture reelle
+# (Picker__panel schedule-picker-panel / DatePicker), rejoue tel quel ; seuls le changement de mois et le choix d'un jour
+# sont simules, avec les memes classes et attributs que la page (jours grises : disabled + data-outside / data-disabled).
+
+
+def test_the_open_calendar_panel_is_not_taken_for_an_unknown_popup(tmp_path, monkeypatch):
+    html = CALENDAR_OPEN_FIXTURE.read_text(encoding="utf-8")
+    page = ScheduleListsPage(html)
+    flow = _lists_flow(tmp_path, monkeypatch, page)
+
+    flow.close_popups()   # ne leve plus « fenêtre inattendue : 'Octobre 2026 dim lun …' »
+
+    assert page.clicks == []   # et ne ferme rien : le panneau est le selecteur de date lui-meme
+
+
+def test_an_unknown_dialog_next_to_the_calendar_panel_is_still_a_stop(tmp_path, monkeypatch):
+    page = ScheduleListsPage()
+    page._open_calendar()
+    stray = _Node("div", {"role": "dialog"}, page.root)
+    stray.parts.append("Autre fenêtre mystère")
+    page.root.children.append(stray)
+    flow = _lists_flow(tmp_path, monkeypatch, page)
+
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        flow.close_popups()
+
+    assert stop.value.code == "unexpected_page" and "mystère" in str(stop.value)
+
+
+def test_the_date_is_chosen_in_the_calendar_and_read_back_in_the_closed_list(tmp_path, monkeypatch):
+    page = ScheduleListsPage()
+    flow = _lists_flow(tmp_path, monkeypatch, page)
+
+    flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
+
+    day = next(c for c in page.clicks if c.attrs.get("class") == "DatePicker__day")
+    assert day.attrs["aria-label"] == "mercredi 28 octobre 2026" and day.attrs["data-outside"] == "false"
+    assert page.value_of("Select date") == "28 oct. 2026"
+    assert [c.attrs.get("class") for c in page.clicks if "DatePicker" in c.attrs.get("class", "")] == ["DatePicker__day"]
+
+
+def test_the_grey_days_of_the_neighbouring_month_are_never_clicked(tmp_path, monkeypatch):
+    page = ScheduleListsPage()
+    flow = _lists_flow(tmp_path, monkeypatch, page)
+    page._open_calendar()
+    grey = [d for d in page._calendar_days(page.calendar) if d.text() == "28" and d.attrs["data-outside"] == "true"]
+    assert grey, "la capture reelle affiche un 28 grise (septembre) avant le 28 octobre"
+    page.calendar = None
+    page.root.children.pop()
+
+    flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
+
+    clicked = [c for c in page.clicks if c.attrs.get("class") == "DatePicker__day"]
+    assert [c.attrs["data-outside"] for c in clicked] == ["false"] and all("disabled" not in c.attrs for c in clicked)
+
+
+def test_the_calendar_goes_to_the_next_month_with_the_nav_arrow_before_choosing_the_day(tmp_path, monkeypatch):
+    page = ScheduleListsPage()
+    flow = _lists_flow(tmp_path, monkeypatch, page)
+
+    flow.schedule_later(datetime(2026, 11, 3, 9, 30, tzinfo=PARIS))
+
+    classes = [c.attrs.get("class") for c in page.clicks if "DatePicker" in c.attrs.get("class", "")]
+    assert classes == ["DatePicker__nav", "DatePicker__day"]
+    assert [c.attrs["aria-label"] for c in page.clicks if c.attrs.get("class") == "DatePicker__nav"] == ["Next month"]
+    assert page.value_of("Select date") == "3 nov. 2026"
+
+
+def test_a_day_the_calendar_greys_out_is_a_clear_stop_not_a_random_click(tmp_path, monkeypatch):
+    page = ScheduleListsPage()
+    flow = _lists_flow(tmp_path, monkeypatch, page)
+
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        flow.schedule_later(datetime(2026, 10, 25, 9, 30, tzinfo=PARIS))   # passe : grise dans la page reelle (GMT+1 deja)
+
+    assert stop.value.code == "element_missing" and "25" in str(stop.value)
+    assert [c for c in page.clicks if c.attrs.get("class") == "DatePicker__day"] == []
+
+
+def test_an_unreadable_calendar_title_stops_clearly(tmp_path, monkeypatch):
+    page = ScheduleListsPage()
+    page._open_calendar()
+    month = next(n for n in page.calendar.descendants() if n.attrs.get("class") == "DatePicker__titleMonth")
+    month.parts = ["Octobar"]
+    page.root.children.pop()
+    page.calendar = None
+    original = page._open_calendar
+
+    def broken():
+        original()
+        next(n for n in page.calendar.descendants() if n.attrs.get("class") == "DatePicker__titleMonth").parts = ["Octobar"]
+    page._open_calendar = broken
+    flow = _lists_flow(tmp_path, monkeypatch, page)
+
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
+
+    assert stop.value.code == "unexpected_page" and "illisible" in str(stop.value)
+
+
+def test_an_unknown_time_list_stops_with_the_html_capture_and_clicks_nothing_in_it(tmp_path, monkeypatch):
+    page = ScheduleListsPage(unknown_time_panel=True)
+    flow = _lists_flow(tmp_path, monkeypatch, page)
+
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
+
+    assert stop.value.code == "element_missing" and "heure" in str(stop.value)
+    assert stop.value.capture is not None and stop.value.capture.with_suffix(".html").is_file()   # pour le releve
+    assert [c.attrs.get("class") for c in page.clicks if c.attrs.get("class") == "TimeWheel__row"] == []
+    assert page.value_of("Select time") == "17:15"   # l'heure n'a pas ete touchee

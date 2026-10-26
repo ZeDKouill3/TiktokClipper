@@ -94,6 +94,7 @@ REQUIRED_SELECTORS = (
     "visibility_public", "visibility_private", "visibility_friends", "comment_switch", "reuse_switch",
     "ai_switch", "schedule_now", "schedule_later", "schedule_inputs", "schedule_fields", "schedule_date_picker",
     "schedule_time_picker", "schedule_timezone", "picker_option", "picker_value",
+    "datepicker_month", "datepicker_year", "datepicker_nav", "datepicker_day",
     "calendar_month_title", "calendar_year_title", "calendar_arrow", "calendar_day", "timepicker_hour",
     "timepicker_minute", "schedule_picker_close", "content_check_running", "content_check_ok",
     "content_check_problem", "content_check_error", "content_check_retry",
@@ -766,6 +767,35 @@ class _Flow:
                 return
         raise self.stop("element_missing", f"jour {target.day} absent du calendrier ({target.strftime('%Y-%m')})")
 
+    def pick_calendar_day(self, target: datetime) -> None:
+        """Nouvelle page Studio : la liste date s'ouvre en calendrier DatePicker (titre mois / annee, fleches, jours).
+        Seuls les jours du mois affiche et non grises sont cliquables (``datepicker_day``) : un jour grise du mois
+        voisin ou passe n'est jamais clique. Le jour choisi est relu dans la liste fermee par l'appelant."""
+        months = [m.casefold() for m in self.sel["calendar"]["months"]]
+        for _ in range(MAX_MONTH_STEPS + 1):
+            month_text = str(self.wait("datepicker_month").inner_text()).strip()
+            year_text = str(self.wait("datepicker_year").inner_text()).strip()
+            if month_text.casefold() not in months or not year_text.isdigit():
+                raise self.stop("unexpected_page", f"mois affiché illisible dans le calendrier : {month_text!r} {year_text!r}")
+            gap = (target.year - int(year_text)) * 12 + target.month - (months.index(month_text.casefold()) + 1)
+            if gap == 0:
+                break
+            arrows = self.all("datepicker_nav")
+            if len(arrows) != 2:
+                raise self.stop("element_missing", f"flèches du calendrier : {len(arrows)} trouvée(s), 2 attendues (précédent, suivant)")
+            self.click_with(lambda: self.all("datepicker_nav")[1 if gap > 0 else 0])
+            self.pause()
+        else:
+            raise self.stop("unexpected_page", f"mois cible {target.year}-{target.month:02d} introuvable dans le calendrier")
+        days = [d for d in self.page.query_selector_all(self.sel["selectors"]["datepicker_day"])
+                if str(d.inner_text()).strip() == str(target.day)]
+        if len(days) != 1:
+            raise self.stop("element_missing", f"jour {target.day} {'absent' if not days else 'ambigu'} ou grisé dans le calendrier "
+                                               f"({target.strftime('%Y-%m')}) : {len(days)} jour(s) cliquable(s) trouvé(s)")
+        self.click_with(lambda: next(d for d in self.page.query_selector_all(self.sel["selectors"]["datepicker_day"])
+                                     if str(d.inner_text()).strip() == str(target.day)))
+        self.pause()
+
     def pick_time(self, target: datetime) -> int:
         """Clique l'heure et la minute ; rend la minute choisie (la plus proche de la demandee
         parmi celles que TikTok propose)."""
@@ -791,7 +821,7 @@ class _Flow:
         arret R4 avant tout clic. Chaque valeur choisie est relue dans la liste fermee."""
         self.check_timezone(local)
         self.open_list("schedule_date_picker")
-        self.pick_option(lambda options: self.date_option(options, local), f"date {local.strftime('%Y-%m-%d')}")
+        self.pick_calendar_day(local)
         self.close_list("schedule_date_picker")
         self.open_list("schedule_time_picker")
         minute = self.time_minute(local)
@@ -866,12 +896,15 @@ class _Flow:
     def time_minute(self, local: datetime) -> int:
         """La minute proposee la plus proche, dans l'heure demandee (pas de TikTok : 15 minutes en general)."""
         minutes = []
-        for o in self.all("picker_option"):
+        self.wait("picker_option", optional=True)   # absent = liste inconnue : l'arret ci-dessous dit laquelle
+        for o in self.page.query_selector_all(self.sel["selectors"]["picker_option"]):
             m = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", str(o.inner_text()))
             if m and int(m[1]) == local.hour:
                 minutes.append(int(m[2]))
         if not minutes:
-            raise self.stop("element_missing", f"heure {local.hour:02d} absente de la liste d'heures")
+            raise self.stop("element_missing", f"heure {local.hour:02d} absente de la liste d'heures : aucun choix reconnu "
+                                               f"({self.sel['selectors']['picker_option']}) dans la liste ouverte, rien n'est cliqué ; "
+                                               f"HTML de la page enregistré à côté de la capture pour relever la liste")
         return min(minutes, key=lambda m: (abs(m - local.minute), m))
 
     def time_option(self, options: list[Any], hour: int, minute: int) -> Any:
