@@ -89,9 +89,11 @@ radio = "tp-yt-paper-radio-button:has-text(\"{label}\")"
 # Bouton vise par libelle ({label}) : Suivant, Fuseau horaire.
 # NON VÉRIFIÉ
 labeled_button = "button:has-text(\"{label}\")"
-# Section « Programmer » repliee : controle dont le nom accessible est « Click to expand ».
-# NON VÉRIFIÉ
-expand = "[aria-label=\"{label}\"]"
+# Section « Programmer » repliee : chevron #second-container-expand-button, nom accessible « Click to expand »
+# (vérifié 2026-10-26 sur la dialog en français : un [aria-label] seul trouvait d'abord un autre controle cache).
+# ATTENTION 2026-10-26 : la date y est desormais une liste deroulante (« 27 oct. 2026 ⌄ »), plus un champ texte :
+# schedule_fields ne la trouve plus, la programmation YouTube est a refaire (l'immediat fonctionne).
+expand = "#second-container-expand-button[aria-label=\"{label}\"]"
 # Champs texte de la section Programmer (date et heure) : input.tp-yt-paper-input, reperes par leur valeur.
 # vérifié 2026-10-03
 text_input = "input.tp-yt-paper-input"
