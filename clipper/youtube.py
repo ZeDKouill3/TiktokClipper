@@ -630,8 +630,35 @@ class _Flow:
         if label != expected:
             raise self.stop("unexpected_page", f"bouton final « {label} » au lieu de « {expected} » : "
                                                f"la page n'est pas dans l'état voulu")
+        self.dismiss_known()
         button.click()
         self.pause()
+
+    def dismiss_known(self) -> None:
+        """Ferme une fenetre connue (``[popups]``) ouverte par-dessus la dialog d'envoi, comme le rappel « tout le
+        monde peut regarder les vidéos publiques » de la 1re publication publique ; la dialog d'envoi et les
+        fenetres inconnues sont laissees (le clic final ou la preuve de succes les signaleront)."""
+        known = self.sel["popups"]
+        for _ in range(MAX_POPUP_ROUNDS):
+            found = []
+            for modal in self.page.query_selector_all(self.sel["modal"]["container"]):
+                if not modal.is_visible():
+                    continue
+                text = " ".join(str(modal.inner_text()).split())
+                fragment = next((f for f in known if f.casefold() in text.casefold()), None)
+                if fragment is not None:
+                    found.append((len(text), modal, fragment))
+            if not found:
+                return
+            _, modal, fragment = min(found, key=lambda f: f[0])  # la plus petite : la fenetre elle-meme
+            label = known[fragment]
+            button = modal.query_selector(self.sel["modal"]["button"].format(label=label))
+            if button is None:
+                raise self.stop("element_missing", f"fenêtre connue « {fragment} » sans son bouton « {label} »")
+            button.click()
+            self.pause()
+            logger.info("YouTube %s : fenêtre connue « %s » fermée par « %s »", self.account, fragment, label)
+        raise self.stop("unexpected_page", f"fenêtres surgissantes qui reviennent après {MAX_POPUP_ROUNDS} fermetures")
 
     def await_success(self, titles: list[str]) -> None:
         """Preuve apres le clic final : une fenetre dont le texte contient un des titres attendus. Jamais un succes

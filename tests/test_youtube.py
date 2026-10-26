@@ -169,7 +169,8 @@ def test_the_selectors_file_is_loaded_and_holds_the_surveyed_landmarks():
     assert re.search(data["expect"]["channel_url_pattern"], CHANNEL_URL).group(1) == UC
     assert "accounts.google.com" in data["expect"]["login_url_markers"]
     assert data["labels"]["channel_prefix"] == "Votre chaîne"
-    assert data["popups"] == {"Bienvenue dans YouTube Studio": "Continuer"}
+    assert data["popups"] == {"Bienvenue dans YouTube Studio": "Continuer",
+                              "tout le monde peut regarder les vidéos publiques": "OK"}
 
 
 def test_the_surveyed_landmarks_are_marked_verified_on_2026_10_03():
@@ -769,7 +770,8 @@ class FakeUpload:
 
     def __init__(self, *, welcome=True, studio_redirect=CHANNEL_URL, menu_items=DEFAULT_MENU_ITEMS, link=True,
                  upload_polls=0, success_polls=0, success_text=None, drop_tz_paris=False, ignore_date=False,
-                 ignore_tz=False, text_boxes=2, captcha=False, final_label=None, screenshot_error=None):
+                 ignore_tz=False, text_boxes=2, captcha=False, final_label=None, screenshot_error=None,
+                 public_notice=False):
         self.sel = _sel()
         self.S, self.L = self.sel["selectors"], self.sel["labels"]
         self.url = "about:blank"
@@ -797,6 +799,7 @@ class FakeUpload:
         self.polls_final = 0
         self.polls_success = 0
         self.welcome = welcome
+        self.public_notice = public_notice  # rappel de la 1re publication publique, apres « Publique »
         self.clicks_log: list[str] = []
         self.upload_dialog = El(self, text="Importer des vidéos")
         self.upload_dialog.children[self.S["file_input"]] = El(self)
@@ -861,6 +864,11 @@ class FakeUpload:
                 shown.append(dialog)
             if self.step == -1:
                 shown.append(self.upload_dialog)
+            if self.public_notice and self.visibility == "public":
+                notice = El(self, text="N'oubliez pas que tout le monde peut regarder les vidéos publiques\nOK")
+                notice.children[self.sel["modal"]["button"].format(label="OK")] = El(
+                    self, text="OK", on_click=lambda: setattr(self, "public_notice", False))
+                shown.append(notice)
             if self.final_clicked:
                 self.polls_success += 1
                 if self.success_text is not None and self.polls_success > self.success_polls:
@@ -916,8 +924,13 @@ class FakeUpload:
             self.polls_final += 1
             label = self.final_label or self._final_label()
             return [El(self, text=label, enabled=self.polls_final > self.upload_polls,
-                       on_click=lambda: setattr(self, "final_clicked", True))]
+                       on_click=self._click_final)]
         return []
+
+    def _click_final(self):
+        if self.public_notice and self.visibility == "public":
+            raise FakeTimeoutError("Timeout 30000 ms : bouton final sous la fenêtre de rappel")
+        self.final_clicked = True
 
     def _final_label(self):
         if self.expanded:
@@ -995,6 +1008,15 @@ def test_an_immediate_public_publication_records_the_shorts_url(tmp_path, monkey
     assert page.clicked("Créer") and page.menu_clicked == "Importer des vidéos"
     order = [c for c in page.calls if c in (("click", "Créer"), ("menu", "Importer des vidéos"), ("upload", str(tmp_path / "04.mp4")))]
     assert order == [("click", "Créer"), ("menu", "Importer des vidéos"), ("upload", str(tmp_path / "04.mp4"))]
+
+
+def test_the_first_public_notice_over_the_final_button_is_closed_with_ok(tmp_path, monkeypatch):
+    page = FakeUpload(success_text="Vidéo mise en ligne", public_notice=True)
+
+    result = publish(tmp_path, monkeypatch, page)
+
+    assert result["state"] == "published"
+    assert page.public_notice is False and page.clicked("OK") and page.clicked("Publier")
 
 
 def test_the_title_defaults_to_the_screen_title_and_the_description_to_caption_hashtags_and_shorts(tmp_path, monkeypatch):
