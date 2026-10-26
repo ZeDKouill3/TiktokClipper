@@ -129,7 +129,9 @@ months = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "s
 [success]
 # Titres de la fenetre affichee une fois la video envoyee : toute valeur de la liste du mode vaut preuve.
 # « Vidéo mise en ligne » : vérifié 2026-10-03 (publique immediate).
-published = ["Vidéo mise en ligne"]
+# « Traitement de la vidéo » : relevé 2026-10-26 (1re publication publique d'une chaîne : publiée, publique dès la
+# fin du traitement SD ; capture state/browser/670ca85bf1f0/captures/20261026T111018-publish_unconfirmed.png).
+published = ["Vidéo mise en ligne", "Traitement de la vidéo"]
 # NON VÉRIFIÉ : programmation et privee non relevees ; sans l'un de ces titres, arret « publish_unconfirmed » a verifier en reel.
 scheduled = ["Vidéo programmée", "Vidéo planifiée"]
 # NON VÉRIFIÉ

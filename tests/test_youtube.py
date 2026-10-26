@@ -1019,6 +1019,14 @@ def test_the_first_public_notice_over_the_final_button_is_closed_with_ok(tmp_pat
     assert page.public_notice is False and page.clicked("OK") and page.clicked("Publier")
 
 
+def test_the_processing_window_also_proves_an_immediate_publication(tmp_path, monkeypatch):
+    page = FakeUpload(success_text="Traitement de la vidéo\nLe traitement de la version en définition standard (SD)")
+
+    result = publish(tmp_path, monkeypatch, page)
+
+    assert result["state"] == "published"
+
+
 def test_the_title_defaults_to_the_screen_title_and_the_description_to_caption_hashtags_and_shorts(tmp_path, monkeypatch):
     page = FakeUpload(success_text="Vidéo mise en ligne")
 
