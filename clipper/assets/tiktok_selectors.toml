@@ -97,6 +97,17 @@ radio_input = "input[type='radio']"
 schedule_later = "[data-e2e='schedule_container'] label:has-text('Programmer'), [data-e2e='schedule_container'] [role='radio']:has-text('Programmer')"
 # Apres « Programmer » : deux champs, l'heure (valeur contenant « : ») puis la date (AAAA-MM-JJ).
 schedule_inputs = "[data-e2e='schedule_container'] input.TUXTextInputCore-input"
+# Nouvelle page Studio (releve reel 2026-10-26, compte ClippTVFR ; deploiement progressif par compte) : date et
+# heure sont deux listes deroulantes div[role=combobox] (aria-label « Select date » / « Select time », valeur dans
+# span.Picker__value : « 26 oct. 2026 », « 17:15 ») et un fuseau « (GMT+1) Heure locale » (champ de recherche
+# d'une liste Select). schedule_fields : l'une ou l'autre page, attendue apres « Programmer ». Le contenu des listes
+# ouvertes n'a pas ete capture : les choix sont supposes etre des [role='option'] (a confirmer au premier reel).
+schedule_date_picker = "[data-e2e='schedule_container'] div[role='combobox'][aria-label='Select date']"
+schedule_time_picker = "[data-e2e='schedule_container'] div[role='combobox'][aria-label='Select time']"
+schedule_fields = "[data-e2e='schedule_container'] div[role='combobox'][aria-label='Select date'], [data-e2e='schedule_container'] input.TUXTextInputCore-input"
+schedule_timezone = "[data-e2e='schedule_container'] .timezone-select input.Select__searchInput"
+picker_option = "[role='option']"
+picker_value = "span.Picker__value"
 # Calendrier : titres du mois et de l'annee, fleches (la 1re = mois precedent, la 2e = suivant),
 # jours cliquables (texte exact).
 calendar_month_title = "span.month-title"
@@ -149,6 +160,8 @@ cancel = "Annuler"
 [calendar]
 # Noms des mois affiches par le calendrier (langue de TikTok Studio : francais), janvier a decembre.
 months = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
+# Abreviations de la nouvelle page (« 26 oct. 2026 »), le point final est ignore.
+months_short = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
 
 [modal]
 # Fenetres et bulles surgissantes (A VERIFIER : generique). Chacune doit etre connue ([popups]),
