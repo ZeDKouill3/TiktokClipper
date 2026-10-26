@@ -324,6 +324,7 @@ class StudioPage(FakePage):
         self.mode = "scheduled"
         self.texts[self.s["post_button"]] = _sel()["labels"]["post_scheduled"]
         self.present.add(self.s["schedule_inputs"])
+        self.present.add(self.s["schedule_fields"])
 
     def choose_now(self):
         self.mode = "now"
@@ -3755,3 +3756,267 @@ def test_a_post_really_absent_from_the_whole_scrolled_list_stays_unfound(tmp_pat
     assert result["post_id"] is None and result["post_url"] is None  # jamais d'id inventé (ADR-ad2e)
     assert "n'existe pas encore" in result["note"]
     assert env.page.scrolled == len(windows) - 1  # toute la liste a été parcourue avant de conclure
+
+
+# ---------------------------------------------------------------- nouvelle page Studio : date et heure en listes deroulantes
+# TASK-057adc52bd18 : le bloc « Quand publier » REEL releve le 2026-10-26 (compte ClippTVFR, fixture) est charge dans un
+# petit DOM ; les selecteurs du fichier TOML y sont rejoues tels quels. Le contenu des listes OUVERTES n'a pas ete capture :
+# les choix [role='option'] sont simules (seul element suppose), tout le reste vient de la page reelle.
+
+from html.parser import HTMLParser
+
+SCHEDULE_LISTS_FIXTURE = ROOT / "tests" / "fixtures" / "tiktok" / "studio_schedule_lists_20261026.html"
+_VOID = {"input", "br", "img", "meta", "link", "hr"}
+
+
+class _Node:
+    def __init__(self, tag, attrs, parent=None):
+        self.tag, self.attrs, self.parent, self.children, self.parts = tag, dict(attrs), parent, [], []
+
+    def text(self):
+        return "".join(self.parts) + "".join(c.text() for c in self.children)
+
+    def descendants(self):
+        for child in self.children:
+            yield child
+            yield from child.descendants()
+
+
+class _Builder(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.root = _Node("root", {})
+        self.cur = self.root
+
+    def handle_starttag(self, tag, attrs):
+        node = _Node(tag, [(k, v or "") for k, v in attrs], self.cur)
+        self.cur.children.append(node)
+        if tag not in _VOID:
+            self.cur = node
+
+    def handle_endtag(self, tag):
+        node = self.cur
+        while node is not self.root and node.tag != tag:
+            node = node.parent
+        if node is not self.root:
+            self.cur = node.parent
+
+    def handle_data(self, data):
+        self.cur.parts.append(data)
+
+
+def _node_matches(node, compound):
+    if re.search(r"text=|>>|xpath|#|[*^$~|]=|:(?!has-text)|^[>*+~]", compound) or not re.search(r"[a-z.\[]", compound):
+        return False   # syntaxe hors du sous-ensemble rejoue : jamais un faux « trouve »
+    tag = re.match(r"[a-z][\w-]*", compound)
+    if tag and node.tag != tag[0]:
+        return False
+    for cls in re.findall(r"\.([\w-]+)", re.sub(r"\[[^\]]*\]|:has-text\([^)]*\)", "", compound)):
+        if cls not in node.attrs.get("class", "").split():
+            return False
+    for key, value in re.findall(r"\[([\w-]+)=['\"]([^'\"]*)['\"]\]", compound):
+        if node.attrs.get(key) != value:
+            return False
+    for needle in re.findall(r":has-text\('([^']*)'\)", compound):
+        if needle.casefold() not in node.text().casefold():
+            return False
+    return True
+
+
+def _select(roots, selector):
+    """Selecteurs du TOML : alternatives separees par des virgules, descendants par espaces, tag, .classe,
+    [attr='v'] et :has-text('x') (le sous-ensemble utilise par le bloc « Quand publier »)."""
+    found = []
+    for alternative in selector.split(","):
+        pool = list(roots)
+        for compound in (c for c in re.split(r"\s+(?![^\[(]*[\])])", alternative.strip()) if c):
+            pool = [n for r in pool for n in r.descendants() if _node_matches(n, compound)]
+        found += [n for n in pool if n not in found]
+    return found
+
+
+class DomElement:
+    def __init__(self, page, node):
+        self.page, self.node = page, node
+
+    def click(self, **kwargs):
+        self.page.clicks.append(self.node)
+        self.page.on_click(self.node)
+
+    def inner_text(self):
+        return self.node.text()
+
+    def input_value(self):
+        return self.node.attrs.get("value", "")
+
+    def get_attribute(self, name):
+        return self.node.attrs.get(name)
+
+    def is_visible(self):
+        return True
+
+    def query_selector(self, css):
+        hits = _select([self.node], css)
+        return DomElement(self.page, hits[0]) if hits else None
+
+
+class ScheduleListsPage:
+    """Le bloc reel « Quand publier » ; ouvrir une liste propose des [role='option'] simules, en choisir un met sa
+    valeur dans span.Picker__value (comme la page)."""
+
+    url = "https://www.tiktok.com/tiktokstudio/upload"
+
+    def __init__(self, html=None, *, step=15):
+        builder = _Builder()
+        builder.feed(html if html is not None else SCHEDULE_LISTS_FIXTURE.read_text(encoding="utf-8"))
+        self.root, self.step = builder.root, step
+        self.clicks: list[_Node] = []
+        self.options: list[_Node] = []
+        self.open_picker: _Node | None = None
+
+    def _elements(self, css):
+        if css == "[role='option']":
+            return [DomElement(self, o) for o in self.options]
+        return [DomElement(self, n) for n in _select([self.root], css)]
+
+    def query_selector(self, css):
+        found = self._elements(css)
+        return found[0] if found else None
+
+    def query_selector_all(self, css):
+        return self._elements(css)
+
+    def wait_for_selector(self, css, timeout=None, state=None):
+        found = self.query_selector(css)
+        if found is None:
+            raise TimeoutError(f"Timeout {timeout}ms exceeded waiting for {css}")
+        return found
+
+    def content(self):
+        return "<html></html>"
+
+    def screenshot(self, path=None, **kwargs):
+        Path(path).write_bytes(b"\x89PNG fake")
+
+    def value_of(self, label):
+        picker = next(n for n in self.root.descendants() if n.attrs.get("aria-label") == label)
+        return next(n for n in picker.descendants() if "Picker__value" in n.attrs.get("class", "")).text()
+
+    def set_timezone(self, label):
+        field = next(n for n in self.root.descendants() if "Select__searchInput" in n.attrs.get("class", ""))
+        field.attrs["value"] = label
+
+    def on_click(self, node):
+        if node.attrs.get("role") == "combobox" and node.attrs.get("aria-label", "").startswith("Select "):
+            self.open_picker = node
+            node.attrs["aria-expanded"] = "true"
+            if node.attrs["aria-label"] == "Select date":
+                texts = [f"{d} oct. 2026" for d in range(26, 32)] + [f"{d} nov. 2026" for d in range(1, 10)]
+            else:
+                texts = [f"{h:02d}:{m:02d}" for h in range(24) for m in range(0, 60, self.step)]
+            self.options = []
+            for text in texts:
+                option = _Node("div", {"role": "option"})
+                option.parts.append(text)
+                self.options.append(option)
+        elif node in self.options:
+            shown = next(n for n in self.open_picker.descendants() if "Picker__value" in n.attrs.get("class", ""))
+            shown.parts = [node.text()]
+            shown.children = []
+            self.open_picker.attrs["aria-expanded"] = "false"
+            self.options, self.open_picker = [], None
+
+
+def _lists_flow(tmp_path, monkeypatch, page):
+    monkeypatch.chdir(tmp_path)
+    settings = {**tiktok.CONFIG_DEFAULTS, "min_action_delay_s": 0, "max_action_delay_s": 0}
+    config = Config(mode="review", workspace_dir=tmp_path / "w", output_dir=tmp_path / "output")
+    return tiktok._Flow(page, "clipptvfr", _sel(), settings, now=NOW, sleep=lambda s: None, rng=random.Random(1),
+                        on_tick=None, config=config)
+
+
+def test_the_real_captured_page_has_the_date_and_time_lists_and_the_paris_timezone():
+    page = ScheduleListsPage()
+    assert page.value_of("Select date") == "26 oct. 2026" and page.value_of("Select time") == "17:15"
+    sel = _sel()["selectors"]
+    for name in ("schedule_later", "schedule_date_picker", "schedule_time_picker", "schedule_timezone", "schedule_fields"):
+        assert page.query_selector(sel[name]) is not None, name
+    assert page.query_selector(sel["schedule_inputs"]) is None   # les deux input TUXTextInputCore n'existent plus
+    assert page.query_selector(sel["schedule_timezone"]).input_value() == "(GMT+1) Heure locale"
+
+
+def test_schedule_later_sets_date_and_time_in_the_dropdown_lists_of_the_new_page(tmp_path, monkeypatch):
+    page = ScheduleListsPage()
+    flow = _lists_flow(tmp_path, monkeypatch, page)
+    target = datetime(2026, 10, 28, 9, 30, tzinfo=PARIS)
+
+    effective, note = flow.schedule_later(target)
+
+    assert (page.value_of("Select date"), page.value_of("Select time")) == ("28 oct. 2026", "09:30")
+    assert effective == target and note is None
+    labels = [c.attrs.get("aria-label") for c in page.clicks if c.attrs.get("role") == "combobox"]
+    assert labels == ["Select date", "Select time"]
+
+
+def test_schedule_later_goes_to_the_next_month_and_converts_to_paris_time(tmp_path, monkeypatch):
+    page = ScheduleListsPage()
+    flow = _lists_flow(tmp_path, monkeypatch, page)
+    target = datetime(2026, 11, 4, 23, 30, tzinfo=timezone.utc)   # 00:30 le 5 a Paris
+
+    effective, _ = flow.schedule_later(target)
+
+    assert (page.value_of("Select date"), page.value_of("Select time")) == ("5 nov. 2026", "00:30")
+    assert effective == target
+
+
+def test_schedule_later_rounds_the_minutes_to_the_step_of_the_list_and_says_so(tmp_path, monkeypatch, caplog):
+    page = ScheduleListsPage()
+    flow = _lists_flow(tmp_path, monkeypatch, page)
+
+    with caplog.at_level("WARNING"):
+        effective, note = flow.schedule_later(datetime(2026, 10, 28, 17, 7, tzinfo=PARIS))
+
+    assert page.value_of("Select time") == "17:00" and effective.minute == 0
+    assert "arrondies" in note and "arrondies" in caplog.text
+
+
+@pytest.mark.parametrize("label", ["(GMT+0) Heure locale", "(GMT+3) Heure locale", "(GMT-5) New York", "Heure locale"])
+def test_schedule_later_stops_clearly_when_the_displayed_timezone_is_not_paris(tmp_path, monkeypatch, label):
+    page = ScheduleListsPage()
+    page.set_timezone(label)
+    flow = _lists_flow(tmp_path, monkeypatch, page)
+
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
+
+    assert stop.value.code == "unexpected_page" and ("Paris" in str(stop.value) or "illisible" in str(stop.value))
+    assert [c for c in page.clicks if c.attrs.get("role") == "combobox"] == []   # rien n'a ete touche
+    assert page.value_of("Select date") == "26 oct. 2026"
+
+
+def test_schedule_later_stops_when_the_chosen_date_is_not_offered_by_the_list(tmp_path, monkeypatch):
+    page = ScheduleListsPage()
+    flow = _lists_flow(tmp_path, monkeypatch, page)
+
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        flow.schedule_later(datetime(2026, 12, 25, 9, 30, tzinfo=PARIS))
+
+    assert stop.value.code == "element_missing" and "25" in str(stop.value)
+
+
+def test_schedule_later_stops_when_the_page_does_not_keep_the_value(tmp_path, monkeypatch):
+    page = ScheduleListsPage()
+    original = page.on_click
+
+    def lazy(node):   # la page ignore le choix de l'heure
+        if node in page.options and re.fullmatch(r"\d\d:\d\d", node.text()):
+            page.options, page.open_picker = [], None
+            return
+        original(node)
+    page.on_click = lazy
+    flow = _lists_flow(tmp_path, monkeypatch, page)
+
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
+
+    assert stop.value.code == "unexpected_page" and "non prise en compte" in str(stop.value)

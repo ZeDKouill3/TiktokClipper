@@ -92,7 +92,8 @@ SELECTORS_PATH = Path(__file__).parent / "assets" / "tiktok_selectors.toml"
 REQUIRED_SELECTORS = (
     "file_input", "upload_done", "caption_editor", "advanced_settings", "visibility_dropdown",
     "visibility_public", "visibility_private", "visibility_friends", "comment_switch", "reuse_switch",
-    "ai_switch", "schedule_now", "schedule_later", "schedule_inputs",
+    "ai_switch", "schedule_now", "schedule_later", "schedule_inputs", "schedule_fields", "schedule_date_picker",
+    "schedule_time_picker", "schedule_timezone", "picker_option", "picker_value",
     "calendar_month_title", "calendar_year_title", "calendar_arrow", "calendar_day", "timepicker_hour",
     "timepicker_minute", "schedule_picker_close", "content_check_running", "content_check_ok",
     "content_check_problem", "content_check_error", "content_check_retry",
@@ -222,6 +223,9 @@ def load_selectors(path: str | Path | None = None) -> dict[str, Any]:
     months = data.get("calendar", {}).get("months")
     if not (isinstance(months, list) and len(months) == 12 and all(isinstance(m, str) and m for m in months)):
         raise TikTokError(f"fichier de sélecteurs TikTok ({target.name}) : [calendar] months manquant ou invalide (12 noms de mois attendus)")
+    short = data.get("calendar", {}).get("months_short")
+    if not (isinstance(short, list) and len(short) == 12 and all(isinstance(m, str) and m for m in short)):
+        raise TikTokError(f"fichier de sélecteurs TikTok ({target.name}) : [calendar] months_short manquant ou invalide (12 abréviations de mois attendues)")
     popups = data.get("popups")
     if not (isinstance(popups, dict) and popups and all(
             isinstance(k, str) and k and isinstance(v, str) and v and '"' not in v for k, v in popups.items())):
@@ -705,6 +709,9 @@ class _Flow:
         Rend l'instant reellement programme (minutes arrondies au pas propose) et une note ou None."""
         local = target.astimezone(ZoneInfo(browser.TIMEZONE))  # heure de Paris, jamais le fuseau du PC (R8)
         self.click("schedule_later")
+        self.wait("schedule_fields")
+        if self.page.query_selector(self.sel["selectors"]["schedule_date_picker"]) is not None:
+            return self.schedule_with_lists(local)   # nouvelle page Studio (releve 2026-10-26) : listes deroulantes
         if len(self.all("schedule_inputs")) != 2 or ":" not in str(self.field(0).input_value()):
             raise self.stop("unexpected_page", "champs de programmation inattendus : l'heure (valeur avec « : »), "
                                                "puis la date, sont attendus")
@@ -777,6 +784,98 @@ class _Flow:
                                  if str(o.inner_text()).strip().isdigit()}[minute])
         self.pause()
         return minute
+
+    def schedule_with_lists(self, local: datetime) -> tuple[datetime, str | None]:
+        """Nouvelle page Studio : date et heure sont des listes deroulantes (« 26 oct. 2026 », « 17:15 ») et un
+        fuseau est affiche (« (GMT+1) Heure locale »). Le fuseau est lu d'abord (jamais change) : autre que Paris,
+        arret R4 avant tout clic. Chaque valeur choisie est relue dans la liste fermee."""
+        self.check_timezone(local)
+        self.open_list("schedule_date_picker")
+        self.pick_option(lambda options: self.date_option(options, local), f"date {local.strftime('%Y-%m-%d')}")
+        self.close_list("schedule_date_picker")
+        self.open_list("schedule_time_picker")
+        minute = self.time_minute(local)
+        self.pick_option(lambda options: self.time_option(options, local.hour, minute), f"heure {local.hour:02d}:{minute:02d}")
+        self.close_list("schedule_time_picker")
+        effective = local.replace(minute=minute, second=0, microsecond=0) if minute != local.minute else local
+        date_shown, time_shown = self.list_value("schedule_date_picker"), self.list_value("schedule_time_picker")
+        if not self.is_date(date_shown, effective) or time_shown != effective.strftime("%H:%M"):
+            raise self.stop("unexpected_page", f"programmation non prise en compte : {date_shown} {time_shown} affiché, "
+                                               f"{effective.strftime('%Y-%m-%d %H:%M')} attendu")
+        note = None
+        if minute != local.minute:
+            note = f"minutes arrondies au pas proposé par TikTok : {local.minute:02d} -> {minute:02d}"
+            logger.warning("TikTok %s : %s (heure demandée %s)", self.account, note, local.strftime("%H:%M"))
+        return effective, note
+
+    def check_timezone(self, local: datetime) -> None:
+        field = self.page.query_selector(self.sel["selectors"]["schedule_timezone"])
+        if field is None:
+            raise self.stop("element_missing", "fuseau horaire de la programmation absent : impossible de vérifier l'heure de Paris")
+        label = " ".join(str(field.input_value()).split())
+        match = re.search(r"\(GMT([+-])(\d{1,2})(?::?(\d{2}))?\)", label)
+        if match is None:
+            raise self.stop("unexpected_page", f"fuseau horaire illisible dans la page : {label!r}")
+        shown = (1 if match[1] == "+" else -1) * (int(match[2]) * 60 + int(match[3] or 0))
+        # Paris a la date visee ; la page peut afficher le decalage du jour (changement d'heure entre les deux)
+        allowed = {int(local.utcoffset().total_seconds() // 60),
+                   int(self.now.astimezone(ZoneInfo(browser.TIMEZONE)).utcoffset().total_seconds() // 60)}
+        if shown not in allowed:
+            expected = " ou ".join(f"GMT{m // 60:+d}" for m in sorted(allowed))
+            raise self.stop("unexpected_page", f"fuseau affiché « {label} » : ce n'est pas l'heure de Paris "
+                                               f"({expected} attendu), rien n'est programmé")
+
+    def open_list(self, name: str) -> None:
+        self.click_with(lambda: self.wait(name))
+        self.pause()
+
+    def close_list(self, name: str) -> None:
+        """La liste se ferme d'elle-meme au choix ; sinon (encore ouverte), clic hors d'elle."""
+        picker = self.page.query_selector(self.sel["selectors"][name])
+        if picker is not None and str(picker.get_attribute("aria-expanded")) == "true":
+            self.click("schedule_picker_close")
+
+    def list_value(self, name: str) -> str:
+        picker = self.wait(name)
+        value = picker.query_selector(self.sel["selectors"]["picker_value"])
+        if value is None:
+            raise self.stop("element_missing", f"valeur affichée de la liste absente : {name}")
+        return " ".join(str(value.inner_text()).split())
+
+    def pick_option(self, choose: Callable[[list[Any]], Any], what: str) -> None:
+        options = self.all("picker_option")
+        if choose(options) is None:
+            raise self.stop("element_missing", f"{what} absente de la liste déroulante ({len(options)} choix proposés)")
+        self.click_with(lambda: choose(list(self.page.query_selector_all(self.sel["selectors"]["picker_option"]))))
+        self.pause()
+
+    def date_option(self, options: list[Any], local: datetime) -> Any:
+        return next((o for o in options if self.is_date(str(o.inner_text()), local)), None)
+
+    def is_date(self, text: str, local: datetime) -> bool:
+        match = re.fullmatch(r"\s*(\d{1,2})\s+([^\s\d.]+)\.?\s+(\d{4})\s*", text.replace("\xa0", " "))
+        if match is None:
+            return False
+        word = match[2].casefold()
+        for names in (self.sel["calendar"]["months"], self.sel["calendar"]["months_short"]):
+            folded = [n.casefold().rstrip(".") for n in names]
+            if word in folded and folded.index(word) + 1 == local.month:
+                return (int(match[1]), int(match[3])) == (local.day, local.year)
+        return False
+
+    def time_minute(self, local: datetime) -> int:
+        """La minute proposee la plus proche, dans l'heure demandee (pas de TikTok : 15 minutes en general)."""
+        minutes = []
+        for o in self.all("picker_option"):
+            m = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", str(o.inner_text()))
+            if m and int(m[1]) == local.hour:
+                minutes.append(int(m[2]))
+        if not minutes:
+            raise self.stop("element_missing", f"heure {local.hour:02d} absente de la liste d'heures")
+        return min(minutes, key=lambda m: (abs(m - local.minute), m))
+
+    def time_option(self, options: list[Any], hour: int, minute: int) -> Any:
+        return next((o for o in options if re.fullmatch(r"\s*0?%d:%02d\s*" % (hour, minute), str(o.inner_text()))), None)
 
     def disable_content_check(self) -> None:
         """Coupe l'interrupteur « Verification de contenu simple » s'il est actif (TikTok modere de toute
