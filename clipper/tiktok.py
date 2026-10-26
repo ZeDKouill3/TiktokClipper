@@ -94,12 +94,18 @@ REQUIRED_SELECTORS = (
     "visibility_public", "visibility_private", "visibility_friends", "comment_switch", "reuse_switch",
     "ai_switch", "schedule_now", "schedule_later", "schedule_inputs", "schedule_fields", "schedule_date_picker",
     "schedule_time_picker", "schedule_timezone", "picker_option", "picker_value",
-    "datepicker_month", "datepicker_year", "datepicker_nav", "datepicker_day", "timewheel_hour", "timewheel_minute",
+    "datepicker_month", "datepicker_year", "datepicker_nav", "datepicker_day", "timewheel_hour", "timewheel_minute", "timewheel_minute_any",
     "calendar_month_title", "calendar_year_title", "calendar_arrow", "calendar_day", "timepicker_hour",
     "timepicker_minute", "schedule_picker_close", "content_check_running", "content_check_ok",
     "content_check_problem", "content_check_error", "content_check_retry",
     "content_check_switch", "post_button", "discard_button", "published_marker",
 )
+WHEEL_CENTRE_JS = """e => {
+    const list = e.closest("[role='listbox']");
+    if (!list) return;
+    const r = e.getBoundingClientRect(), l = list.getBoundingClientRect();
+    list.scrollTop += (r.top + r.height / 2) - (l.top + l.height / 2);
+}"""   # amene l'element au centre de sa colonne (le panneau flottant couvre les elements hors du centre)
 MAX_POPUP_ROUNDS = 5   # fenetres successives fermees par un meme controle avant d'abandonner
 MAX_MONTH_STEPS = 24   # fleches du calendrier cliquees au plus avant d'abandonner
 REQUIRED_STATS_SELECTORS = ("row", "post_link", "likes", "comments", "metric_card", "traffic_sources", "processing",
@@ -897,26 +903,56 @@ class _Flow:
                 return (int(match[1]), int(match[3])) == (local.day, local.year)
         return False
 
-    def pick_wheel_time(self, local: datetime) -> int:
-        """Roue de l'heure (colonnes Hours / Minutes) : clique l'heure, puis la minute degrisee la plus proche de la
-        demandee (rend celle-ci). Un bouton grise (data-disabled=true) n'est jamais cliquable : absent du selecteur."""
-        hour_css, minute_css = self.sel["selectors"]["timewheel_hour"], self.sel["selectors"]["timewheel_minute"]
+    WHEEL_POLL_S = 0.25   # intervalle entre deux lectures de la roue pendant qu'elle se recalcule
 
-        def column(css: str) -> dict[int, Any]:
-            return {int(t): o for o in self.page.query_selector_all(css) if (t := str(o.inner_text()).strip()).isdigit()}
+    def pick_wheel_time(self, local: datetime) -> int:
+        """Roue de l'heure (colonnes Hours / Minutes) : choisit l'heure, puis la minute demandee arrondie au pas de la
+        roue (rend celle-ci). Un bouton grise (data-disabled=true) n'est jamais clique : absent du selecteur. Les
+        minutes degrisees dependent de l'heure choisie et TikTok les recalcule apres le clic : la minute n'est
+        lue qu'une fois la minute visee degrisee (releve reel 2026-10-26 22:42 : lue trop tot, 45 au lieu de 30).
+        Une valeur deja choisie (aria-selected=true) n'est pas cliquee ; l'element est amene au centre de sa colonne
+        avant le clic, le panneau flottant couvrant ceux qui n'y sont pas."""
+        css = self.sel["selectors"]
+        hour_css, minute_css, minute_any_css = css["timewheel_hour"], css["timewheel_minute"], css["timewheel_minute_any"]
+
+        def column(selector: str) -> dict[int, Any]:
+            return {int(t): o for o in self.page.query_selector_all(selector) if (t := str(o.inner_text()).strip()).isdigit()}
+
+        def choose(selector: str, value: int) -> None:
+            if str(column(selector)[value].get_attribute("aria-selected")) == "true":
+                return
+
+            def centred() -> Any:
+                item = column(selector)[value]
+                item.evaluate(WHEEL_CENTRE_JS)
+                return item
+            self.click_with(centred)
+            self.pause()
 
         hours = column(hour_css)
         if local.hour not in hours:
             raise self.stop("element_missing", f"heure {local.hour:02d} absente ou grisée dans la roue des heures "
                                                f"({len(hours)} heure(s) choisissable(s)), rien n'est cliqué")
-        self.click_with(lambda: column(hour_css)[local.hour])
-        self.pause()
-        offered = column(minute_css)   # relue : les minutes proposees dependent de l'heure choisie
+        choose(hour_css, local.hour)
+        grid = column(minute_any_css)   # toutes les minutes de la roue, grisees comprises : le pas de TikTok
+        if not grid:
+            raise self.stop("element_missing", f"roue des minutes absente pour {local.hour:02d} h")
+        wanted = min(grid, key=lambda m: (abs(m - local.minute), m))
+        polls = int(float(self.settings["action_timeout_s"]) / self.WHEEL_POLL_S) + 1
+        for _ in range(polls):
+            offered = column(minute_css)
+            if wanted in offered:
+                break
+            self._sleep(self.WHEEL_POLL_S)
+        else:
+            offered = column(minute_css)
+            if offered:
+                logger.warning("TikTok %s : minute %02d grisée dans la roue pour %02d h après %g s, la plus proche "
+                               "choisissable sera prise", self.account, wanted, local.hour, float(self.settings["action_timeout_s"]))
         if not offered:
             raise self.stop("element_missing", f"aucune minute choisissable dans la roue pour {local.hour:02d} h")
-        minute = min(offered, key=lambda m: (abs(m - local.minute), m))
-        self.click_with(lambda: column(minute_css)[minute])
-        self.pause()
+        minute = wanted if wanted in offered else min(offered, key=lambda m: (abs(m - local.minute), m))
+        choose(minute_css, minute)
         return minute
 
     def time_minute(self, local: datetime) -> int:

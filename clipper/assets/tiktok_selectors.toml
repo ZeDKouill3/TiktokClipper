@@ -119,6 +119,7 @@ datepicker_day = "div.schedule-picker-panel button.DatePicker__day[data-outside=
 # contient des role=option, donc deja exclu des fenetres surgissantes.
 timewheel_hour = "div.TimePicker__wheel div[role='listbox'][aria-label='Hours'] button[role='option'][data-disabled='false']"
 timewheel_minute = "div.TimePicker__wheel div[role='listbox'][aria-label='Minutes'] button[role='option'][data-disabled='false']"
+timewheel_minute_any = "div.TimePicker__wheel div[role='listbox'][aria-label='Minutes'] button[role='option']"
 picker_option = "[role='option']"
 picker_value = "span.Picker__value"
 # Calendrier : titres du mois et de l'annee, fleches (la 1re = mois precedent, la 2e = suivant),

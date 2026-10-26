@@ -3861,6 +3861,9 @@ class DomElement:
         hits = _select([self.node], css)
         return DomElement(self.page, hits[0]) if hits else None
 
+    def evaluate(self, script, *args):
+        self.page.scrolls.append(self.node)   # seul usage : le script qui amene l'element au centre de sa colonne
+
 
 TIMEWHEEL_OPEN_FIXTURE = ROOT / "tests" / "fixtures" / "tiktok" / "studio_schedule_timewheel_open_20261026.html"
 
@@ -3893,6 +3896,8 @@ class ScheduleListsPage:
         self.root, self.step, self.unknown_time_panel = builder.root, step, unknown_time_panel
         self.time_wheel = time_wheel   # la liste heure s'ouvre sur la roue Hours / Minutes reelle (capture 20:34)
         self.clicks: list[_Node] = []
+        self.scrolls: list[_Node] = []
+        self.wheel_source = (TIMEWHEEL_OPEN_FIXTURE, ":r6l:")
         self.options: list[_Node] = []
         self.open_picker: _Node | None = None
         self.calendar: _Node | None = None
@@ -3958,11 +3963,15 @@ class ScheduleListsPage:
     def _open_wheel(self):
         """La roue REELLE (portail de la capture 2026-10-26 20:34) ajoutee a la page, comme au clic sur la liste heure."""
         builder = _Builder()
-        builder.feed(_portal(TIMEWHEEL_OPEN_FIXTURE, ":r6l:"))
+        builder.feed(_portal(*self.wheel_source))
         panel = builder.root.children[0]
         panel.parent = self.root
         self.root.children.append(panel)
         self.calendar = panel
+        chosen = [n.text() for column in ("Hours", "Minutes") for n in self.wheel_items(column) if n.attrs.get("aria-selected") == "true"]
+        if len(chosen) == 2 and self.open_picker is not None:   # la liste ferme affiche la valeur deja choisie dans la roue, comme la page
+            shown = next(n for n in self.open_picker.descendants() if "Picker__value" in n.attrs.get("class", ""))
+            shown.parts, shown.children = [":".join(chosen)], []
 
     def wheel_items(self, column):
         listbox = next(n for n in self.calendar.descendants() if n.attrs.get("aria-label") == column)
@@ -4357,3 +4366,55 @@ def test_the_wheel_stops_when_the_value_read_back_is_not_the_expected_time(tmp_p
         flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
 
     assert stop.value.code == "unexpected_page" and "non prise en compte" in str(stop.value)
+
+
+TIMEWHEEL_SELECTED_FIXTURE = ROOT / "tests" / "fixtures" / "tiktok" / "studio_schedule_timewheel_selected_20261026.html"   # capture reelle du 26/10 22:42 (09 et 30 choisis)
+
+
+def test_a_wheel_value_already_selected_is_not_clicked(tmp_path, monkeypatch):
+    page, flow = _wheel_flow(tmp_path, monkeypatch)
+    page.wheel_source = (TIMEWHEEL_SELECTED_FIXTURE, ":r6n:")
+
+    effective, note = flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
+
+    assert _wheel_clicks(page) == [] and page.value_of("Select time") == "09:30" and note is None
+
+
+def _stale_minutes_after_hour_click(page, flow):
+    """Rejoue le 26/10 22:42 : la minute est relue avant que TikTok ait recalcule les minutes de l'heure choisie
+    (heure courante 23 h : seules 45, 50 et 55 degrisees). La roue ne se met a jour qu'apres 0,25 s d'attente."""
+    original, waited = page._click_wheel_item, [0.0]
+
+    def settle(offered):
+        for item in page.wheel_items("Minutes"):
+            item.attrs["data-disabled"] = str(offered is not None and item.text() not in offered).lower()
+
+    def after_hour(node):
+        original(node)
+        if node.attrs["aria-label"].startswith("Hours"):
+            settle(("45", "50", "55"))
+    page._click_wheel_item = after_hour
+
+    def sleep(seconds):
+        waited[0] += seconds
+        if waited[0] >= 0.25:
+            settle(None)
+    flow._sleep = sleep
+
+
+def test_the_minute_is_read_after_the_wheel_recomputed_it_not_right_after_the_hour_click(tmp_path, monkeypatch):
+    page, flow = _wheel_flow(tmp_path, monkeypatch)
+    _stale_minutes_after_hour_click(page, flow)
+
+    effective, note = flow.schedule_later(datetime(2026, 10, 28, 17, 30, tzinfo=PARIS))
+
+    assert _wheel_clicks(page) == ["Hours 17", "Minutes 30"]   # jamais Minutes 45
+    assert page.value_of("Select time") == "17:30" and effective.minute == 30 and note is None
+
+
+def test_the_wheel_item_is_centred_in_its_column_before_each_click(tmp_path, monkeypatch):
+    page, flow = _wheel_flow(tmp_path, monkeypatch)
+
+    flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
+
+    assert [n.attrs["aria-label"] for n in page.scrolls] == ["Hours 09", "Minutes 30"]
