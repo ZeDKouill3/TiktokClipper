@@ -113,6 +113,12 @@ datepicker_month = "div.schedule-picker-panel button.DatePicker__titleMonth"
 datepicker_year = "div.schedule-picker-panel button.DatePicker__titleYear"
 datepicker_nav = "div.schedule-picker-panel button.DatePicker__nav"
 datepicker_day = "div.schedule-picker-panel button.DatePicker__day[data-outside='false'][data-disabled='false']"
+# Roue de l'heure (releve reel 2026-10-26 20:34, portail div.Picker__panel > div.TimePicker__panel--columns-two) : deux
+# colonnes div[role=listbox] aria-label « Hours » (00..23) et « Minutes » (00..55 par 5), boutons button[role=option]
+# aria-label « Hours 07 » / « Minutes 05 » ; data-disabled=true = grise. Ce panneau n'a PAS schedule-picker-panel : il
+# contient des role=option, donc deja exclu des fenetres surgissantes.
+timewheel_hour = "div.TimePicker__wheel div[role='listbox'][aria-label='Hours'] button[role='option'][data-disabled='false']"
+timewheel_minute = "div.TimePicker__wheel div[role='listbox'][aria-label='Minutes'] button[role='option'][data-disabled='false']"
 picker_option = "[role='option']"
 picker_value = "span.Picker__value"
 # Calendrier : titres du mois et de l'annee, fleches (la 1re = mois precedent, la 2e = suivant),

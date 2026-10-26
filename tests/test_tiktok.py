@@ -3862,16 +3862,23 @@ class DomElement:
         return DomElement(self.page, hits[0]) if hits else None
 
 
-def _CALENDAR_PORTAL():
-    """Le HTML du calendrier (div role=dialog du portail) tel que la capture reelle le contient."""
-    raw = CALENDAR_OPEN_FIXTURE.read_text(encoding="utf-8")
-    start = raw.index('<div tabindex="-1" data-floating-ui-focusable="" id=":r61:" role="dialog"')
+TIMEWHEEL_OPEN_FIXTURE = ROOT / "tests" / "fixtures" / "tiktok" / "studio_schedule_timewheel_open_20261026.html"
+
+
+def _portal(fixture, dialog_id):
+    """Le HTML d'un div role=dialog du portail tel que la capture reelle le contient."""
+    raw = fixture.read_text(encoding="utf-8")
+    start = raw.index(f'<div tabindex="-1" data-floating-ui-focusable="" id="{dialog_id}" role="dialog"')
     depth = 0
     for match in re.finditer(r"<(/?)div\b[^>]*>", raw[start:]):
         depth += -1 if match[1] else 1
         if depth == 0:
             return raw[start:start + match.end()]
-    raise AssertionError("calendrier de la capture non refermé")
+    raise AssertionError("portail de la capture non refermé")
+
+
+def _CALENDAR_PORTAL():
+    return _portal(CALENDAR_OPEN_FIXTURE, ":r61:")
 
 
 class ScheduleListsPage:
@@ -3880,10 +3887,11 @@ class ScheduleListsPage:
 
     url = "https://www.tiktok.com/tiktokstudio/upload"
 
-    def __init__(self, html=None, *, step=15, unknown_time_panel=False):
+    def __init__(self, html=None, *, step=15, unknown_time_panel=False, time_wheel=False):
         builder = _Builder()
         builder.feed(html if html is not None else SCHEDULE_LISTS_FIXTURE.read_text(encoding="utf-8"))
         self.root, self.step, self.unknown_time_panel = builder.root, step, unknown_time_panel
+        self.time_wheel = time_wheel   # la liste heure s'ouvre sur la roue Hours / Minutes reelle (capture 20:34)
         self.clicks: list[_Node] = []
         self.options: list[_Node] = []
         self.open_picker: _Node | None = None
@@ -3947,6 +3955,31 @@ class ScheduleListsPage:
         self.root.children.append(panel)
         self.calendar = panel
 
+    def _open_wheel(self):
+        """La roue REELLE (portail de la capture 2026-10-26 20:34) ajoutee a la page, comme au clic sur la liste heure."""
+        builder = _Builder()
+        builder.feed(_portal(TIMEWHEEL_OPEN_FIXTURE, ":r6l:"))
+        panel = builder.root.children[0]
+        panel.parent = self.root
+        self.root.children.append(panel)
+        self.calendar = panel
+
+    def wheel_items(self, column):
+        listbox = next(n for n in self.calendar.descendants() if n.attrs.get("aria-label") == column)
+        return [n for n in listbox.descendants() if "TimePicker__item" in n.attrs.get("class", "").split()]
+
+    def _click_wheel_item(self, node):
+        """Un bouton grise ne reagit pas ; sinon il devient le choisi de sa colonne et sa part de Picker__value change."""
+        if node.attrs.get("data-disabled") == "true":
+            return
+        column = node.attrs["aria-label"].split()[0]
+        for item in self.wheel_items(column):
+            item.attrs["data-selected"] = item.attrs["aria-selected"] = str(item is node).lower()
+        shown = next(n for n in self.open_picker.descendants() if "Picker__value" in n.attrs.get("class", ""))
+        hour, minute = shown.text().split(":")
+        chosen = node.text()
+        shown.parts, shown.children = [f"{chosen}:{minute}" if column == "Hours" else f"{hour}:{chosen}"], []
+
     def _step_month(self, panel, delta):
         title = {n.attrs["class"]: n for n in panel.descendants() if n.attrs.get("class") in ("DatePicker__titleMonth", "DatePicker__titleYear")}
         months = _sel()["calendar"]["months"]
@@ -3992,6 +4025,9 @@ class ScheduleListsPage:
             if node.attrs["aria-label"] == "Select date":
                 self._open_calendar()
                 return
+            if self.time_wheel:
+                self._open_wheel()
+                return
             if self.unknown_time_panel:
                 panel = _Node("div", {"role": "dialog"}, self.root)
                 inner = _Node("div", {"class": "Picker__panel w-auto schedule-picker-panel Dropdown__content"}, panel)
@@ -4008,6 +4044,8 @@ class ScheduleListsPage:
                 option = _Node("div", {"role": "option"})
                 option.parts.append(text)
                 self.options.append(option)
+        elif "TimePicker__item" in node.attrs.get("class", "").split():
+            self._click_wheel_item(node)
         elif node in self.options:
             shown = next(n for n in self.open_picker.descendants() if "Picker__value" in n.attrs.get("class", ""))
             shown.parts = [node.text()]
@@ -4223,3 +4261,99 @@ def test_an_unknown_time_list_stops_with_the_html_capture_and_clicks_nothing_in_
     assert stop.value.capture is not None and stop.value.capture.with_suffix(".html").is_file()   # pour le releve
     assert [c.attrs.get("class") for c in page.clicks if c.attrs.get("class") == "TimeWheel__row"] == []
     assert page.value_of("Select time") == "17:15"   # l'heure n'a pas ete touchee
+
+
+# ---------------------------------------------------------------- nouvelle page Studio : l'heure s'ouvre en roue Hours / Minutes
+# TASK-adb1e4ae33fb : 2e essai reel 2026-10-26 20:34. La roue ci-dessous est celle de la capture reelle (portail
+# Picker__panel / TimePicker : colonnes listbox « Hours » 00..23 et « Minutes » 00..55 par 5), rejouee telle quelle.
+
+
+def _wheel_flow(tmp_path, monkeypatch):
+    page = ScheduleListsPage(time_wheel=True)
+    return page, _lists_flow(tmp_path, monkeypatch, page)
+
+
+def _wheel_clicks(page):
+    return [c.attrs["aria-label"] for c in page.clicks if "TimePicker__item" in c.attrs.get("class", "")]
+
+
+def test_the_open_time_wheel_is_not_taken_for_an_unknown_popup(tmp_path, monkeypatch):
+    page, flow = _wheel_flow(tmp_path, monkeypatch)
+    page._open_wheel()
+
+    flow.close_popups()
+
+    assert page.clicks == []   # la roue est le selecteur d'heure lui-meme, pas une fenetre surgissante
+
+
+def test_the_time_is_chosen_in_the_hours_and_minutes_columns_and_read_back(tmp_path, monkeypatch):
+    page, flow = _wheel_flow(tmp_path, monkeypatch)
+    target = datetime(2026, 10, 28, 9, 30, tzinfo=PARIS)
+
+    effective, note = flow.schedule_later(target)
+
+    assert _wheel_clicks(page) == ["Hours 09", "Minutes 30"]
+    assert (page.value_of("Select date"), page.value_of("Select time")) == ("28 oct. 2026", "09:30")
+    assert effective == target and note is None
+
+
+def test_the_nearest_minute_of_the_wheel_is_clicked_and_the_rounding_is_logged(tmp_path, monkeypatch, caplog):
+    page, flow = _wheel_flow(tmp_path, monkeypatch)
+
+    with caplog.at_level("WARNING"):
+        effective, note = flow.schedule_later(datetime(2026, 10, 28, 17, 7, tzinfo=PARIS))
+
+    assert _wheel_clicks(page) == ["Hours 17", "Minutes 05"]   # pas de 5 minutes, 07 -> 05
+    assert page.value_of("Select time") == "17:05" and effective.minute == 5
+    assert "arrondies" in note and "arrondies" in caplog.text
+
+
+def test_a_greyed_hour_is_never_clicked_and_stops_the_publication(tmp_path, monkeypatch):
+    page, flow = _wheel_flow(tmp_path, monkeypatch)
+    original = page._open_wheel
+
+    def greyed():
+        original()
+        for item in page.wheel_items("Hours"):
+            if item.text() == "09":
+                item.attrs["data-disabled"] = "true"
+    page._open_wheel = greyed
+
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
+
+    assert stop.value.code == "element_missing" and "09" in str(stop.value)
+    assert _wheel_clicks(page) == []
+
+
+def test_a_greyed_minute_is_skipped_for_the_nearest_enabled_one(tmp_path, monkeypatch):
+    page, flow = _wheel_flow(tmp_path, monkeypatch)
+    original = page._open_wheel
+
+    def greyed():
+        original()
+        for item in page.wheel_items("Minutes"):
+            if item.text() in ("25", "30"):
+                item.attrs["data-disabled"] = "true"
+    page._open_wheel = greyed
+
+    effective, _ = flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
+
+    assert _wheel_clicks(page) == ["Hours 09", "Minutes 35"] and effective.minute == 35
+    assert page.value_of("Select time") == "09:35"
+
+
+def test_the_wheel_stops_when_the_value_read_back_is_not_the_expected_time(tmp_path, monkeypatch):
+    page, flow = _wheel_flow(tmp_path, monkeypatch)
+    original = page._click_wheel_item
+
+    def lazy(node):   # la page ignore le choix de la minute
+        if node.attrs["aria-label"].startswith("Minutes"):
+            return
+        original(node)
+    page._click_wheel_item = lazy
+
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
+
+    assert stop.value.code == "unexpected_page" and "non prise en compte" in str(stop.value)

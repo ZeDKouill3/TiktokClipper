@@ -94,7 +94,7 @@ REQUIRED_SELECTORS = (
     "visibility_public", "visibility_private", "visibility_friends", "comment_switch", "reuse_switch",
     "ai_switch", "schedule_now", "schedule_later", "schedule_inputs", "schedule_fields", "schedule_date_picker",
     "schedule_time_picker", "schedule_timezone", "picker_option", "picker_value",
-    "datepicker_month", "datepicker_year", "datepicker_nav", "datepicker_day",
+    "datepicker_month", "datepicker_year", "datepicker_nav", "datepicker_day", "timewheel_hour", "timewheel_minute",
     "calendar_month_title", "calendar_year_title", "calendar_arrow", "calendar_day", "timepicker_hour",
     "timepicker_minute", "schedule_picker_close", "content_check_running", "content_check_ok",
     "content_check_problem", "content_check_error", "content_check_retry",
@@ -824,8 +824,12 @@ class _Flow:
         self.pick_calendar_day(local)
         self.close_list("schedule_date_picker")
         self.open_list("schedule_time_picker")
-        minute = self.time_minute(local)
-        self.pick_option(lambda options: self.time_option(options, local.hour, minute), f"heure {local.hour:02d}:{minute:02d}")
+        if self.wait("timewheel_hour", optional=True) is not None or self.page.query_selector(
+                self.sel["selectors"]["timewheel_minute"]) is not None:
+            minute = self.pick_wheel_time(local)
+        else:
+            minute = self.time_minute(local)
+            self.pick_option(lambda options: self.time_option(options, local.hour, minute), f"heure {local.hour:02d}:{minute:02d}")
         self.close_list("schedule_time_picker")
         effective = local.replace(minute=minute, second=0, microsecond=0) if minute != local.minute else local
         date_shown, time_shown = self.list_value("schedule_date_picker"), self.list_value("schedule_time_picker")
@@ -892,6 +896,28 @@ class _Flow:
             if word in folded and folded.index(word) + 1 == local.month:
                 return (int(match[1]), int(match[3])) == (local.day, local.year)
         return False
+
+    def pick_wheel_time(self, local: datetime) -> int:
+        """Roue de l'heure (colonnes Hours / Minutes) : clique l'heure, puis la minute degrisee la plus proche de la
+        demandee (rend celle-ci). Un bouton grise (data-disabled=true) n'est jamais cliquable : absent du selecteur."""
+        hour_css, minute_css = self.sel["selectors"]["timewheel_hour"], self.sel["selectors"]["timewheel_minute"]
+
+        def column(css: str) -> dict[int, Any]:
+            return {int(t): o for o in self.page.query_selector_all(css) if (t := str(o.inner_text()).strip()).isdigit()}
+
+        hours = column(hour_css)
+        if local.hour not in hours:
+            raise self.stop("element_missing", f"heure {local.hour:02d} absente ou grisée dans la roue des heures "
+                                               f"({len(hours)} heure(s) choisissable(s)), rien n'est cliqué")
+        self.click_with(lambda: column(hour_css)[local.hour])
+        self.pause()
+        offered = column(minute_css)   # relue : les minutes proposees dependent de l'heure choisie
+        if not offered:
+            raise self.stop("element_missing", f"aucune minute choisissable dans la roue pour {local.hour:02d} h")
+        minute = min(offered, key=lambda m: (abs(m - local.minute), m))
+        self.click_with(lambda: column(minute_css)[minute])
+        self.pause()
+        return minute
 
     def time_minute(self, local: datetime) -> int:
         """La minute proposee la plus proche, dans l'heure demandee (pas de TikTok : 15 minutes en general)."""
