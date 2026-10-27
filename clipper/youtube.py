@@ -63,8 +63,10 @@ POST_OPTIONS = ("title", "visibility", "made_for_kids")
 TITLE_MAX = 100              # limite de YouTube (compteur « n/100 » de l'etape Details)
 REQUIRED_PUBLISH_LABELS = ("create", "upload_menu", "next", "kids_yes", "kids_no", "visibility_public",
                            "visibility_unlisted", "visibility_private", "expand_schedule", "timezone_button",
-                           "timezone_wanted", "timezone_forbidden", "final_publish", "final_save", "final_schedule")
+                           "timezone_wanted", "timezone_forbidden", "final_publish", "final_save", "final_schedule",
+                           "content_nav", "shorts_tab", "draft_edit")
 REQUIRED_PUBLISH_SELECTORS = ("file_input", "menu_item", "text_box", "radio", "labeled_button", "expand",
+                              "exact_text", "video_row", "draft_button", "step_visibility", "zone_shown",
                               "date_trigger", "text_input", "timezone_option", "final_button", "video_link")
 _SHORTS_TAG = re.compile(r"(?<!\w)#shorts\b", re.IGNORECASE)
 
@@ -562,18 +564,16 @@ class _Flow:
         self.pause()
 
     def selected_timezone(self) -> str:
-        """Fuseau retenu par Studio : le bouton « Fuseau horaire » n'affiche jamais le fuseau choisi (relevé 2026-10-27),
-        la liste rouverte marque l'option retenue ``aria-selected="true"`` ; elle est refermee par Echap."""
-        self.click_labeled("labeled_button", "timezone_button")
-        self.wait("timezone_option")
-        chosen = [o for o in self.page.query_selector_all(self.sel["selectors"]["timezone_option"])
-                  if o.is_visible() and o.get_attribute("aria-selected") == "true"]
-        self.page.keyboard.press("Escape")
-        self.pause()
-        if len(chosen) != 1:
-            raise self.stop("unexpected_page", f"{len(chosen)} fuseau(x) marqué(s) retenu(s) dans la liste (un seul "
-                                               f"attendu) : timezone_option")
-        return " ".join(str(chosen[0].inner_text()).split())
+        """Fuseau retenu par Studio, tel qu'affiche (relevé 2026-10-27) : une fois choisi, le bouton « Fuseau horaire »
+        est remplace par une liste dont le texte est « (UTC+01:00) Paris ». Un seul fuseau affiche est attendu ; aucun
+        (choix non pris en compte, le bouton est toujours la) ou plusieurs = arret."""
+        shown = {" ".join(str(e.inner_text()).split())
+                 for e in self.page.query_selector_all(self.sel["selectors"]["zone_shown"]) if e.is_visible()}
+        zones = sorted(t for t in shown if re.match(r"^\((?:UTC|GMT)", t))
+        if len(zones) != 1:
+            raise self.stop("unexpected_page", f"fuseau horaire non pris en compte : {len(zones)} fuseau(x) affiché(s) "
+                                               f"{zones} (« {self.sel['labels']['timezone_wanted']} » attendu) : zone_shown")
+        return zones[0]
 
     def text_fields(self) -> tuple[Any | None, Any | None]:
         """Champs texte visibles de la section Programmer : (date, heure), reperes par leur valeur (les ids input-N
@@ -746,6 +746,43 @@ class _Flow:
         self.await_success(titles)
         return self.result(short_id, mode, effective, visibility)
 
+    def open_draft(self, match: str) -> None:
+        """Contenu > Shorts, puis « Modifier le brouillon » de l'unique brouillon dont le titre commence par ``match`` :
+        zero ou plusieurs brouillons = arret (jamais le premier venu)."""
+        self.click_labeled("exact_text", "content_nav")
+        self.wait_css(self.sel["selectors"]["video_row"], "video_row", timeout_key="upload_timeout_s")
+        self.click_labeled("exact_text", "shorts_tab")
+        draft_css, draft_label = self.labeled("draft_button", "draft_edit")
+        wanted = " ".join(match.split()).casefold()
+
+        def drafts() -> list[Any]:
+            rows = self.page.query_selector_all(self.sel["selectors"]["video_row"])
+            return [r for r in rows if r.query_selector(draft_css) is not None
+                    and wanted in " ".join(str(r.inner_text()).split()).casefold()]
+
+        found = self.wait_poll(drafts, "action_timeout_s")
+        if not found:
+            raise self.stop("element_missing", f"aucun brouillon dont le titre contient « {match} » dans Contenu > Shorts")
+        if len(found) > 1:
+            raise self.stop("unexpected_page", f"{len(found)} brouillons dont le titre contient « {match} » : "
+                                               f"un seul attendu (aucun choix au hasard)")
+        found[0].query_selector(draft_css).click()
+        self.pause()
+
+    def run_draft(self, match: str, schedule_at: datetime) -> dict[str, Any]:
+        """Programme un brouillon deja envoye : Modifier le brouillon, Visibilite, meme chemin date/heure/fuseau/bouton
+        final que ``run``. Les details du brouillon (titre, description, enfants) ne sont pas touches."""
+        self.channel_id()
+        self.close_popups()
+        self.open_draft(match)
+        short_id = self.read_short_id()
+        self.wait("step_visibility").click()
+        self.pause()
+        effective = self.schedule_later(schedule_at)
+        self.press_final("final_schedule")
+        self.await_success(list(self.sel["success"]["scheduled"]))
+        return self.result(short_id, "scheduled", effective, str(self.settings["visibility"]))
+
     def result(self, short_id: str, mode: str, effective: datetime | None, visibility: str) -> dict[str, Any]:
         note = {"private": "vidéo publiée en privé", "unlisted": "vidéo non répertoriée"}.get(visibility)
         scheduled = mode == "scheduled"
@@ -756,6 +793,37 @@ class _Flow:
             "publish_at": (effective if scheduled else self.now).isoformat(),
             "note": None if scheduled else note,
         }
+
+
+def publish_draft(
+    account: str, match: str, *, schedule_at: datetime, config: Config | None = None, now: datetime | None = None,
+    selectors: dict[str, Any] | None = None, opener: Opener | None = None,
+    sleep: Callable[[float], None] = time.sleep, rng: Any = None, on_tick: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    """Programme (cote YouTube, heure de Paris, public) le brouillon deja envoye dont le titre contient ``match``
+    (envoi rate d'une publication precedente). Meme resultat et memes arrets que ``publish``."""
+    settings = get_settings(config)
+    if not account:
+        raise YouTubeError("compte YouTube manquant : la publication n'a pas de compte")
+    if not " ".join(str(match).split()):
+        raise YouTubeError("brouillon à programmer : un fragment de titre est requis")
+    if str(settings["visibility"]) != "public":
+        raise YouTubeError("programmation d'un brouillon : seule la visibilité publique est gérée ([youtube] visibility)")
+    now = now or datetime.now(timezone.utc)
+    _check_schedule(schedule_at, settings, now)
+    browser.validate_account(account)
+    sel = selectors or load_selectors()
+    open_profile = opener or functools.partial(browser._open_context, config=config)
+    with open_profile(account, headless=False) as context:
+        page = browser.fresh_page(context)
+        flow = _Flow(page, account, sel, settings, now=now, sleep=sleep, rng=rng or random.Random(), on_tick=on_tick,
+                     config=config)
+        try:
+            return flow.run_draft(match, schedule_at)
+        except YouTubeStop:
+            raise
+        except Exception as exc:  # noqa: BLE001 - erreur Playwright : arret sur avec capture
+            raise flow.stop("unexpected_page", f"page inattendue : {type(exc).__name__} : {exc}") from exc
 
 
 def publish(

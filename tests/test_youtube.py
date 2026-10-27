@@ -773,8 +773,10 @@ class FakeUpload:
     def __init__(self, *, welcome=True, studio_redirect=CHANNEL_URL, menu_items=DEFAULT_MENU_ITEMS, link=True,
                  upload_polls=0, success_polls=0, success_text=None, drop_tz_paris=False, ignore_date=False,
                  ignore_tz=False, text_boxes=2, captcha=False, final_label=None, screenshot_error=None,
-                 public_notice=False):
+                 public_notice=False, draft_titles=None):
         self.sel = _sel()
+        self.draft_titles = draft_titles    # liste de titres : la dialog d'envoi n'est pas ouverte, Contenu les liste
+        self.view = "dashboard"
         self.S, self.L = self.sel["selectors"], self.sel["labels"]
         self.url = "about:blank"
         self.calls: list[tuple] = []
@@ -785,12 +787,13 @@ class FakeUpload:
         self.keyboard = FakeKeyboard(self)
         self.focus = None
         self.typed: dict = {}
-        self.step = -1                      # -1 : pas de fichier ; 0..3 : etapes
+        self.step = -1 if draft_titles is None else -2   # -1 : pas de fichier ; -2 : Contenu ; 0..3 : etapes
         self.files: list[str] = []
         self.kids = None
         self.visibility = None
         self.expanded = False
         self.date_open = False
+        self.tz_chosen = False
         self.tz_open = False
         self.tz_choice = "(GMT+0100) Heure locale"
         self.date_text, self.time_text = "4 oct. 2026", "00:00"
@@ -877,6 +880,8 @@ class FakeUpload:
                 if self.success_text is not None and self.polls_success > self.success_polls:
                     shown.append(El(self, text=self.success_text))
             return shown
+        if self.step == -2:
+            return self._content(selector)
         if selector == S["labeled_button"].format(label=L["create"]):
             return [self._button(L["create"], on_click=lambda: setattr(self, "menu_open", True))]
         if selector == S["menu_item"]:
@@ -902,9 +907,32 @@ class FakeUpload:
                 return [El(self, text=label, on_click=lambda v=value: setattr(self, "kids", v))]
         if selector == S["labeled_button"].format(label=L["next"]) and self.step in (0, 1, 2):
             return [self._button(L["next"], on_click=lambda: setattr(self, "step", self.step + 1))]
+        if selector == S["step_visibility"] and self.draft_titles is not None and self.step in (0, 1, 2):
+            return [El(self, text="Visibilité", on_click=lambda: setattr(self, "step", 3))]
         if self.step == 3:
             return self._visibility_step(selector)
         return []
+
+    def _content(self, selector):
+        """Contenu de la chaine : menu « Contenus », onglet « Shorts », lignes (un Short publie puis les brouillons)."""
+        S, L = self.S, self.L
+        if selector == S["exact_text"].format(label=L["content_nav"]):
+            return [El(self, text=L["content_nav"], on_click=lambda: setattr(self, "view", "content"))]
+        if selector == S["exact_text"].format(label=L["shorts_tab"]) and self.view != "dashboard":
+            return [El(self, text=L["shorts_tab"], on_click=lambda: setattr(self, "view", "shorts"))]
+        if selector == S["video_row"] and self.view != "dashboard":
+            rows = [El(self, text="0:43\nUn Short publié\nPublique\nPubliée")]
+            for title in self.draft_titles:
+                row = El(self, text=f"0:39\n{title}\nAjoutez une description\n—\nBrouillon\n{L['draft_edit']}")
+                row.children[S["draft_button"].format(label=L["draft_edit"])] = El(
+                    self, text=L["draft_edit"], on_click=lambda t=title: self._open_draft(t))
+                rows.append(row)
+            return rows
+        return []
+
+    def _open_draft(self, title):
+        self.opened_draft = title
+        self.step = 0
 
     def _visibility_step(self, selector):
         S, L = self.S, self.L
@@ -920,8 +948,10 @@ class FakeUpload:
             if self.date_open and not getattr(self, "date_input_missing", False):  # la liste ouverte porte un champ où taper la date
                 fields.insert(0, El(self, value=self.date_text))
             return fields
-        if selector == S["labeled_button"].format(label=L["timezone_button"]) and self.expanded:
-            # relevé 2026-10-27 : le bouton n'affiche jamais le fuseau choisi
+        if selector == S["zone_shown"] and self.expanded and self.tz_chosen:
+            # relevé 2026-10-27 : le fuseau choisi remplace le bouton, dans une liste (deux noeuds role=button imbriqués)
+            return [El(self, text=self.tz_choice), El(self, text=self.tz_choice), El(self, text=self.date_text)]
+        if selector == S["labeled_button"].format(label=L["timezone_button"]) and self.expanded and not self.tz_chosen:
             return [El(self, text=L["timezone_button"], on_click=lambda: setattr(self, "tz_open", True))]
         if selector == S["timezone_option"] and self.tz_open:
             options = [("(GMT+0100) Heure locale"), "(UTC+00:00) Londres", "(UTC+01:00) Paris", "(UTC+01:00) Berlin"]
@@ -953,6 +983,7 @@ class FakeUpload:
     def _pick_tz(self, option):
         if not self.ignore_tz:
             self.tz_choice = option
+            self.tz_chosen = True
         self.tz_open = False
 
     def committed(self, element):
@@ -996,6 +1027,74 @@ def stop_of(tmp_path, monkeypatch, page, **kwargs) -> youtube.YouTubeStop:
     with pytest.raises(youtube.YouTubeStop) as caught:
         publish(tmp_path, monkeypatch, page, **kwargs)
     return caught.value
+
+
+# -- programmer un brouillon existant (envoi rate d'une publication precedente)
+
+DRAFT_TITLE = "Sur Vénus, un tour sur elle-même dure plus longtemps qu'un tour autour du Soleil : 240 jours contre 225"
+
+
+def schedule_draft(tmp_path, monkeypatch, page, *, match="Sur Vénus, un tour sur elle-même", schedule_at=None):
+    monkeypatch.chdir(tmp_path)
+
+    @contextmanager
+    def opener(account, *, headless):
+        yield FakeContext(page)
+
+    config = Config(mode="review", workspace_dir=tmp_path / "w", output_dir=tmp_path / "o",
+                    _sections={"youtube": {"upload_timeout_s": 3, "publish_confirm_timeout_s": 3, "poll_interval_s": 1,
+                                           "action_timeout_s": 2}})
+    return youtube.publish_draft("ma_chaine", match, schedule_at=schedule_at or datetime(2026, 10, 28, 18, 0, tzinfo=PARIS),
+                                 config=config, now=NOW, opener=opener, sleep=lambda s: None, rng=random.Random(1))
+
+
+def test_an_existing_draft_is_scheduled_through_the_same_date_time_zone_path(tmp_path, monkeypatch):
+    page = FakeUpload(success_text="Vidéo programmée", draft_titles=["venus", DRAFT_TITLE])
+
+    result = schedule_draft(tmp_path, monkeypatch, page)
+
+    assert page.opened_draft == DRAFT_TITLE and not page.files  # aucun envoi de fichier
+    assert (page.date_text, page.time_text) == ("28 oct. 2026", "18:00")
+    assert page.tz_choice == "(UTC+01:00) Paris"
+    assert page.clicked("Programmer") and page.final_clicked
+    assert (result["state"], result["post_id"]) == ("scheduled_on_youtube", SHORT_ID)
+    assert datetime.fromisoformat(result["publish_at"]) == datetime(2026, 10, 28, 18, 0, tzinfo=PARIS)
+    assert page.kids is None  # les détails du brouillon ne sont pas touchés
+
+
+def test_the_short_link_selector_targets_the_dialog_link_not_the_hidden_row_link():
+    # relevé 2026-10-27 : la ligne du brouillon porte un lien caché (#anchor-watch-on-yt) vers le même Short, avant celui
+    # de la dialog (#video-link) : un sélecteur sur le seul href attendait 600 s un élément visible
+    assert "#video-link" in _sel()["selectors"]["video_link"]
+
+
+def test_no_matching_draft_is_a_stop_never_another_draft(tmp_path, monkeypatch):
+    page = FakeUpload(success_text="Vidéo programmée", draft_titles=["venus", "test"])
+
+    with pytest.raises(youtube.YouTubeStop) as caught:
+        schedule_draft(tmp_path, monkeypatch, page)
+
+    assert caught.value.code == "element_missing" and "Sur Vénus" in caught.value.reason
+    assert not hasattr(page, "opened_draft") and not page.final_clicked
+
+
+def test_two_matching_drafts_are_a_stop_no_random_pick(tmp_path, monkeypatch):
+    page = FakeUpload(success_text="Vidéo programmée", draft_titles=[DRAFT_TITLE, DRAFT_TITLE])
+
+    with pytest.raises(youtube.YouTubeStop) as caught:
+        schedule_draft(tmp_path, monkeypatch, page)
+
+    assert caught.value.code == "unexpected_page" and "2 brouillons" in caught.value.reason
+    assert not hasattr(page, "opened_draft") and not page.final_clicked
+
+
+def test_a_draft_schedule_in_the_past_is_refused_before_any_browser(tmp_path, monkeypatch):
+    page = FakeUpload(draft_titles=[DRAFT_TITLE])
+
+    with pytest.raises(youtube.YouTubeError, match="moins de"):
+        schedule_draft(tmp_path, monkeypatch, page, schedule_at=NOW + timedelta(minutes=5))
+
+    assert page.calls == []
 
 
 # -- publication immediate
