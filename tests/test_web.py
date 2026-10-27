@@ -12148,15 +12148,19 @@ def test_two_concurrent_letterbox_writes_on_different_keys_keep_both(tmp_path, i
     import threading
 
     _channels_setup(tmp_path)
+    # Les apps sont construites ici, hors threads : FastAPI construit ses champs de route sous
+    # warnings.catch_warnings(), qui n'est pas thread-safe (UnsupportedFieldAttributeWarning
+    # 'video_id' qui fuit d'un thread à l'autre). Le concurrent reste les deux PUT.
+    clients = [client(tmp_path), client(tmp_path)]
     barrier = threading.Barrier(2)
     statuses = []
 
-    def put(body):
-        c = client(tmp_path)
+    def put(c, body):
         barrier.wait(5)
         statuses.append(c.put(_LB_URL, json=body).status_code)
 
-    threads = [threading.Thread(target=put, args=(b,)) for b in ({"letterbox_top": 470}, {"cta_handle_gap": 14})]
+    threads = [threading.Thread(target=put, args=(c, b))
+               for c, b in zip(clients, ({"letterbox_top": 470}, {"cta_handle_gap": 14}))]
     for t in threads:
         t.start()
     for t in threads:
