@@ -660,7 +660,20 @@ def _pid_alive(pid: int | None) -> bool:
         os.kill(pid, 0)
     except OSError:
         return False
-    return True
+    return not _is_zombie(pid)
+
+
+def _is_zombie(pid: int) -> bool:
+    """POSIX : un enfant tue mais pas encore recolte (``wait`` du parent) reste un zombie, et ``kill(pid, 0)``
+    reussit encore dessus : sans ce test, ``_terminate_pid`` attendrait la grace entiere alors que le processus
+    est deja mort (Windows : GetExitCodeProcess le dit deja). Linux : etat ``Z`` dans ``/proc/<pid>/stat`` ;
+    sans ``/proc`` (macOS) ou illisible, on garde l'ancien comportement (vivant)."""
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as f:
+            stat = f.read()
+    except OSError:
+        return False
+    return stat.rpartition(b")")[2].lstrip()[:1] in (b"Z", b"X")
 
 
 def _process_created_at(pid: int | None) -> int | None:
