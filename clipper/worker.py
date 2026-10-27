@@ -107,6 +107,78 @@ def note_refused(config: Config, exit_code: int) -> None:
                     encoding="utf-8")
 
 
+
+DRAIN_FILE = "drain.json"
+STATS_RUNNING_FILE = "stats-running.json"
+
+
+def drain_path(config: Config) -> Path:
+    return _queue_path(config).with_name(DRAIN_FILE)
+
+
+def _stats_running_path(config: Config) -> Path:
+    return _queue_path(config).with_name(STATS_RUNNING_FILE)
+
+
+def request_drain(config: Config) -> None:
+    """Pose la demande de mise en attente (``clipper drain``, ``POST /api/worker/drain``) : le worker la relit a
+    chaque tour et ne commence plus aucune publication ni releve de statistiques, mais termine celle en cours.
+    Le traitement des videos n'est pas concerne."""
+    path = drain_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"at": _now_iso(), "pid": os.getpid()}), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def clear_drain(config: Config) -> bool:
+    """Leve la demande ; faux si aucune n'etait posee."""
+    try:
+        drain_path(config).unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def drain_requested(config: Config) -> bool:
+    return drain_path(config).is_file()
+
+
+def _piloted_publication(config: Config) -> dict[str, str | None] | None:
+    """La publication que le worker pilote en ce moment (entree « en cours » dont le pilote vit), ou ``None`` ;
+    une entree restee « en cours » d'un pilote mort n'est pas pilotee (elle sera passee en echec au demarrage)."""
+    watch = config.section("watch")
+    state_dir = config.section("publish")["state_dir"]
+    for name in [*channel_mod.list_channels(watch["presets_dir"]), publish_mod.NO_CHANNEL]:
+        for entry in publish_mod.list_entries(name, state_dir=state_dir):
+            if entry.get("in_progress_since") and publish_mod._holder_alive(entry):
+                return {"video_id": entry["video_id"], "clip_id": entry["clip_id"],
+                        "account": publish_mod.entry_account(entry)}
+    return None
+
+
+def _piloted_stats(config: Config) -> dict[str, str] | None:
+    """Le releve de statistiques en cours (marqueur ecrit par le worker pendant le pilotage), ou ``None``."""
+    path = _stats_running_path(config)
+    try:
+        marker = json.loads(path.read_text(encoding="utf-8"))
+        pid, account = int(marker["pid"]), str(marker["account"])
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise WorkerError(f"marqueur de releve illisible ({path}) : {exc}") from exc
+    return {"account": account} if process_alive(pid, marker.get("pid_created_at")) else None
+
+
+def drain_status(config: Config) -> dict[str, Any]:
+    """``{draining, publishing, stats, idle}`` : ``publishing`` = ``None`` ou ``{video_id, clip_id, account}`` de la
+    publication en cours, ``stats`` = ``None`` ou ``{account}`` du releve en cours, ``idle`` vrai quand la demande
+    est posee et que plus rien n'est pilote."""
+    draining = drain_requested(config)
+    publishing, stats = _piloted_publication(config), _piloted_stats(config)
+    return {"draining": draining, "publishing": publishing, "stats": stats,
+            "idle": draining and publishing is None and stats is None}
+
 # Codes de sortie d'un processus arrete par Ctrl+C : STATUS_CONTROL_C_EXIT (Windows, non signe et signe),
 # 130 et -2 (SIGINT ailleurs). Le 11/10 un Ctrl+C a laisse croire a un worker refuse (« orphelin »).
 _CTRL_C_EXIT_CODES = frozenset({3221225786, -1073741510, 130, -2})
@@ -811,6 +883,7 @@ class Worker:
         self._recover_prefetch()
         self._recover_interrupted_videos()
         self._recover_interrupted_publications()
+        self._lift_stale_drain()
         self._migrate_legacy_presets()
 
     def _refuse_second_instance(self) -> None:
@@ -862,6 +935,17 @@ class Worker:
                     log.warning("%s : publication interrompue par l'arrêt du worker, passée en échec", name)
         except (publish_mod.PublishError, channel_mod.ChannelError, ConfigError, OSError, ValueError) as exc:
             log.error("reprise des publications interrompues impossible : %s", exc)
+
+    def _lift_stale_drain(self) -> None:
+        """Une demande de mise en attente restee posee d'avant le redemarrage est levee, journalisee : le worker qui
+        demarre apres un `clipper drain` + Ctrl+C reprend les publications (jamais en attente a l'insu de tous)."""
+        if clear_drain(self.config):
+            log.warning("demande de mise en attente des publications restée posée : levée au démarrage du worker")
+
+    def _draining(self) -> bool:
+        """Demande de mise en attente posee (relue a chaque tour). Un fichier illisible ne se lit pas : seule sa
+        presence compte, donc jamais une valeur de secours."""
+        return drain_requested(self.config)
 
     def _beat(self, *, force: bool = False) -> None:
         """Écrit ``{pid, at, pid_created_at}`` dans ``heartbeat_path`` si ``heartbeat_interval_s``
@@ -928,7 +1012,7 @@ class Worker:
         de l'interface web)."""
         self._beat()
         self._watch_channels()
-        if not self._publish_due():
+        if not self._draining() and not self._publish_due():  # mise en attente : ni publication ni releve
             self._stats_due()
         self._learning_due()
         self._repartition_due()
@@ -1131,7 +1215,11 @@ class Worker:
                 if not tiktok.stats_due(account, config=self.config, now=now):
                     continue
                 self._stats_attempts[account] = now
-                self.stats_fetcher(account, config=self.config, on_tick=self._beat)
+                self._mark_stats_running(account)
+                try:
+                    self.stats_fetcher(account, config=self.config, on_tick=self._beat)
+                finally:
+                    _stats_running_path(self.config).unlink(missing_ok=True)
                 log.info("%s : statistiques TikTok relevées", account)
                 return
         except Exception as exc:  # noqa: BLE001 - jamais un worker mort : l'echec est journalise une fois
@@ -1141,6 +1229,13 @@ class Worker:
             if message not in self._logged_stats_errors:
                 self._logged_stats_errors.add(message)
                 log.error("relevé des statistiques TikTok impossible : %s", message)
+
+    def _mark_stats_running(self, account: str) -> None:
+        """Marqueur du releve en cours (pid du worker) : `drain_status` ne dit `idle` qu'une fois le navigateur rendu."""
+        path = _stats_running_path(self.config)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"account": account, "pid": os.getpid(), "since": _now_iso(),
+                                    "pid_created_at": self._pid_created_at}), encoding="utf-8")
 
     def _learning_due(self) -> None:
         """Boucle d'apprentissage apres releve (ADR-c260, SPEC-00db R4) : rattache les posts TikTok aux clips, puis

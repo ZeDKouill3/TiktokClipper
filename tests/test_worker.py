@@ -5292,3 +5292,134 @@ def test_uk_account_is_published_when_ip_is_in_the_uk(tmp_path, monkeypatch):
     _pub_worker(config, pub).tick()
 
     assert len(pub.calls) == 1 and _entries(tmp_path)[0]["status"] == "published"
+
+
+# --------------------------------------------------------------------------
+# Mise en attente (drain) des publications : redemarrer serve sans couper un envoi
+# --------------------------------------------------------------------------
+
+def _seed_piloted(tmp_path, channel, clip_id, *, video_id="aaaaaaaaaaa", account=ACCOUNT):
+    """Une publication en cours de pilotage par CE processus (pid vivant)."""
+    _seed(tmp_path, channel, clip_id, _ago(minutes=1), video_id=video_id, account=account,
+          in_progress_since=_ago(seconds=5).isoformat(), in_progress_pid=os.getpid(),
+          in_progress_pid_created_at=worker._process_created_at(os.getpid()))
+
+
+def test_drain_request_is_a_file_under_state_that_can_be_raised_and_lifted(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch)
+
+    assert worker.drain_status(config) == {"draining": False, "publishing": None, "stats": None, "idle": False}
+    worker.request_drain(config)
+    assert (tmp_path / "state" / "drain.json").is_file()
+    assert worker.drain_status(config)["draining"] is True
+    assert worker.clear_drain(config) is True
+    assert worker.clear_drain(config) is False  # rien a lever
+    assert worker.drain_status(config)["draining"] is False
+
+
+def test_while_draining_the_worker_starts_no_tiktok_publication(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch)
+    _seed(tmp_path, "ma_chaine", "01", _ago(minutes=1))
+    publisher = FakePublisher()
+    w = _pub_worker(config, publisher)
+    worker.request_drain(config)
+
+    w.tick()
+    w.tick()
+
+    assert publisher.calls == [] and _entries(tmp_path)[0]["status"] == "scheduled"
+    worker.clear_drain(config)  # la demande est relue a chaque tour : levee, la publication part
+    w.tick()
+    assert len(publisher.calls) == 1 and _entries(tmp_path)[0]["status"] == "published"
+
+
+def test_while_draining_the_worker_starts_no_youtube_publication(tmp_path, monkeypatch):
+    config = _youtube_env(tmp_path, monkeypatch)
+    _seed(tmp_path, "ma_chaine", "01", _ago(minutes=1))
+    yt, tt = FakeYouTubePublisher(), FakePublisher()
+    w = _yt_worker(config, yt, tt)
+    worker.request_drain(config)
+
+    w.tick()
+
+    assert yt.calls == [] and tt.calls == [] and _entries(tmp_path)[0]["status"] == "scheduled"
+
+
+def test_while_draining_the_worker_starts_no_stats_fetch(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch)
+    fetcher = FakeStatsFetcher(tmp_path)
+    w = _stats_worker(config, fetcher)
+    worker.request_drain(config)
+
+    w.tick()
+    assert fetcher.calls == []
+    worker.clear_drain(config)
+    w.tick()
+    assert [c["account"] for c in fetcher.calls] == [ACCOUNT]
+
+
+def test_a_drain_raised_during_a_publication_lets_it_finish_but_starts_no_other(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch)
+    _seed(tmp_path, "ma_chaine", "01", _ago(minutes=2))
+    _seed(tmp_path, "ma_chaine", "02", _ago(minutes=1))
+    publisher = FakePublisher(during=lambda: worker.request_drain(config))
+    w = _pub_worker(config, publisher)
+
+    w.tick()
+    w.tick()
+
+    states = {e["clip_id"]: e["status"] for e in _entries(tmp_path)}
+    assert states == {"01": "published", "02": "scheduled"} and len(publisher.calls) == 1
+
+
+def test_drain_status_names_the_publication_being_piloted_then_goes_idle(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch)
+    _seed_piloted(tmp_path, "ma_chaine", "01")
+    worker.request_drain(config)
+
+    status = worker.drain_status(config)
+    assert status["draining"] is True and status["idle"] is False
+    assert status["publishing"] == {"video_id": "aaaaaaaaaaa", "clip_id": "01", "account": ACCOUNT}
+
+    path = tmp_path / "state" / "publish" / "ma_chaine.json"
+    entries = json.loads(path.read_text(encoding="utf-8"))
+    entries[0].update(status="published", in_progress_since=None, in_progress_pid=None,
+                      in_progress_pid_created_at=None)
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    assert worker.drain_status(config) == {"draining": True, "publishing": None, "stats": None, "idle": True}
+
+
+def test_drain_status_ignores_an_entry_left_in_progress_by_a_dead_pilot(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch)
+    _seed(tmp_path, "ma_chaine", "01", _ago(minutes=1), in_progress_since=_ago(minutes=9).isoformat(),
+          in_progress_pid=2 ** 22 + 12345, in_progress_pid_created_at=1)
+    worker.request_drain(config)
+
+    assert worker.drain_status(config)["publishing"] is None and worker.drain_status(config)["idle"] is True
+
+
+def test_drain_is_not_idle_while_a_stats_fetch_is_piloting_the_browser(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch)
+    seen = {}
+
+    def fetcher(account, *, config=None, on_tick=None, **kwargs):
+        seen["status"] = worker.drain_status(config)
+        return {"account": account}
+
+    w = _stats_worker(config, fetcher)
+    w.tick()
+
+    assert seen["status"]["stats"] == {"account": ACCOUNT} and seen["status"]["idle"] is False
+    worker.request_drain(config)
+    assert worker.drain_status(config)["stats"] is None and worker.drain_status(config)["idle"] is True
+
+
+def test_a_worker_that_starts_lifts_a_drain_left_raised_and_logs_it(tmp_path, monkeypatch, caplog):
+    config = _pub_env(tmp_path, monkeypatch)
+    worker.request_drain(config)
+
+    with caplog.at_level(logging.WARNING, logger="clipper.worker"):
+        _pub_worker(config, FakePublisher()).startup()
+
+    assert worker.drain_status(config)["draining"] is False
+    assert any("mise en attente" in r.getMessage() for r in caplog.records)

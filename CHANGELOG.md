@@ -10,6 +10,10 @@ Notes de version détaillées : [`docs/releases/`](docs/releases/).
 
 ## [Non publié]
 
+### Ajouté
+
+- `clipper drain [--wait SECONDES]` et `/api/worker/drain` (POST, GET, DELETE) : mise en attente des publications avant de redémarrer `serve`. Le worker ne commence plus aucune publication (TikTok ni YouTube) ni relevé de statistiques, termine celle en cours, et `--wait` rend 0 dès que plus rien n'est piloté (non nul au délai dépassé, sans rien tuer). Un worker qui démarre lève une demande restée posée.
+
 ## [0.8.0] - 2026-10-19
 
 Version du titre d'écran et de la publication fiabilisée : le titre d'écran d'un clip a trois styles

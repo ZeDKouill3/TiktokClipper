@@ -86,6 +86,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("worker", help="Lance le worker seul (file state/queue.json, un enfant a la fois)")
 
+    p = sub.add_parser(
+        "drain", help="Met les publications en attente (le worker termine celle en cours) avant de relancer serve")
+    p.add_argument("--wait", type=float, default=None, metavar="SECONDES",
+                   help="Attend que plus rien ne soit pilote (code 0) ; code 1 au delai depasse, rien n'est tue")
+
     p = sub.add_parser("browser", help="Profils de navigateur par compte (connexion manuelle)")
     browser_sub = p.add_subparsers(dest="browser_command", required=True)
     p = browser_sub.add_parser(
@@ -294,6 +299,41 @@ def _mediapipe_prefetch_factory(config, local_files_only: bool) -> object:
     return reframe.ensure_mediapipe_model(config.section("reframe"))
 
 
+def _drain_busy(status: dict) -> str:
+    pub, stats = status["publishing"], status["stats"]
+    parts = []
+    if pub:
+        parts.append(f"publication {pub['video_id']}/{pub['clip_id']} (compte {pub['account']})")
+    if stats:
+        parts.append(f"relevé des statistiques (compte {stats['account']})")
+    return " et ".join(parts) or "rien en cours"
+
+
+def _drain(config, wait: float | None) -> int:
+    """Pose la demande de mise en attente puis, avec ``--wait``, attend que le worker ait fini ce qu'il pilote.
+    Ne tue jamais rien : au delai depasse, rend 1 et dit ce qui tourne encore (le Ctrl+C reste a la main)."""
+    import time
+
+    from clipper import worker as worker_mod
+
+    try:
+        worker_mod.request_drain(config)
+        status = worker_mod.drain_status(config)
+        deadline = time.monotonic() + wait if wait is not None else None
+        print("publications en attente : le worker ne commence plus rien (relancer serve lève la demande)")
+        while deadline is not None and not status["idle"]:
+            if time.monotonic() >= deadline:
+                print(f"délai dépassé : {_drain_busy(status)} tourne encore, rien n'a été arrêté", file=sys.stderr)
+                return 1
+            time.sleep(1.0)
+            status = worker_mod.drain_status(config)
+    except (worker_mod.WorkerError, OSError, ValueError) as exc:
+        print(f"erreur : {exc}", file=sys.stderr)
+        return 1
+    print(f"état : {_drain_busy(status)}" if not status["idle"] else "plus rien n'est piloté : redémarrage possible")
+    return 0
+
+
 def _models_prefetch(config) -> int:
     from clipper import models
 
@@ -377,6 +417,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"erreur : {exc}", file=sys.stderr)
                 return 1
             return 0
+        elif args.command == "drain":
+            return _drain(config, args.wait)
         elif args.command == "models":
             if args.models_command == "prefetch":
                 return _models_prefetch(config)

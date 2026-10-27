@@ -98,3 +98,48 @@ def test_worker_command_without_config_watches_config_toml_without_base(isolated
     assert cli.main(["worker"]) == 0
     assert str(seen["config_path"]) == "config.toml"
     assert seen.get("config_base") is None
+
+
+def test_drain_command_raises_the_request_and_returns_0_once_idle(isolated_cwd, capsys):
+    from clipper import __main__ as cli
+    from clipper import worker
+    from clipper.config import load_config
+
+    assert cli.main(["drain", "--wait", "5"]) == 0
+
+    assert worker.drain_status(load_config())["draining"] is True  # reste posee : le worker qui demarre la leve
+    assert "attente" in capsys.readouterr().out
+
+
+def test_drain_command_times_out_with_a_non_zero_code_and_kills_nothing(isolated_cwd, monkeypatch, capsys):
+    import time
+
+    import pytest
+
+    from clipper import __main__ as cli
+    from clipper import worker
+
+    busy = {"draining": True, "publishing": {"video_id": "aaaaaaaaaaa", "clip_id": "01", "account": "ab12cd"},
+            "stats": None, "idle": False}
+    monkeypatch.setattr(worker, "drain_status", lambda config: busy)
+    monkeypatch.setattr(worker, "terminate_tree", lambda *a, **k: pytest.fail("clipper drain ne tue jamais rien"))
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    ticks = iter(range(0, 1000, 2))
+    monkeypatch.setattr(time, "monotonic", lambda: next(ticks))
+
+    code = cli.main(["drain", "--wait", "10"])
+
+    assert code != 0
+    err = capsys.readouterr().err
+    assert "aaaaaaaaaaa/01" in err and "ab12cd" in err
+
+
+def test_drain_command_without_wait_only_raises_the_request(isolated_cwd, monkeypatch):
+    from clipper import __main__ as cli
+    from clipper import worker
+
+    monkeypatch.setattr(worker, "drain_status", lambda config: {
+        "draining": True, "publishing": {"video_id": "v", "clip_id": "01", "account": "a"}, "stats": None,
+        "idle": False})
+
+    assert cli.main(["drain"]) == 0

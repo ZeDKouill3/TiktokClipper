@@ -12190,3 +12190,46 @@ def test_sse_clients_of_a_reloaded_config_share_one_hub(tmp_path, isolated_cwd):
         return count
 
     assert asyncio.run(_run()) == 1
+
+
+# --------------------------------------------------------------------------
+# Mise en attente (drain) des publications : API
+# --------------------------------------------------------------------------
+
+def test_worker_drain_api_raises_reports_and_lifts_the_request(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    test_client = client(tmp_path)
+
+    assert test_client.get("/api/worker/drain").json() == {
+        "draining": False, "publishing": None, "stats": None, "idle": False}
+
+    posted = test_client.post("/api/worker/drain")
+    assert posted.status_code == 200 and posted.json()["draining"] is True
+    assert (tmp_path / "state" / "drain.json").is_file()
+    assert test_client.get("/api/worker/drain").json() == {
+        "draining": True, "publishing": None, "stats": None, "idle": True}
+
+    deleted = test_client.delete("/api/worker/drain")
+    assert deleted.status_code == 200 and deleted.json()["draining"] is False
+    assert not (tmp_path / "state" / "drain.json").exists()
+    assert test_client.delete("/api/worker/drain").json()["draining"] is False  # idempotent
+
+
+def test_worker_drain_api_reports_the_publication_being_piloted(tmp_path, monkeypatch):
+    from clipper import worker as worker_mod
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "state" / "publish").mkdir(parents=True)
+    (tmp_path / "state" / "publish" / "_sans_chaine.json").write_text(json.dumps([{
+        "video_id": "aaaaaaaaaaa", "clip_id": "01", "series_id": None, "part": None, "status": "scheduled",
+        "slot_at": "2026-10-01T09:00:00+00:00", "decided_at": "2026-01-01T00:00:00+00:00", "published_at": None,
+        "error": None, "account": "ab12cd", "in_progress_since": "2026-10-01T09:00:01+00:00",
+        "in_progress_pid": os.getpid(), "in_progress_pid_created_at": worker_mod._process_created_at(os.getpid()),
+    }]), encoding="utf-8")
+    test_client = client(tmp_path)
+    test_client.post("/api/worker/drain")
+
+    body = test_client.get("/api/worker/drain").json()
+
+    assert body["draining"] is True and body["idle"] is False
+    assert body["publishing"] == {"video_id": "aaaaaaaaaaa", "clip_id": "01", "account": "ab12cd"}

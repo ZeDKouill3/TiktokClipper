@@ -2582,6 +2582,34 @@ def create_app(config: Config | None = None) -> FastAPI:
             return []
         return _with_thumbnails(config, json.loads(path.read_text(encoding="utf-8")))
 
+    # Mise en attente (drain) des publications : redemarrer serve sans couper un envoi. Pas de traitement ici,
+    # seulement le fichier de demande que le worker relit a chaque tour (clipper.worker).
+    def _drain_state() -> dict[str, Any]:
+        try:
+            return worker_mod.drain_status(config)
+        except (worker_mod.WorkerError, publish_mod.PublishError, channel_mod.ChannelError, ConfigError,
+                OSError, ValueError) as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/api/worker/drain")
+    def worker_drain_status() -> dict[str, Any]:
+        return _drain_state()
+
+    @app.post("/api/worker/drain")
+    def worker_drain_request() -> dict[str, Any]:
+        try:
+            worker_mod.request_drain(config)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"demande de mise en attente impossible : {exc}") from exc
+        return _drain_state()
+
+    @app.delete("/api/worker/drain")
+    def worker_drain_lift() -> dict[str, Any]:
+        try:
+            worker_mod.clear_drain(config)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"demande de mise en attente non levée : {exc}") from exc
+        return _drain_state()
     @app.post("/api/queue/{video_id}/front")
     def queue_front(video_id: str) -> dict[str, Any]:
         _validate_video_id(video_id)
