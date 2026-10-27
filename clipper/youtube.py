@@ -25,6 +25,7 @@ Module d'etape isole : n'importe aucune autre etape ni ``clipper.web`` (ADR-b16b
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import random
 import re
@@ -37,6 +38,7 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from clipper import browser
+from clipper import channel as channel_mod
 from clipper.config import Config
 
 logger = logging.getLogger(__name__)
@@ -55,6 +57,9 @@ CONFIG_DEFAULTS: dict[str, object] = {
     "publish_confirm_timeout_s": 120,  # attente de la fenetre « Vidéo mise en ligne » apres le clic final
     "schedule_max_days": 30,     # programmation la plus lointaine acceptee par Clipper (non releve sur la page)
     "schedule_min_minutes": 15,  # avance minimale d'une programmation (conservateur, non releve sur la page)
+    "stats_dir": "state/stats/youtube",  # historique par compte : <stats_dir>/<compte>/<horodatage>.json (SPEC-5e50 R6)
+    "stats_stale_min": 60,       # ecran Statistiques : releve a l'ouverture si le dernier essai a plus de N minutes (0 = jamais)
+    "stats_detail_max": 30,      # pages de detail (Apercu, Engagement, vue avancee) pour les N Shorts publies les plus recents
 }
 
 MODES = ("immediate", "scheduled")
@@ -68,6 +73,9 @@ REQUIRED_PUBLISH_LABELS = ("create", "upload_menu", "next", "kids_yes", "kids_no
 REQUIRED_PUBLISH_SELECTORS = ("file_input", "menu_item", "text_box", "radio", "labeled_button", "expand",
                               "exact_text", "video_row", "draft_button", "step_visibility", "zone_shown",
                               "date_trigger", "text_input", "timezone_option", "final_button", "video_link")
+REQUIRED_STATS_SELECTORS = ("overview_url", "explore_url", "row_link", "row_link_pattern", "paginator", "paginator_pattern",
+                            "tab_engagement", "shorts_url_marker", "error_text", "views_pattern", "subscribers",
+                            "engaged_views", "watch_hours", "avg_view", "stayed", "swiped", "explore_anchor")
 _SHORTS_TAG = re.compile(r"(?<!\w)#shorts\b", re.IGNORECASE)
 
 SELECTORS_PATH = Path(__file__).parent / "assets" / "youtube_selectors.toml"
@@ -106,6 +114,12 @@ def get_settings(config: Config | None) -> dict[str, Any]:
         value = settings[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < minimum:
             raise YouTubeError(f"[youtube] {key} invalide : {value!r} (un nombre >= {minimum} est attendu)")
+    if not isinstance(settings["stats_dir"], str) or not settings["stats_dir"]:
+        raise YouTubeError(f"[youtube] stats_dir invalide : {settings['stats_dir']!r} (un chemin est attendu)")
+    for key in ("stats_stale_min", "stats_detail_max"):
+        value = settings[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise YouTubeError(f"[youtube] {key} invalide : {value!r} (un nombre >= 0 est attendu)")
     if settings["min_action_delay_s"] > settings["max_action_delay_s"]:
         raise YouTubeError(
             f"[youtube] min_action_delay_s ({settings['min_action_delay_s']}) dépasse max_action_delay_s "
@@ -154,6 +168,15 @@ def load_selectors(path: str | Path | None = None) -> dict[str, Any]:
     need("detect", "captcha", list)
     need("detect", "verification", list)
     need("detect", "daily_upload_limit", list)
+    for key in REQUIRED_STATS_SELECTORS:
+        need("stats", key, str)
+    for key in ("row_link_pattern", "paginator_pattern", "views_pattern"):
+        try:
+            if re.compile(data["stats"][key]).groups < 1:
+                raise YouTubeError(f"fichier de repères YouTube ({target.name}) : [stats] {key} doit capturer une valeur")
+        except re.error as exc:
+            raise YouTubeError(f"fichier de repères YouTube ({target.name}) : [stats] {key} invalide ({exc})") from None
+    need("stats", "explore_header", list)
     months = data.get("calendar", {}).get("months")
     if not (isinstance(months, list) and len(months) == 12 and all(isinstance(m, str) and m for m in months)):
         raise YouTubeError(f"fichier de repères YouTube ({target.name}) : [calendar] months manquant ou invalide "
@@ -893,3 +916,371 @@ def publish(
             raise
         except Exception as exc:  # noqa: BLE001 - erreur Playwright : arret sur avec capture
             raise flow.stop("unexpected_page", f"page inattendue : {type(exc).__name__} : {exc}") from exc
+
+
+# ---------------------------------------------------------------- statistiques par Short (SPEC-5e50 R6)
+
+_SPACES = re.compile(r"[\s  ]+")
+_DASH = "—"
+VIDEO_SORTS = ("posted_at", "title", "views", "likes", "comments", "avg_view_s", "watched_share", "subscribers_gained")
+DETAIL_FIELDS = ("views", "likes", "comments", "avg_view_s", "watched_share", "swiped_share", "engaged_views",
+                 "watch_hours", "subscribers_gained")
+_ERROR_SUFFIX = ".error.json"
+
+
+def _compact(text: Any) -> str:
+    return _SPACES.sub("", text) if isinstance(text, str) else ""
+
+
+def parse_count(text: Any) -> int | None:
+    """Entier affiche par Studio (« 1 155 », « +3 ») ; absent (« — »), vide ou arrondi (« 1,2 k ») : ``None``, jamais 0."""
+    found = re.fullmatch(r"[+\-]?\d+", _compact(text))
+    return int(found.group(0)) if found else None
+
+
+def parse_decimal(text: Any) -> float | None:
+    """Decimal a virgule francaise (« 4,2 ») ; absent ou illisible : ``None``."""
+    found = re.fullmatch(r"\d+(?:[.,]\d+)?", _compact(text))
+    return float(found.group(0).replace(",", ".")) if found else None
+
+
+def parse_percent(text: Any) -> float | None:
+    """« 57,6 % » -> 0.576 ; absent ou illisible : ``None``."""
+    found = re.fullmatch(r"(\d+(?:[.,]\d+)?)%", _compact(text))
+    return round(float(found.group(1).replace(",", ".")) / 100, 6) if found else None
+
+
+def parse_duration(text: Any) -> float | None:
+    """« 0:21 » -> 21.0 secondes, « 1:02:03 » -> 3723.0 ; absent ou illisible : ``None``."""
+    found = re.fullmatch(r"(?:(\d+):)?(\d+):(\d{2})", _compact(text))
+    return int(found.group(1) or 0) * 3600 + int(found.group(2)) * 60 + int(found.group(3)) if found else None
+
+
+def _after(lines: list[str], label: str, parse: Callable[[Any], Any]) -> tuple[bool, Any]:
+    """Valeur qui suit ``label`` (jusqu'a 4 lignes plus bas, un libelle repete ou un commentaire est saute) :
+    ``(libelle present, valeur ou None)``. Un tiret « — » est une valeur absente."""
+    if label not in lines:
+        return False, None
+    for line in lines[lines.index(label) + 1: lines.index(label) + 5]:
+        if line == _DASH:
+            return True, None
+        value = parse(line)
+        if value is not None:
+            return True, value
+    return True, None
+
+
+def _page_lines(text: str) -> list[str]:
+    return [" ".join(line.split()) for line in text.splitlines() if line.strip()]
+
+
+def parse_overview(text: str, stats: dict[str, Any]) -> dict[str, Any] | None:
+    """Page Apercu d'une video : vues exactes (phrase « a enregistre N vues ») et abonnes gagnes ; ``None`` tant que la
+    page n'est pas chargee (libelle « Abonnés » absent)."""
+    lines = _page_lines(text)
+    present, gained = _after(lines, str(stats["subscribers"]), parse_count)
+    if not present:
+        return None
+    sentence = re.search(str(stats["views_pattern"]), text)
+    return {"views": parse_count(sentence.group(1)) if sentence else None, "subscribers_gained": gained}
+
+
+def parse_engagement(text: str, stats: dict[str, Any]) -> dict[str, Any] | None:
+    """Onglet Engagement : vues engagees, heures regardees, duree moyenne d'une vue, part restee / balayee ; ``None``
+    tant que la page n'est pas chargee (libelle de la duree moyenne absent)."""
+    lines = _page_lines(text)
+    present, average = _after(lines, str(stats["avg_view"]), parse_duration)
+    if not present:
+        return None
+    stayed = swiped = None
+    first, second = str(stats["stayed"]), str(stats["swiped"])
+    if first in lines and lines.index(first) >= 2 and lines[lines.index(first) + 1: lines.index(first) + 2] == [second]:
+        at = lines.index(first)
+        stayed, swiped = parse_percent(lines[at - 2]), parse_percent(lines[at - 1])
+    return {"engaged_views": _after(lines, str(stats["engaged_views"]), parse_count)[1],
+            "watch_hours": _after(lines, str(stats["watch_hours"]), parse_decimal)[1], "avg_view_s": average,
+            "watched_share": stayed, "swiped_share": swiped}
+
+
+def parse_explore(text: str, stats: dict[str, Any]) -> dict[str, Any] | None:
+    """Vue avancee de la video : apres l'en-tete (Vues, J'aime, Commentaires ajoutes) viennent le titre puis une valeur
+    par colonne ; ``None`` tant que le tableau n'est pas affiche."""
+    lines = _page_lines(text)
+    header = list(stats["explore_header"])
+    anchor = str(stats["explore_anchor"])
+    if anchor not in lines:
+        return None
+    start = lines.index(anchor) + 1
+    for at in range(start, len(lines) - len(header) + 1):
+        if lines[at: at + len(header)] == header:
+            values = lines[at + len(header) + 1: at + 2 * len(header) + 1]
+            if len(values) < len(header):
+                return None
+            return {"likes": parse_count(values[1]), "comments": parse_count(values[2]), "views": parse_count(values[0])}
+    return None
+
+
+def _date_iso(text: str, months: list[str]) -> str | None:
+    found = re.match(r"^(\d{1,2})\s+(\S+?)\.?\s+(\d{4})$", " ".join(text.split()))
+    names = [m.rstrip(".").casefold() for m in months]
+    if not found or found.group(2).rstrip(".").casefold() not in names:
+        return None
+    return f"{int(found.group(3)):04d}-{names.index(found.group(2).rstrip('.').casefold()) + 1:02d}-{int(found.group(1)):02d}"
+
+
+class _StatsFlow(_Flow):
+    """Un releve de statistiques sur une page : Contenus > Shorts, puis les pages d'analyse de chaque Short publie.
+    Lecture seule : aucun champ rempli, rien de publie ni de modifie dans Studio."""
+
+    def read_page(self, parse: Callable[[str, dict[str, Any]], dict[str, Any] | None], name: str) -> dict[str, Any]:
+        stats = self.sel["stats"]
+        error = str(stats["error_text"])
+
+        def read() -> dict[str, Any] | None:
+            text = str(self.page.inner_text("body"))
+            if error.casefold() in text.casefold():
+                raise self.stop("unexpected_page", f"page {name} en erreur ({error}) : {self.page.url}")
+            return parse(text, stats)
+
+        found = self.wait_poll(read, "action_timeout_s")
+        if found is None:
+            raise self.stop("element_missing", f"page {name} illisible après {float(self.settings['action_timeout_s']):g} s "
+                                               f"(valeurs attendues absentes) : {self.page.url}")
+        return found
+
+    def footer(self) -> tuple[int, int, int] | None:
+        found = self.page.query_selector(self.sel["stats"]["paginator"])
+        match = re.search(str(self.sel["stats"]["paginator_pattern"]), str(found.inner_text())) if found is not None else None
+        return (int(match.group(1)), int(match.group(2)), int(match.group(3))) if match else None
+
+    def shorts_rows(self) -> list[Any]:
+        """Lignes de Contenus > Shorts, toutes : le pied « 1 a N sur T » doit couvrir la liste (T = N), sinon arret
+        (jamais une liste partielle)."""
+        self.click_labeled("exact_text", "content_nav")
+        self.wait_css(self.sel["selectors"]["video_row"], "video_row")
+        self.click_labeled("exact_text", "shorts_tab")
+        marker = str(self.sel["stats"]["shorts_url_marker"])
+        rows_css = self.sel["selectors"]["video_row"]
+
+        def settled() -> tuple[list[Any], tuple[int, int, int]] | None:
+            rows, footer = list(self.page.query_selector_all(rows_css)), self.footer()
+            return (rows, footer) if marker in str(self.page.url) and footer and len(rows) == footer[1] else None
+
+        found = self.wait_poll(settled, "action_timeout_s")
+        if found is None:
+            raise self.stop("element_missing", "liste des Shorts de Contenus illisible (pied « 1 à N sur T » absent ou "
+                                               "différent du nombre de lignes) : paginator")
+        rows, (_, shown, total) = found
+        if total > shown:
+            raise self.stop("unexpected_page", f"{total} Shorts dans la chaîne mais {shown} affichés : la pagination de "
+                                               f"la liste n'est pas gérée")
+        return rows
+
+    def read_row(self, row: Any) -> dict[str, Any] | None:
+        """Un Short de la liste ; ``None`` pour une ligne sans lien de video (brouillon en cours d'envoi)."""
+        link = row.query_selector(self.sel["stats"]["row_link"])
+        found = re.match(str(self.sel["stats"]["row_link_pattern"]), str(link.get_attribute("href") or "")) if link else None
+        if not found:
+            return None
+        lines = _page_lines(str(row.inner_text()))
+        if len(lines) < 7:
+            raise self.stop("unexpected_page", f"ligne de la liste des Shorts illisible : {lines!r}")
+        visibility, date, status, views, comments = lines[-5:]
+        state = {"Publiée": "published", "Programmée": "scheduled"}.get(status, "other")
+        published = state == "published"
+        return {"post_id": found.group(1), "post_url": str(self.sel["urls"]["short"]).format(id=found.group(1)),
+                "title": lines[1], "description": lines[2] if len(lines) >= 9 else "", "visibility": visibility,
+                "posted_at_text": date, "posted_at": _date_iso(date, self.sel["calendar"]["months"]), "state": state,
+                "status": status, "views": parse_count(views) if published else None,
+                "comments": parse_count(comments) if published else None}
+
+    def read_detail(self, post_id: str) -> dict[str, Any]:
+        stats = self.sel["stats"]
+        self.page.goto(str(stats["overview_url"]).format(id=post_id))
+        self.pause()
+        overview = self.read_page(parse_overview, "Aperçu")
+        self.wait_css(str(stats["tab_engagement"]), "tab_engagement « Engagement »").click()
+        self.pause()
+        engagement = self.read_page(parse_engagement, "Engagement")
+        self.page.goto(str(stats["explore_url"]).format(id=post_id))
+        self.pause()
+        explore = self.read_page(parse_explore, "vue avancée")
+        return {**engagement, **explore, **{k: v for k, v in overview.items() if k != "views" or v is not None}}
+
+    def run_stats(self) -> dict[str, Any]:
+        channel = self.channel_id()
+        self.close_popups()
+        posts, remaining = [], int(self.settings["stats_detail_max"])
+        for row in self.shorts_rows():
+            post = self.read_row(row)
+            if post is not None:
+                posts.append(post)
+        for post in posts:
+            read = post["state"] == "published" and remaining > 0
+            post["detail_not_read"] = post["state"] == "published" and not read
+            if read:
+                remaining -= 1
+                post.update(self.read_detail(post["post_id"]))
+            else:
+                post.update({k: post.get(k) for k in DETAIL_FIELDS})
+        return {"channel": channel, "posts": posts}
+
+
+# ---- historique des releves : <stats_dir>/<compte>/<horodatage>.json, jamais d'ecrasement
+
+def _history_dir(account: str, settings: dict[str, Any]) -> Path:
+    return Path(settings["stats_dir"]) / browser.validate_account(account)
+
+
+def _append(account: str, settings: dict[str, Any], stamp: str, suffix: str, data: dict[str, Any]) -> Path:
+    folder = _history_dir(account, settings)
+    base = datetime.fromisoformat(stamp).astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    with channel_mod.file_lock(folder / "history"):
+        number, path = 1, folder / f"{base}{suffix}"
+        while path.exists():
+            number += 1
+            path = folder / f"{base}-{number}{suffix}"
+        channel_mod.atomic_write_json(path, data)
+    return path
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("objet JSON attendu")
+        return data
+    except (OSError, ValueError) as exc:
+        raise YouTubeError(f"relevé des statistiques YouTube illisible ({path}) : {exc}") from exc
+
+
+def read_history(account: str, *, config: Config | None = None) -> list[dict[str, Any]]:
+    """Tous les releves du compte, du plus ancien au plus recent ; vide sans releve ; un fichier illisible est une
+    ``YouTubeError`` (jamais ignore)."""
+    folder = _history_dir(account, get_settings(config))
+    snapshots = []
+    for path in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+        if path.name.endswith(_ERROR_SUFFIX):
+            continue
+        data = _read_json(path)
+        if not isinstance(data.get("posts"), list) or not isinstance(data.get("fetched_at"), str):
+            raise YouTubeError(f"relevé des statistiques YouTube illisible ({path}) : posts et fetched_at attendus")
+        number = re.search(r"-(\d+)\.json$", path.name)
+        snapshots.append(((datetime.fromisoformat(data["fetched_at"]), int(number[1]) if number else 1), data))
+    return [data for _, data in sorted(snapshots, key=lambda item: item[0])]
+
+
+def _last_attempt(account: str, config: Config | None) -> datetime | None:
+    history = read_history(account, config=config)
+    stamps = [history[-1]["fetched_at"]] if history else []
+    folder = _history_dir(account, get_settings(config))
+    stamps += [_read_json(p)["at"] for p in folder.glob(f"*{_ERROR_SUFFIX}")] if folder.is_dir() else []
+    return max(datetime.fromisoformat(s) for s in stamps) if stamps else None
+
+
+def read_error(account: str, *, config: Config | None = None) -> dict[str, Any] | None:
+    """Dernier arret du releve s'il est plus recent que le dernier releve reussi, sinon ``None``."""
+    folder = _history_dir(account, get_settings(config))
+    errors = sorted(folder.glob(f"*{_ERROR_SUFFIX}")) if folder.is_dir() else []
+    if not errors:
+        return None
+    error = _read_json(errors[-1])
+    history = read_history(account, config=config)
+    if history and datetime.fromisoformat(history[-1]["fetched_at"]) >= datetime.fromisoformat(error["at"]):
+        return None
+    return error
+
+
+def stats_stale(account: str, *, config: Config | None = None, now: datetime | None = None) -> bool:
+    """Ouverture de l'ecran Statistiques : vrai si le dernier essai de releve (reussi ou arrete) date de
+    ``stats_stale_min`` minutes ou plus, ou s'il n'y en a jamais eu ; jamais si ``stats_stale_min`` vaut 0."""
+    minutes = float(get_settings(config)["stats_stale_min"])
+    if minutes == 0:
+        return False
+    last = _last_attempt(account, config)
+    return last is None or (now or datetime.now(timezone.utc)) - last >= timedelta(minutes=minutes)
+
+
+def fetch_stats(
+    account: str, *, config: Config | None = None, now: datetime | None = None, selectors: dict[str, Any] | None = None,
+    opener: Opener | None = None, sleep: Callable[[float], None] = time.sleep, rng: Any = None,
+    on_tick: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    """Releve des Shorts de ``account`` dans YouTube Studio (SPEC-5e50 R6, lecture seule) : liste Contenus > Shorts
+    (titre, date, visibilite, vues, commentaires), puis pour les ``stats_detail_max`` Shorts publies les plus recents
+    la page Apercu (vues exactes, abonnes), l'onglet Engagement (vues engagees, heures, duree moyenne, part restee /
+    balayee) et la vue avancee (J'aime, commentaires). Ajoute le releve horodate a ``<stats_dir>/<compte>/`` (jamais
+    d'ecrasement) et le rend. Valeur absente de la page : ``None``. Leve ``YouTubeStop`` (R3 : capture, et l'arret est
+    ajoute a l'historique), ``BrowserError`` ou ``YouTubeError``. Le compte doit etre releve par un appelant qui a
+    verifie qu'il est pret (console, worker)."""
+    settings = get_settings(config)
+    if not account:
+        raise YouTubeError("compte YouTube manquant : aucun relevé de statistiques sans compte")
+    account = browser.validate_account(account)
+    now = now or datetime.now(timezone.utc)
+    sel = selectors or load_selectors()
+    open_profile = opener or functools.partial(browser._open_context, config=config)
+    try:
+        with open_profile(account, headless=False) as context:  # visible : jamais de navigateur cache (ADR-58c0)
+            page = browser.fresh_page(context)
+            flow = _StatsFlow(page, account, sel, settings, now=now, sleep=sleep, rng=rng or random.Random(),
+                              on_tick=on_tick, config=config)
+            try:
+                data = flow.run_stats()
+            except YouTubeStop:
+                raise
+            except Exception as exc:  # noqa: BLE001 - erreur Playwright : arret sur avec capture
+                raise flow.stop("unexpected_page", f"page inattendue : {type(exc).__name__} : {exc}") from exc
+    except (YouTubeStop, browser.BrowserError) as exc:
+        _append(account, settings, now.isoformat(), _ERROR_SUFFIX, {
+            "at": now.isoformat(), "code": exc.code if isinstance(exc, YouTubeStop) else "browser",
+            "reason": exc.reason if isinstance(exc, YouTubeStop) else str(exc),
+            "capture": str(exc.capture) if isinstance(exc, YouTubeStop) and exc.capture else None})
+        raise
+    snapshot = {"account": account, "fetched_at": now.isoformat(), "source": "youtube_studio", "origin": "full", **data}
+    _append(account, settings, snapshot["fetched_at"], ".json", snapshot)
+    return snapshot
+
+
+# ---- agregats pour la console
+
+def merged_posts(history: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Etat le plus recent de chaque Short du dernier releve ; un Short dont le detail n'a pas ete relu cette fois
+    (``detail_not_read``) garde les valeurs de detail du releve precedent. Un Short absent du dernier releve disparait."""
+    merged: dict[str, dict[str, Any]] = {}
+    for snapshot in history:
+        for post in snapshot["posts"]:
+            known = merged.setdefault(post["post_id"], {"first_seen": snapshot["fetched_at"]})
+            keep = {k: v for k, v in post.items() if not (post.get("detail_not_read") and k in DETAIL_FIELDS)}
+            known.update(keep)
+            known["last_seen"] = snapshot["fetched_at"]
+    last = {p["post_id"] for p in history[-1]["posts"]} if history else set()
+    return {pid: post for pid, post in merged.items() if pid in last}
+
+
+def list_videos(account: str, *, sort: str = "posted_at", descending: bool = True, query: str = "",
+                config: Config | None = None) -> list[dict[str, Any]]:
+    """Shorts du dernier releve, tries (``sort``, valeurs absentes en dernier) et filtres (``query`` dans le titre)."""
+    if sort not in VIDEO_SORTS:
+        raise YouTubeError(f"tri invalide : {sort!r} (attendu : {' | '.join(VIDEO_SORTS)})")
+    videos = list(merged_posts(read_history(account, config=config)).values())
+    wanted = " ".join(query.split()).casefold()
+    if wanted:
+        videos = [v for v in videos if wanted in str(v.get("title") or "").casefold()]
+    present = sorted((v for v in videos if v.get(sort) is not None), key=lambda v: v[sort], reverse=descending)
+    return present + [v for v in videos if v.get(sort) is None]
+
+
+def account_overview(account: str, *, config: Config | None = None) -> dict[str, Any]:
+    """Tuiles du compte : totaux des dernieres valeurs relevees des Shorts publies ; ``None`` quand aucun Short n'a la
+    valeur (jamais 0 invente)."""
+    history = read_history(account, config=config)
+    published = [v for v in merged_posts(history).values() if v.get("state") == "published"]
+
+    def total(key: str) -> int | float | None:
+        values = [v[key] for v in published if v.get(key) is not None]
+        return round(sum(values), 1) if values else None
+
+    tiles = {"shorts": len(published) if history else None, **{key: total(key) for key in (
+        "views", "likes", "comments", "engaged_views", "watch_hours", "subscribers_gained")}}
+    return {"tiles": tiles, "fetched_at": history[-1]["fetched_at"] if history else None, "snapshots": len(history)}
