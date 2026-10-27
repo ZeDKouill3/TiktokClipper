@@ -340,9 +340,13 @@ def approve(
     }
     with _locked(path):
         entries = _load_entries(path)
-        refusal = approval_refusal(_find_entry(entries, video_id, clip_id))
+        previous_entry = _find_entry(entries, video_id, clip_id)
+        refusal = approval_refusal(previous_entry)
         if refusal is not None:
             raise PublishError(f"approbation refusé pour {video_id}/{clip_id} : {refusal}")
+        if previous_entry is not None and previous_entry.get("content_check_attempts"):
+            # re-approuver un echec reconstruit l'entree : les envois deja faits a TikTok restent comptes (plafond)
+            entry["content_check_attempts"] = list(previous_entry["content_check_attempts"])
         after = now_dt
         if series_id is not None and part is not None and part > 1:
             previous = _require_previous_part(entries, output_dir, video_id, clip_id, series_id, part)
@@ -954,12 +958,39 @@ def account_sent_entries(
     account: str, *, state_dir: str | Path | None = None, presets_dir: str | Path = "presets",
     base: str | Path = "config.toml",
 ) -> list[tuple[datetime, dict[str, Any]]]:
-    """(instant d'envoi reel, entree) des entrees ``published`` du compte, toutes chaines, du plus ancien au plus
-    recent. L'instant est ``published_at`` (pose par ``mark_published`` quand le worker a fini l'envoi), PAS
-    ``tiktok_publish_at`` (date de mise en ligne, future pour un post programme sur TikTok)."""
-    sent = [(datetime.fromisoformat(e["published_at"]), e) for _name, e in _account_entries(account, state_dir, presets_dir, base)
-            if e["status"] == "published" and e.get("published_at")]
+    """(instant d'envoi a TikTok, entree) de chaque envoi du compte, toutes chaines, du plus ancien au plus recent.
+    Un envoi = une tentative datee par ``record_content_check_attempt`` (``content_check_attempts``, posee quand le
+    fichier part, quelle que soit l'issue : publiee, a verifier, limite atteinte...). Sans tentative enregistree
+    (entree ecrite avant ce champ, ou publication declaree a la main), une entree ``published`` compte une fois a
+    ``published_at`` ; sinon elle ne compte pas. Une publication reussie qui a une tentative n'est donc comptee
+    qu'une fois : ``published_at`` n'ajoute rien. Ce n'est PAS ``tiktok_publish_at`` (mise en ligne, future pour
+    un post programme sur TikTok)."""
+    sent: list[tuple[datetime, dict[str, Any]]] = []
+    for _name, e in _account_entries(account, state_dir, presets_dir, base):
+        attempts = e.get("content_check_attempts") or []  # champ absent = aucune tentative enregistree
+        if attempts:
+            sent.extend((datetime.fromisoformat(at), e) for at in attempts)
+        elif e["status"] == "published" and e.get("published_at"):
+            sent.append((datetime.fromisoformat(e["published_at"]), e))
     return sorted(sent, key=lambda pair: pair[0])
+
+
+def record_content_check_attempt(
+    video_id: str, clip_id: str, channel: str, *, now: datetime | None = None, state_dir: str | Path | None = None,
+) -> None:
+    """Date une tentative d'envoi a TikTok : ajoute l'instant a ``content_check_attempts`` de l'entree. Appelee par
+    le worker au moment ou le fichier part (rappel du publieur), avant de connaitre l'issue : une tentative ratee
+    consomme probablement une verification de contenu chez TikTok. Le champ survit a failed / retry / approve."""
+    path = _state_path(channel, state_dir)
+    with _locked(path):
+        entries = _load_entries(path)
+        entry = _find_entry(entries, video_id, clip_id)
+        if entry is None:
+            raise PublishError(f"clip absent de la file de publication : {video_id}/{clip_id}")
+        entry = dict(entry)
+        entry["content_check_attempts"] = [*(entry.get("content_check_attempts") or []), _iso(_now(now))]
+        _upsert_entry(entries, entry)
+        _save_entries(path, entries)
 
 
 def halted_account(

@@ -21,6 +21,7 @@ adopte (surveille jusqu'a sa fin), jamais double.
 from __future__ import annotations
 
 import ctypes
+import functools
 import json
 import logging
 import os
@@ -1555,6 +1556,8 @@ class Worker:
             payload = youtube.clip_payload if service == "youtube" else tiktok.clip_payload
             clip = payload(publish_mod.read_sidecar(self.config.output_dir, video_id, clip_id), self.config.output_dir)
             extra = {"options": entry["post_options"]} if entry.get("post_options") else {}
+            if service == "tiktok":  # le publieur appelle ceci quand le fichier part : la tentative est datee a cet instant
+                extra["on_file_sent"] = functools.partial(self._record_attempt, entry, name, account, paths["state_dir"])
             publisher = self.youtube_publisher if service == "youtube" else self.publisher
             result = publisher(clip, account, mode=mode, schedule_at=slot if mode == "scheduled" else None,
                                config=self.config, on_tick=self._beat, **extra)
@@ -1606,14 +1609,30 @@ class Worker:
                               config=self.config)
         return True
 
+    def _record_attempt(self, entry: dict[str, Any], channel: str, account: str, state_dir: str | Path) -> None:
+        """Rappel du publieur TikTok au moment de l'envoi du fichier : date la tentative sur l'entree (plafond de
+        verifications). Une ecriture impossible n'arrete pas le post (le fichier est deja parti) : erreur journalisee
+        et evenement console, la tentative n'est alors pas comptee."""
+        video_id, clip_id = entry["video_id"], entry["clip_id"]
+        try:
+            publish_mod.record_content_check_attempt(video_id, clip_id, channel, now=datetime.now(timezone.utc),
+                                                     state_dir=state_dir)
+        except publish_mod.PublishError as exc:
+            reason = f"tentative d'envoi non enregistrée (plafond de vérifications faussé) : {exc}"
+            log.error("%s/%s : %s", video_id, clip_id, reason)
+            tiktok.emit_event({"level": "error", "account": account, "channel": channel, "video_id": video_id,
+                               "clip_id": clip_id, "reason": reason, "capture": None}, config=self.config)
+
     @staticmethod
     def _content_check_cap_reason(entry: dict[str, Any], account: str, settings: dict[str, Any], now: datetime,
                                   scope: dict[str, Any]) -> str | None:
         """Plafond preventif de verifications de contenu TikTok : ``[tiktok] content_check_daily_cap`` envois avec
         verification (content_check = wait) par compte sur 24 h glissantes ; 0 = pas de plafond. Rend la raison
         d'attente (avec l'heure de reprise, heure de Paris) si l'entree en demande une et que le plafond est atteint,
-        sinon None. Seuls les envois ``published`` du compte comptent (instant ``published_at``) ; un envoi sans
-        verification de contenu n'est ni compte ni bloque."""
+        sinon None. Comptent les envois du compte a TikTok, reussis ou non (``publish.account_sent_entries`` : une
+        tentative est datee quand le fichier part, une publication reussie n'est comptee qu'une fois ; sans tentative
+        enregistree, instant ``published_at`` d'une entree ``published``) ; un envoi sans verification de contenu
+        n'est ni compte ni bloque."""
         cap = int(settings["content_check_daily_cap"])
         if cap <= 0 or tiktok.post_settings(settings, entry.get("post_options"))["content_check"] != "wait":
             return None

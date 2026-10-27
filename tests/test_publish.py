@@ -3051,3 +3051,14 @@ def test_the_worker_publishes_nothing_after_a_refused_move_of_a_to_verify_entry(
 
     assert publisher.calls == []                              # rien ne part : le post est peut-etre deja sur TikTok
     assert _read_state(isolated_cwd, "ma_chaine") == before
+
+
+def test_approve_keeps_the_content_check_attempts_of_a_failed_entry(isolated_cwd):
+    # re-approuver un echec reconstruit l'entree : les envois deja faits a TikTok (plafond) ne sont pas perdus
+    publish = _tiktok_env(isolated_cwd, ("01",))
+    publish.record_content_check_attempt("vid1", "01", "ma_chaine", now=_MON)
+    publish.mark_failed("vid1", "01", "ma_chaine", "publish_unconfirmed")
+
+    publish.approve("vid1", "01", "ma_chaine", now=_MON, account=_ACCOUNT, schedule=_TWO_SCHED)
+
+    assert publish.list_entries("ma_chaine")[0]["content_check_attempts"] == [_MON.isoformat()]

@@ -4542,3 +4542,67 @@ def test_the_open_wheel_is_closed_by_a_click_in_the_corner_of_the_schedule_block
     closes = [k for c, k in zip(page.clicks, page.click_kwargs) if c.attrs.get("data-e2e") == "schedule_container"]
     assert closes and all(k.get("position") == tiktok.PICKER_CLOSE_POSITION for k in closes)
     assert all(not k.get("force") for k in page.click_kwargs)
+
+
+# ---------------------------------------------------------------- tentative d'envoi (plafond de verifications)
+
+
+def _sent_marks(env):
+    """Rappel ``on_file_sent`` : note dans les appels de la page l'instant ou il tombe (preuve de l'ordre)."""
+    return lambda: env.page.calls.append(("file_sent",))
+
+
+def _kinds(env):
+    return [c[0] for c in env.page.calls]
+
+
+def test_on_file_sent_is_called_once_right_after_the_upload_and_before_the_outcome(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch)
+
+    env.publish(on_file_sent=_sent_marks(env))
+
+    kinds = _kinds(env)
+    assert kinds.count("file_sent") == 1 and kinds.index("file_sent") == kinds.index("upload") + 1
+
+
+def test_on_file_sent_counts_a_publish_unconfirmed_stop(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch, page_kwargs={"confirm": ["none"]},
+              settings={"publish_confirm_timeout_s": 10, "poll_interval_s": 5})
+
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        env.publish(on_file_sent=_sent_marks(env))
+
+    assert stop.value.code == "publish_unconfirmed" and _kinds(env).count("file_sent") == 1
+
+
+def test_on_file_sent_counts_a_content_check_limit_stop(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch, page_kwargs={"check": "running"})
+    env.page.present.add(_sel()["selectors"]["content_check_limit"])
+
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        env.publish(on_file_sent=_sent_marks(env))
+
+    assert stop.value.code == "content_check_limit" and _kinds(env).count("file_sent") == 1
+
+
+def test_on_file_sent_counts_a_failure_after_the_upload(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch, remove=["caption_editor"])  # element absent APRES l'envoi du fichier
+
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        env.publish(on_file_sent=_sent_marks(env))
+
+    assert stop.value.code == "element_missing" and _kinds(env).count("file_sent") == 1
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"page_kwargs": {"redirect": "https://www.tiktok.com/login?redirect=x"}},
+    {"detect": ["login"]},
+    {"remove": ["file_input"]},
+], ids=["login_redirect", "login_form", "file_input_missing"])
+def test_on_file_sent_is_not_called_when_the_failure_precedes_the_upload(tmp_path, monkeypatch, kwargs):
+    env = Env(tmp_path, monkeypatch, **kwargs)
+
+    with pytest.raises(tiktok.TikTokStop):
+        env.publish(on_file_sent=_sent_marks(env))
+
+    assert "file_sent" not in _kinds(env) and "upload" not in _kinds(env)
