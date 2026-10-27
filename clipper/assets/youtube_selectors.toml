@@ -170,3 +170,7 @@ saved = ["Vidéo enregistrée"]
 # pendant le releve ; la connexion Google (adresse accounts.google.com) est deja couverte par [expect].
 captcha = ["iframe[src*='recaptcha']", "#captcha-form"]
 verification = ["#challenge", "[data-challengetype]"]
+# Texte de la dialog d'envoi quand YouTube refuse l'envoi (arret immediat « daily_upload_limit », pas d'attente du lien
+# du Short) : un fragment suffit, casse ignoree. relevé 2026-10-27 (dialog « Limite quotidienne de mises en ligne
+# atteinte », YouTube Studio en français ; un brouillon est resté).
+daily_upload_limit = ["Limite quotidienne de mises en ligne atteinte"]

@@ -82,7 +82,7 @@ class YouTubeError(Exception):
 
 class YouTubeStop(YouTubeError):
     """Arret sur de la page (SPEC-5e50 R3). ``code`` : captcha | verification | login | element_missing |
-    unexpected_page | publish_unconfirmed ; ``capture`` : la capture d'ecran, ou None."""
+    unexpected_page | publish_unconfirmed | daily_upload_limit ; ``capture`` : la capture d'ecran, ou None."""
 
     def __init__(self, code: str, reason: str, capture: Path | None = None) -> None:
         super().__init__(reason)
@@ -153,6 +153,7 @@ def load_selectors(path: str | Path | None = None) -> dict[str, Any]:
         need("success", key, list)
     need("detect", "captcha", list)
     need("detect", "verification", list)
+    need("detect", "daily_upload_limit", list)
     months = data.get("calendar", {}).get("months")
     if not (isinstance(months, list) and len(months) == 12 and all(isinstance(m, str) and m for m in months)):
         raise YouTubeError(f"fichier de repères YouTube ({target.name}) : [calendar] months manquant ou invalide "
@@ -523,8 +524,34 @@ class _Flow:
         self.page.keyboard.insert_text(text)
         self.pause()
 
+    def upload_limit_shown(self) -> bool:
+        """Une fenetre visible porte-t-elle le texte de la limite quotidienne de mises en ligne ([detect]
+        daily_upload_limit) ?"""
+        wanted = [str(t).casefold() for t in self.sel["detect"]["daily_upload_limit"]]
+        for modal in self.page.query_selector_all(self.sel["modal"]["container"]):
+            text = " ".join(str(modal.inner_text()).split()).casefold()
+            if modal.is_visible() and any(t in text for t in wanted):
+                return True
+        return False
+
     def read_short_id(self) -> str:
-        link = self.wait("video_link", timeout_key="upload_timeout_s")
+        """Lien du Short, attendu ``upload_timeout_s`` secondes ; la limite quotidienne de YouTube, affichee dans la
+        dialog a la place du lien, arrete tout de suite (``daily_upload_limit``) au lieu d'attendre le delai."""
+        css = self.sel["selectors"]["video_link"]
+
+        def seen() -> Any:
+            link = self.page.query_selector(css)
+            if link is not None and link.is_visible():
+                return link
+            if self.upload_limit_shown():
+                raise self.stop("daily_upload_limit", "limite quotidienne de mises en ligne YouTube atteinte : "
+                                                      "réessayer dans 24 h")
+            return None
+
+        link = self.wait_poll(seen, "upload_timeout_s")
+        if link is None:
+            raise self.stop("element_missing", f"élément attendu absent après "
+                                               f"{float(self.settings['upload_timeout_s']):g} s : video_link")
         text = str(link.get_attribute("href") or link.inner_text())
         found = re.search(str(self.sel["expect"]["short_id_pattern"]), text)
         if not found:

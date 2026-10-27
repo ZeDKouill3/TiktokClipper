@@ -773,7 +773,8 @@ class FakeUpload:
     def __init__(self, *, welcome=True, studio_redirect=CHANNEL_URL, menu_items=DEFAULT_MENU_ITEMS, link=True,
                  upload_polls=0, success_polls=0, success_text=None, drop_tz_paris=False, ignore_date=False,
                  ignore_tz=False, text_boxes=2, captcha=False, final_label=None, screenshot_error=None,
-                 public_notice=False, draft_titles=None):
+                 public_notice=False, draft_titles=None, limit_text=None):
+        self.limit_text = limit_text  # texte d'une dialog de refus affichee apres l'envoi du fichier
         self.sel = _sel()
         self.draft_titles = draft_titles    # liste de titres : la dialog d'envoi n'est pas ouverte, Contenu les liste
         self.view = "dashboard"
@@ -870,6 +871,8 @@ class FakeUpload:
                 shown.append(dialog)
             if self.step == -1:
                 shown.append(self.upload_dialog)
+            if self.limit_text is not None and self.step == 0:
+                shown.append(El(self, text=self.limit_text))
             if self.public_notice and self.visibility == "public":
                 notice = El(self, text="N'oubliez pas que tout le monde peut regarder les vidéos publiques\nOK")
                 notice.children[self.sel["modal"]["button"].format(label="OK")] = El(
@@ -1484,6 +1487,45 @@ def test_an_unknown_dialog_stops_instead_of_clicking_blindly(tmp_path, monkeypat
     assert page.files == [] and not any(c[0] == "click" for c in page.calls)
 
 
+LIMIT_DIALOG = "Limite quotidienne de mises en ligne atteinte\nVous pourrez importer d'autres vidéos dans 24 heures\nFermer"
+
+
+def test_the_daily_upload_limit_dialog_stops_at_once_without_waiting_for_the_link(tmp_path, monkeypatch):
+    page = FakeUpload(link=False, limit_text=LIMIT_DIALOG)
+
+    stop = stop_of(tmp_path, monkeypatch, page, upload_timeout_s=600)
+
+    assert stop.code == "daily_upload_limit"
+    assert stop.reason == "limite quotidienne de mises en ligne YouTube atteinte : réessayer dans 24 h"
+    assert [c for c in page.calls if c[0] == "poll"] == []  # arret au 1er tour : aucune des 600 s attendues
+    assert Path(stop.capture).is_file() and not page.final_clicked
+
+
+def test_the_daily_upload_limit_is_found_after_a_few_polls_not_at_the_timeout(tmp_path, monkeypatch):
+    page = FakeUpload(link=False)
+    polls = []
+    page.wait_for_timeout = lambda ms: (polls.append(ms), setattr(page, "limit_text", LIMIT_DIALOG))
+
+    stop = stop_of(tmp_path, monkeypatch, page, upload_timeout_s=600)
+
+    assert stop.code == "daily_upload_limit" and len(polls) == 1
+
+
+def test_without_the_limit_text_a_found_link_is_still_a_success(tmp_path, monkeypatch):
+    page = FakeUpload(limit_text="Autre fenêtre sans rapport", success_text="Vidéo mise en ligne")
+
+    assert publish(tmp_path, monkeypatch, page)["state"] == "published"
+
+
+def test_without_the_limit_text_a_missing_link_still_times_out_as_element_missing(tmp_path, monkeypatch):
+    page = FakeUpload(link=False, limit_text="Autre fenêtre sans rapport")
+
+    stop = stop_of(tmp_path, monkeypatch, page, upload_timeout_s=5)
+
+    assert stop.code == "element_missing" and "video_link" in stop.reason
+    assert len([c for c in page.calls if c[0] == "poll"]) == 5  # tout le delai est attendu (poll_interval_s = 1)
+
+
 def test_a_missing_shorts_link_is_a_stop_naming_the_element(tmp_path, monkeypatch):
     page = FakeUpload(link=False)
 
@@ -1582,7 +1624,8 @@ def test_clip_payload_reads_the_sidecar_fields_and_refuses_a_broken_sidecar(tmp_
                                        ("labels", "create"), ("labels", "upload_menu"), ("labels", "next"),
                                        ("labels", "final_schedule"), ("selectors", "menu_item"),
                                        ("selectors", "final_button"), ("selectors", "file_input"),
-                                       ("success", "published"), ("detect", "captcha"), ("calendar", "months")])
+                                       ("success", "published"), ("detect", "captcha"), ("detect", "daily_upload_limit"),
+                                       ("calendar", "months")])
 def test_a_missing_publication_landmark_is_an_explicit_error_naming_the_key(tmp_path, table, key):
     text = SELECTORS.read_text(encoding="utf-8")
     broken = re.sub(rf"(?m)^{key} = ", f"{key}_absent = ", text, count=1)
