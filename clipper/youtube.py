@@ -541,7 +541,7 @@ class _Flow:
 
         def seen() -> Any:
             link = self.page.query_selector(css)
-            if link is not None:
+            if link is not None and link.is_visible():
                 return link
             if self.upload_limit_shown():
                 raise self.stop("daily_upload_limit", "limite quotidienne de mises en ligne YouTube atteinte : "
