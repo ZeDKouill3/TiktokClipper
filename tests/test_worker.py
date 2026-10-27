@@ -2203,6 +2203,123 @@ def test_content_check_cap_does_not_block_a_send_without_content_check(tmp_path,
     assert len(pub.calls) == 1 and _cc_zz(tmp_path)["status"] == "published"
 
 
+class SendingPublisher(FakePublisher):
+    """Publieur qui appelle le rappel ``on_file_sent`` (le fichier part) avant de lever ``error`` ou de reussir.
+    ``send=False`` : l'echec precede l'envoi du fichier (login, element absent avant l'upload)."""
+
+    def __init__(self, *args, send=True, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.send = send
+
+    def __call__(self, clip, account, **kwargs):
+        if self.send:
+            kwargs["on_file_sent"]()
+        return super().__call__(clip, account, **kwargs)
+
+
+def _cc_attempts(tmp_path, clip_id="zz"):
+    return next(e for e in _entries(tmp_path) if e["clip_id"] == clip_id).get("content_check_attempts")
+
+
+def _cc_failed_attempt(tmp_path, *, hours_ago=1):
+    """Une entree echouee dont la tentative (datee a l'envoi du fichier) compte dans la fenetre."""
+    _seed(tmp_path, "ma_chaine", "ff", None, status="failed", error="publish_unconfirmed", post_options=_CC_WAIT,
+          content_check_attempts=[(_CC_NOW - timedelta(hours=hours_ago)).isoformat()])
+
+
+@pytest.mark.parametrize("stop", [
+    tiktok.TikTokStop("publish_unconfirmed", "aucune preuve de publication", None),
+    tiktok.TikTokStop("content_check_limit", "limite quotidienne de vérifications atteinte", None),
+    tiktok.TikTokStop("content_check_refused", "refusé par TikTok", None),
+    RuntimeError("plantage après l'envoi"),
+], ids=["publish_unconfirmed", "content_check_limit", "refused", "exception"])
+def _cc_reason(tmp_path, config):
+    """Raison d'attente que le plafond donnerait a une nouvelle entree avec verification (None : elle peut partir)."""
+    scope = {"state_dir": tmp_path / "state" / "publish", "presets_dir": tmp_path / "presets", "base": tmp_path / "config.toml"}
+    return worker.Worker._content_check_cap_reason(
+        {"post_options": _CC_WAIT}, ACCOUNT, tiktok.get_settings(config), _CC_NOW, scope)
+
+
+@pytest.mark.parametrize("stop", [
+    tiktok.TikTokStop("publish_unconfirmed", "aucune preuve de publication", None),
+    tiktok.TikTokStop("content_check_limit", "limite quotidienne de vérifications atteinte", None),
+    tiktok.TikTokStop("content_check_refused", "refusé par TikTok", None),
+    RuntimeError("plantage après l'envoi"),
+], ids=["publish_unconfirmed", "content_check_limit", "refused", "exception"])
+def test_content_check_cap_counts_an_attempt_that_ended_in_failure(tmp_path, monkeypatch, stop):
+    # 14 envois reussis : le 15e (zz) part et echoue apres l'envoi du fichier ; il compte, la 16e entree attendrait
+    config = _cc_env(tmp_path, monkeypatch, 14)
+    assert _cc_reason(tmp_path, config) is None
+
+    pub = SendingPublisher(error=stop)
+    _pub_worker(config, pub).tick()
+
+    assert len(pub.calls) == 1 and len(_cc_attempts(tmp_path)) == 1  # (g) horodatage relu sur disque
+    assert _cc_zz(tmp_path)["status"] in ("failed", "refused_by_platform")
+    assert _cc_reason(tmp_path, config).startswith("plafond de vérifications TikTok (15/24 h)")
+
+
+def test_content_check_cap_attempt_timestamp_is_the_send_instant_and_is_persisted(tmp_path, monkeypatch):
+    config = _cc_env(tmp_path, monkeypatch, 0)
+    pub = SendingPublisher(error=tiktok.TikTokStop("publish_unconfirmed", "aucune preuve", None))
+
+    _pub_worker(config, pub).tick()
+
+    # relu depuis le disque, pose pendant l'envoi (horloge du worker figee sur _CC_NOW), avant l'echec
+    assert _cc_attempts(tmp_path) == [_CC_NOW.isoformat()]
+    assert _cc_zz(tmp_path)["status"] == "failed"  # l'echec n'a pas efface la tentative
+
+
+def test_content_check_cap_does_not_count_a_failure_before_the_file_is_sent(tmp_path, monkeypatch):
+    # 14 envois reussis + un echec AVANT l'envoi (login, element absent avant l'upload) : 14 comptes, le suivant part
+    config = _cc_env(tmp_path, monkeypatch, 14)
+    pub = SendingPublisher(error=tiktok.TikTokStop("element_missing", "file_input introuvable", None), send=False)
+
+    _pub_worker(config, pub).tick()
+
+    assert len(pub.calls) == 1 and _cc_zz(tmp_path)["status"] == "failed"
+    assert _cc_attempts(tmp_path) is None  # aucune tentative posee
+    assert _cc_reason(tmp_path, config) is None
+
+
+def test_content_check_cap_counts_a_successful_send_once(tmp_path, monkeypatch):
+    # 13 envois + 1 reussite (tentative ET published_at) = 14 : le suivant part ; un double compte (15) le bloquerait
+    config = _cc_env(tmp_path, monkeypatch, 13)
+    pub = SendingPublisher()
+    w = _pub_worker(config, pub)
+    w.tick()
+    zz = _cc_zz(tmp_path)
+    assert zz["status"] == "published" and zz["published_at"] and len(zz["content_check_attempts"]) == 1
+    _seed(tmp_path, "ma_chaine", "yy", _CC_NOW - timedelta(seconds=30), post_options=_CC_WAIT)
+
+    w.tick()
+
+    assert len(pub.calls) == 2 and next(e for e in _entries(tmp_path) if e["clip_id"] == "yy")["status"] == "published"
+
+
+def test_content_check_cap_resume_time_follows_the_oldest_attempt(tmp_path, monkeypatch):
+    # 14 envois (le plus ancien il y a 23 h) + tentative ratee il y a 1 h : 15, reprise quand le plus ancien sort (15:00 Paris)
+    config = _cc_env(tmp_path, monkeypatch, 14)
+    _cc_failed_attempt(tmp_path)
+    pub = FakePublisher()
+
+    _pub_worker(config, pub).tick()
+
+    assert pub.calls == []
+    assert _cc_zz(tmp_path)["waiting_reason"] == "plafond de vérifications TikTok (15/24 h) : reprise vers 15:00 (heure de Paris)"
+
+
+def test_content_check_cap_old_entries_without_the_field_count_by_published_at_only(tmp_path, monkeypatch):
+    # entree echouee sans content_check_attempts (ecrite avant le champ) : aucune tentative enregistree, elle ne compte pas
+    config = _cc_env(tmp_path, monkeypatch, 14)
+    _seed(tmp_path, "ma_chaine", "ff", None, status="failed", error="publish_unconfirmed", post_options=_CC_WAIT)
+    pub = FakePublisher()
+
+    _pub_worker(config, pub).tick()
+
+    assert len(pub.calls) == 1 and _cc_zz(tmp_path)["status"] == "published"
+
+
 def test_the_entry_is_attempted_again_once_the_account_is_ready_and_the_reason_is_cleared(tmp_path, monkeypatch):
     config = _pub_env(tmp_path, monkeypatch)
     _set_account_state(tmp_path, ACCOUNT, ready_to_publish=False)

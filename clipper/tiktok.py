@@ -541,8 +541,10 @@ class _Flow:
 
     def __init__(self, page: Any, account: str, selectors: dict[str, Any], settings: dict[str, Any], *,
                  now: datetime, sleep: Callable[[float], None], rng: Any, on_tick: Callable[[], None] | None,
-                 harvest: bool = False, config: Config | None = None) -> None:
+                 harvest: bool = False, config: Config | None = None,
+                 on_file_sent: Callable[[], None] | None = None) -> None:
         self.page, self.account, self.sel, self.settings = page, account, selectors, settings
+        self.on_file_sent = on_file_sent  # rappel du worker : le fichier vient d'etre envoye a TikTok (une tentative de verification)
         self.config = config  # [browser] state_dir : dossier de la capture d'arret
         self.now, self._sleep, self.rng, self.on_tick = now, sleep, rng, on_tick
         self.harvesting, self._harvested, self._lenient = harvest, False, False  # releve opportuniste (SPEC-86fe R4)
@@ -1231,6 +1233,8 @@ class _Flow:
 
         self.wait("file_input", state="attached")
         self.page.set_input_files(self.sel["selectors"]["file_input"], str(clip["video_path"]))
+        if self.on_file_sent is not None:  # frontiere d'une tentative : des ici TikTok a le fichier, quelle que soit l'issue
+            self.on_file_sent()
         self.pause()
         self.wait("upload_done", timeout_key="upload_timeout_s")
         self.pause()
@@ -1735,12 +1739,12 @@ class BrowserBackend:
     def publish(self, clip: dict[str, Any], account: str, *, mode: str, schedule_at: datetime | None,
                 settings: dict[str, Any], selectors: dict[str, Any], now: datetime, opener: Opener | None,
                 sleep: Callable[[float], None], rng: Any, on_tick: Callable[[], None] | None,
-                config: Config | None = None) -> dict[str, Any]:
+                config: Config | None = None, on_file_sent: Callable[[], None] | None = None) -> dict[str, Any]:
         open_profile = opener or browser._open_context
         with open_profile(account, headless=False) as context:  # visible : jamais de navigateur cache (ADR-1a58)
             page = browser.fresh_page(context)
             flow = _Flow(page, account, selectors, settings, now=now, sleep=sleep, rng=rng, on_tick=on_tick,
-                         harvest=True, config=config)
+                         harvest=True, config=config, on_file_sent=on_file_sent)
             try:
                 return flow.run(clip, mode, schedule_at)
             except TikTokStop:
@@ -1789,12 +1793,15 @@ def publish(
     config: Config | None = None, now: datetime | None = None, selectors: dict[str, Any] | None = None,
     opener: Opener | None = None, sleep: Callable[[float], None] = time.sleep, rng: Any = None,
     on_tick: Callable[[], None] | None = None, options: dict[str, Any] | None = None,
+    on_file_sent: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Publie ``clip`` ({video_path, caption, hashtags}) sur le compte, avec les reglages ``options`` de ce post
     (visibilite, commentaires, reutilisation, contenu IA, verification de contenu ; sinon ceux de [tiktok]), ``mode`` ``immediate``
     ou ``scheduled`` (date ``schedule_at``, programmation cote TikTok). Rend
     ``{post_url, post_id, state, publish_at, note}`` ; leve ``TikTokError`` (reglage, date,
-    clip), ``TikTokStop`` (R4) ou ``BrowserError`` (Chrome/Playwright absent)."""
+    clip), ``TikTokStop`` (R4) ou ``BrowserError`` (Chrome/Playwright absent). ``on_file_sent`` : rappel sans argument
+    appele une fois, juste apres l'envoi du fichier a TikTok (``set_input_files`` reussi) et avant l'issue : le
+    worker y date la tentative (plafond de verifications de contenu). Jamais appele si l'echec precede l'envoi."""
     settings = post_settings(get_settings(config), options)
     backend = _BACKENDS[settings["backend"]]()
     mode = mode if mode is not None else str(settings["publish_mode"])
@@ -1816,7 +1823,7 @@ def publish(
     return backend.publish(
         clip, browser.validate_account(account), mode=mode, schedule_at=schedule_at, settings=settings,
         selectors=selectors or load_selectors(), now=now, opener=opener or _default_opener(config), sleep=sleep,
-        rng=rng or random.Random(), on_tick=on_tick, config=config,
+        rng=rng or random.Random(), on_tick=on_tick, config=config, on_file_sent=on_file_sent,
     )
 
 
