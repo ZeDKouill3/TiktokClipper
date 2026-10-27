@@ -903,6 +903,7 @@ class _Flow:
                 return (int(match[1]), int(match[3])) == (local.day, local.year)
         return False
 
+    WHEEL_CLICK_ATTEMPTS = 3   # clics d'un meme element de la roue, recentre avant chacun, avant l'arret
     WHEEL_POLL_S = 0.25   # intervalle entre deux lectures de la roue pendant qu'elle se recalcule
 
     def pick_wheel_time(self, local: datetime) -> int:
@@ -918,16 +919,45 @@ class _Flow:
         def column(selector: str) -> dict[int, Any]:
             return {int(t): o for o in self.page.query_selector_all(selector) if (t := str(o.inner_text()).strip()).isdigit()}
 
+        def settle(item: Any) -> None:
+            """Attend que la colonne soit immobile : meme position de l'element sur deux lectures espacees."""
+            previous = item.bounding_box()
+            for _ in range(int(float(self.settings["action_timeout_s"]) / self.WHEEL_POLL_S) + 1):
+                self._sleep(self.WHEEL_POLL_S)
+                current = item.bounding_box()
+                if current == previous:
+                    return
+                previous = current
+            logger.warning("TikTok %s : la colonne de la roue défile encore après %g s", self.account,
+                           float(self.settings["action_timeout_s"]))
+
         def choose(selector: str, value: int) -> None:
             if str(column(selector)[value].get_attribute("aria-selected")) == "true":
                 return
-
-            def centred() -> Any:
+            timeout_ms = float(self.settings["click_timeout_s"]) * 1000
+            for attempt in range(1, self.WHEEL_CLICK_ATTEMPTS + 1):
                 item = column(selector)[value]
                 item.evaluate(WHEEL_CENTRE_JS)
-                return item
-            self.click_with(centred)
-            self.pause()
+                settle(item)
+                item = column(selector)[value]
+                if str(item.get_attribute("aria-selected")) == "true":   # la roue a choisi seule l'element centre
+                    logger.info("TikTok %s : %s déjà choisi par la roue après centrage, aucun clic", self.account,
+                                item.get_attribute("aria-label"))
+                    return
+                try:
+                    item.click(timeout=timeout_ms)
+                except Exception as exc:
+                    if "intercepts pointer events" not in str(exc):
+                        raise
+                    logger.info("TikTok %s : clic de la roue intercepté par un élément voisin (essai %d/%d), "
+                                "recentrage : %s", self.account, attempt, self.WHEEL_CLICK_ATTEMPTS,
+                                str(exc).splitlines()[0])
+                    continue
+                self.pause()
+                return
+            raise self.stop("unexpected_page", f"roue de l'heure : clic sur {column(selector)[value].get_attribute('aria-label')} toujours intercepté par un élément "
+                                               f"voisin après {self.WHEEL_CLICK_ATTEMPTS} essais (colonne qui défile ?), "
+                                               f"rien n'est forcé")
 
         hours = column(hour_css)
         if local.hour not in hours:

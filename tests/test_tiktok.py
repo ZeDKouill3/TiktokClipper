@@ -3843,7 +3843,16 @@ class DomElement:
 
     def click(self, **kwargs):
         self.page.clicks.append(self.node)
+        self.page.click_kwargs.append(kwargs)
+        if self.page.covered.get(self.node, 0) > 0:   # une minute voisine recouvre l'element pendant que la colonne defile
+            self.page.covered[self.node] -= 1
+            raise RuntimeError("Locator.click: <button> from <div data-floating-ui-portal> subtree intercepts pointer events")
         self.page.on_click(self.node)
+
+    def bounding_box(self):
+        moves = self.page.motion.get(self.node)
+        top = moves.pop(0) if moves else 100.0
+        return {"x": 10.0, "y": top, "width": 40.0, "height": 30.0}
 
     def inner_text(self):
         return self.node.text()
@@ -3863,6 +3872,9 @@ class DomElement:
 
     def evaluate(self, script, *args):
         self.page.scrolls.append(self.node)   # seul usage : le script qui amene l'element au centre de sa colonne
+        if self.node in self.page.self_selecting:   # la roue choisit d'elle-meme l'element centre, sans clic
+            self.page.self_selecting.remove(self.node)
+            self.page._click_wheel_item(self.node)
 
 
 TIMEWHEEL_OPEN_FIXTURE = ROOT / "tests" / "fixtures" / "tiktok" / "studio_schedule_timewheel_open_20261026.html"
@@ -3897,6 +3909,10 @@ class ScheduleListsPage:
         self.time_wheel = time_wheel   # la liste heure s'ouvre sur la roue Hours / Minutes reelle (capture 20:34)
         self.clicks: list[_Node] = []
         self.scrolls: list[_Node] = []
+        self.click_kwargs: list[dict] = []
+        self.covered: dict[_Node, int] = {}        # element -> clics encore interceptes par une minute voisine
+        self.motion: dict[_Node, list[float]] = {}  # element -> positions successives lues pendant que la colonne defile
+        self.self_selecting: list[_Node] = []      # elements choisis par la roue des qu'ils sont centres
         self.wheel_source = (TIMEWHEEL_OPEN_FIXTURE, ":r6l:")
         self.options: list[_Node] = []
         self.open_picker: _Node | None = None
@@ -4418,3 +4434,92 @@ def test_the_wheel_item_is_centred_in_its_column_before_each_click(tmp_path, mon
     flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
 
     assert [n.attrs["aria-label"] for n in page.scrolls] == ["Hours 09", "Minutes 30"]
+
+
+# TASK-83bd9b97938d : releve reel 2026-10-26 23:21, clic sur « Minutes 30 » intercepte par « Minutes 25 » puis « Minutes 45 »
+# pendant que la colonne defile encore ; la capture montre « Minutes 30 » deja aria-selected=true (la roue choisit seule
+# l'element centre).
+
+
+def _minute_node(page, label):
+    return next(n for n in page.wheel_items("Minutes") if n.attrs["aria-label"] == label)
+
+
+def _wheel_open_flow(tmp_path, monkeypatch):
+    page, flow = _wheel_flow(tmp_path, monkeypatch)
+    original = page._open_wheel
+
+    def opened():
+        original()
+        for item in page.wheel_items("Minutes"):
+            item.attrs["aria-selected"] = item.attrs["data-selected"] = "false"   # aucune minute choisie au depart
+    page._open_wheel = opened
+    return page, flow
+
+
+def test_the_wheel_waits_for_the_column_to_stop_moving_before_clicking(tmp_path, monkeypatch):
+    page, flow = _wheel_open_flow(tmp_path, monkeypatch)
+    sleeps = []
+    flow._sleep = sleeps.append
+    original = page._open_wheel
+
+    def opened():
+        original()
+        page.motion[_minute_node(page, "Minutes 30")] = [180.0, 140.0, 120.0, 120.0, 120.0]   # defile puis s'immobilise
+    page._open_wheel = opened
+
+    flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
+
+    assert _wheel_clicks(page) == ["Hours 09", "Minutes 30"]
+    assert page.motion[_minute_node(page, "Minutes 30")] == [120.0]   # clic des deux lectures identiques (120, 120), pas avant
+    assert len([s for s in sleeps if s == flow.WHEEL_POLL_S]) >= 3
+
+
+def test_an_element_selected_by_the_wheel_itself_after_centring_is_not_clicked(tmp_path, monkeypatch):
+    page, flow = _wheel_open_flow(tmp_path, monkeypatch)
+    original = page._open_wheel
+
+    def opened():
+        original()
+        page.self_selecting.append(_minute_node(page, "Minutes 30"))
+    page._open_wheel = opened
+
+    effective, note = flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
+
+    assert _wheel_clicks(page) == ["Hours 09"] and page.value_of("Select time") == "09:30" and note is None
+
+
+def test_a_click_intercepted_by_a_neighbour_is_retried_after_centring_again_and_logged(tmp_path, monkeypatch, caplog):
+    page, flow = _wheel_open_flow(tmp_path, monkeypatch)
+    original = page._open_wheel
+
+    def opened():
+        original()
+        page.covered[_minute_node(page, "Minutes 30")] = 2
+    page._open_wheel = opened
+
+    with caplog.at_level("INFO"):
+        flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
+
+    minute = _minute_node(page, "Minutes 30")
+    assert page.scrolls.count(minute) == 3   # recentre avant chacun des trois essais
+    assert _wheel_clicks(page) == ["Hours 09", "Minutes 30", "Minutes 30", "Minutes 30"]
+    assert caplog.text.count("intercepts pointer events") >= 2 and "essai 2/3" in caplog.text
+    assert all(not k.get("force") for k in page.click_kwargs) and page.value_of("Select time") == "09:30"
+
+
+def test_a_click_still_intercepted_after_three_attempts_stops_with_a_capture_and_never_forces(tmp_path, monkeypatch):
+    page, flow = _wheel_open_flow(tmp_path, monkeypatch)
+    original = page._open_wheel
+
+    def opened():
+        original()
+        page.covered[_minute_node(page, "Minutes 30")] = 99
+    page._open_wheel = opened
+
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        flow.schedule_later(datetime(2026, 10, 28, 9, 30, tzinfo=PARIS))
+
+    assert stop.value.code == "unexpected_page" and "Minutes 30" in str(stop.value) and stop.value.capture is not None
+    assert _wheel_clicks(page) == ["Hours 09"] + ["Minutes 30"] * 3   # jamais un autre element de la roue
+    assert all(not k.get("force") for k in page.click_kwargs)
