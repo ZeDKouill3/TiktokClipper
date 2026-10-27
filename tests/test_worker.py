@@ -2102,6 +2102,107 @@ def test_a_waiting_entry_does_not_block_the_next_due_entry_of_a_ready_account(tm
     assert first["status"] == "scheduled" and first["waiting_reason"] and second["status"] == "published"
 
 
+# Plafond preventif de verifications de contenu (content_check_daily_cap) : horloge figee, aucun reseau.
+_CC_NOW = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)  # 14:00 a Paris (ete)
+_CC_WAIT = {"content_check": "wait"}
+_CC_SETTINGS = {"max_posts_per_day": 100, "min_gap_minutes": 0, "content_check_daily_cap": 15}
+
+
+def _cc_sent(tmp_path, count, *, account=ACCOUNT, options=_CC_WAIT, first_hours_ago=23, prefix="s"):
+    """``count`` envois deja faits (published) du compte, le plus ancien il y a ``first_hours_ago`` h, puis 1 min d'ecart."""
+    for i in range(count):
+        at = _CC_NOW - timedelta(hours=first_hours_ago) + timedelta(minutes=i)
+        _seed(tmp_path, "ma_chaine", f"{prefix}{i:02d}", at, status="published", published_at=at.isoformat(),
+              tiktok_state="published", account=account, post_options=options)
+
+
+def _cc_env(tmp_path, monkeypatch, sent, **kw):
+    config = _pub_env(tmp_path, monkeypatch, tiktok_settings={**_CC_SETTINGS, **kw.pop("settings", {})})
+    _frozen_now(monkeypatch, _CC_NOW)
+    _cc_sent(tmp_path, sent, **kw)
+    _seed(tmp_path, "ma_chaine", "zz", _CC_NOW - timedelta(minutes=1), post_options=_CC_WAIT)
+    return config
+
+
+def _cc_zz(tmp_path):
+    return next(e for e in _entries(tmp_path) if e["clip_id"] == "zz")
+
+
+def test_content_check_cap_14_sends_in_the_window_let_the_15th_go(tmp_path, monkeypatch):
+    config = _cc_env(tmp_path, monkeypatch, 14)
+    pub = FakePublisher()
+
+    _pub_worker(config, pub).tick()
+
+    assert len(pub.calls) == 1 and _cc_zz(tmp_path)["status"] == "published"
+
+
+def test_content_check_cap_15_sends_make_the_16th_wait_with_the_paris_resume_time(tmp_path, monkeypatch):
+    config = _cc_env(tmp_path, monkeypatch, 15)  # le plus ancien : il y a 23 h = 13:00 UTC la veille -> sort a 13:00 UTC = 15:00 Paris
+    pub = FakePublisher()
+
+    _pub_worker(config, pub).tick()
+
+    entry = _cc_zz(tmp_path)
+    assert pub.calls == []
+    assert entry["status"] == "scheduled" and not entry.get("halted") and not entry.get("error")  # ni failed ni arret R4
+    assert entry["waiting_reason"] == "plafond de vérifications TikTok (15/24 h) : reprise vers 15:00 (heure de Paris)"
+    assert accounts_mod.list_accounts(config)[0]["ready_to_publish"] is True  # le compte n'est pas decoche
+
+
+def test_content_check_cap_a_send_leaving_the_window_frees_a_place(tmp_path, monkeypatch):
+    # le plus ancien envoi date de 24 h 1 min : il est sorti de la fenetre, il reste 14 envois comptes
+    config = _cc_env(tmp_path, monkeypatch, 15, first_hours_ago=24.02)
+    pub = FakePublisher()
+
+    _pub_worker(config, pub).tick()
+
+    assert len(pub.calls) == 1 and _cc_zz(tmp_path)["status"] == "published"
+
+
+def test_content_check_cap_does_not_touch_another_account(tmp_path, monkeypatch):
+    config = _cc_env(tmp_path, monkeypatch, 15)
+    _seed(tmp_path, "ma_chaine", "yy", _CC_NOW - timedelta(minutes=2), account="ef34ab", post_options=_CC_WAIT)
+    pub = FakePublisher()
+    w = _pub_worker(config, pub)
+
+    w.tick()  # une publication par passage : l'autre compte (creneau le plus proche) part
+    w.tick()  # puis le compte plafonne attend
+
+    assert [c["account"] for c in pub.calls] == ["ef34ab"]
+    assert _cc_zz(tmp_path)["waiting_reason"]
+
+
+def test_content_check_cap_zero_means_no_cap(tmp_path, monkeypatch):
+    config = _cc_env(tmp_path, monkeypatch, 40, settings={"content_check_daily_cap": 0})
+    pub = FakePublisher()
+
+    _pub_worker(config, pub).tick()
+
+    assert len(pub.calls) == 1 and _cc_zz(tmp_path)["status"] == "published"
+
+
+def test_content_check_cap_does_not_count_sends_without_content_check(tmp_path, monkeypatch):
+    # 15 envois sans verification : ils ne comptent pas, le suivant (avec verification) part
+    config = _cc_env(tmp_path, monkeypatch, 15, options={"content_check": "off"})
+    pub = FakePublisher()
+
+    _pub_worker(config, pub).tick()
+
+    assert len(pub.calls) == 1 and _cc_zz(tmp_path)["status"] == "published"
+
+
+def test_content_check_cap_does_not_block_a_send_without_content_check(tmp_path, monkeypatch):
+    # 15 envois avec verification dans la fenetre : un envoi sans verification n'est pas bloque
+    config = _cc_env(tmp_path, monkeypatch, 15)
+    _edit_entry(tmp_path, "ma_chaine", "zz", post_options={"content_check": "off"})
+    pub = FakePublisher()
+
+    _pub_worker(config, pub).tick()
+
+    assert len(pub.calls) == 1 and _cc_zz(tmp_path)["status"] == "published"
+
+
 def test_the_entry_is_attempted_again_once_the_account_is_ready_and_the_reason_is_cleared(tmp_path, monkeypatch):
     config = _pub_env(tmp_path, monkeypatch)
     _set_account_state(tmp_path, ACCOUNT, ready_to_publish=False)

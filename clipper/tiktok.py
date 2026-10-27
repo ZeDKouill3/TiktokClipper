@@ -68,6 +68,9 @@ CONFIG_DEFAULTS: dict[str, object] = {
     "content_check_timeout_s": 900,    # attente du resultat de la verification de contenu (~10 min)
     "content_check_retrigger_s": 120,  # « Verification en cours » affiche plus de N s sans resultat : decoche/recoche l'interrupteur
     "content_check_retriggers": 3,     # relances au plus (decoche/recoche ou « Reessayer ») ; toujours dans content_check_timeout_s
+    "content_check_daily_cap": 15,     # plafond preventif : envois avec verification de contenu (content_check = wait) par compte sur 24 h glissantes ;
+                                       # atteint, l'envoi suivant du compte attend (ni echec ni arret R4) jusqu'a ce que le plus ancien sorte de la fenetre. 0 = pas de plafond
+                                       # (TikTok coupe la verification vers 17-21 envois en 24 h)
     "poll_interval_s": 5,              # pas d'attente entre deux lectures de la verification
     "type_delay_ms": 50,               # delai entre deux touches de la legende
     "events_path": "state/tiktok/events.json",
@@ -161,6 +164,7 @@ def get_settings(config: Config | None) -> dict[str, Any]:
                          ("max_action_delay_s", 0), ("schedule_max_days", 1), ("schedule_min_minutes", 0),
                          ("action_timeout_s", 1), ("click_timeout_s", 1), ("upload_timeout_s", 1), ("publish_confirm_timeout_s", 1),
                          ("content_check_timeout_s", 1), ("content_check_retrigger_s", 1), ("content_check_retriggers", 0),
+                         ("content_check_daily_cap", 0),
                          ("poll_interval_s", 1), ("type_delay_ms", 0)):
         value = settings[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < minimum:
