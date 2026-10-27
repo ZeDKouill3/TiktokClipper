@@ -91,11 +91,13 @@ radio = "tp-yt-paper-radio-button:has-text(\"{label}\")"
 labeled_button = "button:has-text(\"{label}\")"
 # Section « Programmer » repliee : chevron #second-container-expand-button, nom accessible « Click to expand »
 # (vérifié 2026-10-26 sur la dialog en français : un [aria-label] seul trouvait d'abord un autre controle cache).
-# ATTENTION 2026-10-26 : la date y est desormais une liste deroulante (« 27 oct. 2026 ⌄ »), plus un champ texte :
-# schedule_fields ne la trouve plus, la programmation YouTube est a refaire (l'immediat fonctionne).
 expand = "#second-container-expand-button[aria-label=\"{label}\"]"
-# Champs texte de la section Programmer (date et heure) : input.tp-yt-paper-input, reperes par leur valeur.
-# vérifié 2026-10-03
+# Date de la section Programmer : depuis 2026-10-26 une liste deroulante (« 27 oct. 2026 ⌄ ») ; son declencheur affiche
+# la date, un clic ouvre la liste qui porte un champ ou taper la date. NON VÉRIFIÉ (releve reel a refaire apres la
+# limite d'envois du 26/10 : le declencheur ytcp-datetime-picker #datepicker-trigger est une hypothese).
+date_trigger = "ytcp-datetime-picker #datepicker-trigger"
+# Champs texte de la section Programmer (heure « 00:00 », et date dans la liste ouverte) : input.tp-yt-paper-input,
+# reperes par leur valeur. Heure : vérifié 2026-10-03 et 2026-10-26 ; champ de date de la liste : NON VÉRIFIÉ.
 text_input = "input.tp-yt-paper-input"
 # Options de la liste des fuseaux horaires : « (UTC+02:00) Paris ».
 # NON VÉRIFIÉ

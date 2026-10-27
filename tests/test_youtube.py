@@ -788,6 +788,7 @@ class FakeUpload:
         self.kids = None
         self.visibility = None
         self.expanded = False
+        self.date_open = False
         self.tz_open = False
         self.tz_choice = "(GMT+0100) Heure locale"
         self.date_text, self.time_text = "4 oct. 2026", "00:00"
@@ -910,8 +911,13 @@ class FakeUpload:
                 return [El(self, text=L["visibility_" + key], on_click=lambda k=key: self._choose(k))]
         if selector == S["expand"].format(label=L["expand_schedule"]):
             return [El(self, text=L["expand_schedule"], on_click=lambda: setattr(self, "expanded", True))]
+        if selector == S["date_trigger"] and self.expanded:  # 26/10 : la date est une liste déroulante
+            return [El(self, text=self.date_text, on_click=lambda: setattr(self, "date_open", True))]
         if selector == S["text_input"] and self.expanded:
-            return [El(self, value=self.date_text), El(self, value=self.time_text)]
+            fields = [El(self, value=self.time_text)]
+            if self.date_open and not getattr(self, "date_input_missing", False):  # la liste ouverte porte un champ où taper la date
+                fields.insert(0, El(self, value=self.date_text))
+            return fields
         if selector == S["labeled_button"].format(label=L["timezone_button"]) and self.expanded:
             return [El(self, text=f"{L['timezone_button']}\n{self.tz_choice}",
                        on_click=lambda: setattr(self, "tz_open", True))]
@@ -954,6 +960,7 @@ class FakeUpload:
             self.time_text = element.value
         else:
             self.date_text = element.value
+            self.date_open = False
 
 
 def _clip(tmp_path, **extra):
@@ -1242,6 +1249,16 @@ def test_a_scheduled_date_that_the_page_did_not_take_is_a_stop_with_capture(tmp_
     assert stop.code == "unexpected_page" and "programmation non prise en compte" in stop.reason
     assert stop.capture is not None and Path(stop.capture).is_file()
     assert not page.final_clicked  # jamais de clic final sur une relecture fausse
+
+
+def test_a_date_dropdown_without_a_date_field_is_a_stop_with_capture(tmp_path, monkeypatch):
+    page = FakeUpload(success_text="Vidéo programmée")
+    page.date_input_missing = True
+
+    stop = stop_of(tmp_path, monkeypatch, page, mode="scheduled", schedule_at=NOW + timedelta(days=1))
+
+    assert stop.code == "element_missing" and "date" in stop.reason
+    assert not page.final_clicked
 
 
 def test_a_timezone_that_the_page_did_not_take_is_a_stop(tmp_path, monkeypatch):

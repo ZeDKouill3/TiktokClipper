@@ -65,7 +65,7 @@ REQUIRED_PUBLISH_LABELS = ("create", "upload_menu", "next", "kids_yes", "kids_no
                            "visibility_unlisted", "visibility_private", "expand_schedule", "timezone_button",
                            "timezone_wanted", "timezone_forbidden", "final_publish", "final_save", "final_schedule")
 REQUIRED_PUBLISH_SELECTORS = ("file_input", "menu_item", "text_box", "radio", "labeled_button", "expand",
-                              "text_input", "timezone_option", "final_button", "video_link")
+                              "date_trigger", "text_input", "timezone_option", "final_button", "video_link")
 _SHORTS_TAG = re.compile(r"(?<!\w)#shorts\b", re.IGNORECASE)
 
 SELECTORS_PATH = Path(__file__).parent / "assets" / "youtube_selectors.toml"
@@ -561,17 +561,41 @@ class _Flow:
         options[0].click()
         self.pause()
 
-    def schedule_fields(self) -> tuple[Any, Any]:
-        """Champs date et heure de la section Programmer, reperes par leur valeur (les ids input-N sont instables)."""
+    def text_fields(self) -> tuple[Any | None, Any | None]:
+        """Champs texte visibles de la section Programmer : (date, heure), reperes par leur valeur (les ids input-N
+        sont instables). Le champ de date n'existe que dans la liste deroulante ouverte."""
         expect = self.sel["expect"]
         date_re, time_re = re.compile(str(expect["date_value_pattern"])), re.compile(str(expect["time_value_pattern"]))
         fields = list(self.page.query_selector_all(self.sel["selectors"]["text_input"]))
         date_field = next((f for f in fields if date_re.match(str(f.input_value()).strip())), None)
         time_field = next((f for f in fields if time_re.match(str(f.input_value()).strip())), None)
-        if date_field is None or time_field is None:
-            raise self.stop("unexpected_page", "champs de programmation inattendus : une date (« 4 oct. 2026 ») et une "
-                                               "heure (« 00:00 ») sont attendues")
         return date_field, time_field
+
+    def date_trigger(self) -> Any:
+        """Declencheur de la liste deroulante de date (depuis 2026-10-26 la date n'est plus un champ texte)."""
+        css = self.sel["selectors"]["date_trigger"]
+        return self.wait_css(css, "date_trigger")
+
+    def read_schedule(self) -> tuple[str, str]:
+        """Date affichee par le declencheur et heure du champ, telles que Studio les montre."""
+        time_field = self.text_fields()[1]
+        if time_field is None:
+            raise self.stop("unexpected_page", "champ d'heure de programmation inattendu : une heure (« 00:00 ») "
+                                               "est attendue")
+        return " ".join(str(self.date_trigger().inner_text()).split()), str(time_field.input_value()).strip()
+
+    def set_date(self, text: str) -> None:
+        """Ouvre la liste de date, tape la date dans son champ puis Entree."""
+        self.date_trigger().click()
+        self.pause()
+        field = self.wait_poll(lambda: self.text_fields()[0], "action_timeout_s")
+        if field is None:
+            raise self.stop("element_missing", "liste de date ouverte sans champ de date (« 4 oct. 2026 » attendu) : "
+                                               "text_input")
+        field.click()
+        field.fill(text)
+        field.press("Enter")
+        self.pause()
 
     def format_date(self, target: datetime) -> str:
         return f"{target.day} {self.sel['calendar']['months'][target.month - 1]} {target.year}"
@@ -591,14 +615,16 @@ class _Flow:
         local = schedule_at.astimezone(ZoneInfo(browser.TIMEZONE))  # heure de Paris, jamais le fuseau du PC
         self.click_labeled("expand", "expand_schedule")
         self.choose_timezone()
-        for kind, text in (("date", self.format_date(local)), ("time", local.strftime("%H:%M"))):
-            field = self.schedule_fields()[0 if kind == "date" else 1]
-            field.click()
-            field.fill(text)
-            field.press("Enter")
-            self.pause()
-        date_field, time_field = self.schedule_fields()
-        shown_date, shown_time = str(date_field.input_value()).strip(), str(time_field.input_value()).strip()
+        self.set_date(self.format_date(local))
+        time_field = self.text_fields()[1]
+        if time_field is None:
+            raise self.stop("unexpected_page", "champ d'heure de programmation inattendu : une heure (« 00:00 ») "
+                                               "est attendue")
+        time_field.click()
+        time_field.fill(local.strftime("%H:%M"))
+        time_field.press("Enter")
+        self.pause()
+        shown_date, shown_time = self.read_schedule()
         if self.parse_date(shown_date) != (local.year, local.month, local.day) or shown_time != local.strftime("%H:%M"):
             raise self.stop("unexpected_page", f"programmation non prise en compte : {shown_date} {shown_time} affiché, "
                                                f"{self.format_date(local)} {local.strftime('%H:%M')} (heure de Paris) attendu")
