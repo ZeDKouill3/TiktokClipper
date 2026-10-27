@@ -1,0 +1,51 @@
+# Bizarrium — backlog v4 (PARTIEL : 23 sujets sur 40)
+
+Date : 2026-10-27
+
+Sujets par famille : corps 3, animaux 4, espace 5, Terre 3, objets du quotidien 2, histoire des inventions 4 (total 23). Objectif 40 non atteint : budget WebSearch épuisé en cours de passe 2 (voir rapport).
+
+Règle des sources : 2 sources sérieuses, indépendantes et concordantes par chiffre ; Wikipédia exclue ; deux pages d'un même organisme = une source.
+
+URL vérifiées 200 le 2026-10-27 (46/46 ; 4 d'entre elles répondent 403/405 au HEAD mais 200 au GET).
+
+## corps
+
+- red-cells-second | Votre corps fabrique deux millions de globules rouges par seconde. | 2 millions de globules rouges par seconde | source 1 : https://medlineplus.gov/ency/anatomyvideos/000104.htm — « The body makes about two million red blood cells every second! » | source 2 : https://www.blood.co.uk/the-donation-process/after-your-donation/how-your-body-replaces-blood/ — « Your body makes about 2 million new red cells every second » | corps
+- retina-rods | Votre rétine contient environ 120 millions de cellules sensibles à la lumière. | 120 millions de bâtonnets par rétine | source 1 : https://faculty.washington.edu/chudler/retina.html — « There are about 120 million rods in the human retina. » | source 2 : https://hyperphysics.gsu.edu/hbase/vision/rodcone.html — « The rods are more numerous, some 120 million » | corps
+- kidney-nephrons | Chaque rein abrite environ un million de minuscules filtres. | 1 million de néphrons par rein | source 1 : https://www.niddk.nih.gov/Dictionary/N/nephron?dkrd=www2.niddk.nih.gov — « Each kidney contains about 1 million nephrons. » | source 2 : https://mcb.berkeley.edu/courses/mcb135e/kidneys.html — « Each kidney has about 1 million nephrons » | corps
+
+## animaux
+
+- greenland-shark | Ce requin du Groenland aurait vécu près de quatre siècles. | 392 ans (± 120) | source 1 : https://www.nationalgeographic.com/animals/article/greenland-sharks-animals-science-age — « was estimated to be approximately 392 years old. » | source 2 : https://researchprofiles.ku.dk/en/publications/eye-lens-radiocarbon-reveals-centuries-of-longevity-in-the-greenl/ — « the largest animal (502 cm) to be 392 ± 120 years old » | animaux
+- sea-otter-fur | La loutre de mer porte plus d'un million de poils par pouce carré. | plus d'un million de poils par pouce carré (≈155 000 par cm², conversion) | source 1 : https://oceantoday.noaa.gov/seaotteranatomy/ — « more than a million fibers per square inch. » | source 2 : https://www.montereybayaquarium.org/animals-the-ocean/animals-a-to-z/sea-otter — « thick fur made up of more than a million hairs per square inch. » | animaux
+- bombardier-beetle | Ce coléoptère tire sur ses prédateurs un jet à 100 degrés. | 100 °C | source 1 : https://www.nationalgeographic.com/science/article/how-this-beetle-creates-500-explosions-per-second-in-its-bum — « at temperatures of around 100 degrees Celsius. » | source 2 : https://pmc.ncbi.nlm.nih.gov/articles/PMC8420871/ — « can eject toxic chemicals at temperatures of 100 °C from the tips of their abdomens » | animaux
+- periodical-cicada | Ces cigales passent dix-sept ans sous terre avant d'émerger. | 17 ans | source 1 : https://www.nationalgeographic.com/animals/article/after-17-years-the-cicada-choruses-are-back — « spends 17 years underground. » | source 2 : https://pmc.ncbi.nlm.nih.gov/articles/PMC3637745/ — « 17-y species are Magicicada septendecim, Magicicada cassini, and Magicicada septendecula. » | animaux
+
+## espace
+
+- sgr-a-mass | Notre galaxie cache un trou noir de quatre millions de Soleils. | 4 millions de masses solaires | source 1 : https://science.nasa.gov/mission/webb/science-overview/science-explainers/what-is-the-center-of-our-galaxy-like/ — « which is about 4 million times the mass of the Sun » | source 2 : https://supernova.eso.org/exhibition/1010/ — « mit einer Masse von vier Millionen Sonnenmassen » | espace
+- andromeda-distance | Notre grande voisine Andromède est à 2,5 millions d'années-lumière. | 2,5 millions d'années-lumière | source 1 : https://science.nasa.gov/mission/hubble/science/explore-the-night-sky/hubble-messier-catalog/messier-31/ — « only 2.5 million light-years from Earth » | source 2 : https://esahubble.org/images/heic2501a/ — « located 2.5 million light-years away » | espace
+- jupiter-day | Une journée sur Jupiter dure moins de dix heures. | 9 h 56 min (aux pôles) | source 1 : https://science.nasa.gov/image-article/apod-2024-january-19-jupiter-over-2-hours-and-30-minutes — « A day on Jupiter is about 9 hours and 56 minutes long at the poles » | source 2 : https://coolcosmos.ipac.caltech.edu/ask/89-How-long-is-a-day-on-Jupiter — « Jupiter's day varies from 9 hours and 56 minutes around the poles » | espace
+- mars-sol | Une journée sur Mars dure 39 minutes de plus que la nôtre. | 24 h 39 min 35 s | source 1 : https://www.jpl.nasa.gov/news/press_kits/insight/landing/facts/mars-at-a-glance/ — « 24 hours, 39 minutes, 35 seconds » | source 2 : https://www.rmg.co.uk/stories/space-astronomy/how-long-day-on-mars — « its solar day 24 hours, 39 minutes and 35 seconds » | espace
+- universe-age | Le Big Bang remonte à 13,8 milliards d'années. | 13,8 milliards d'années | source 1 : https://www.esa.int/Science_Exploration/Space_Science/Planck/Planck_reveals_an_almost_perfect_Universe — « the age of the Universe is 13.82 billion years. » | source 2 : https://www.jpl.nasa.gov/news/planck-mission-brings-universe-into-sharp-focus/ — « 13.8 billion years old » | espace
+- neptune-year | Neptune met 165 ans pour faire un seul tour du Soleil. | 165 ans (164,79) | source 1 : https://science.nasa.gov/neptune/neptune-facts/ — « in about 165 Earth years (60,190 Earth days) » | source 2 : https://sci.esa.int/web/solar-system/-/35654-neptune — « Sidereal orbit period | y | 164.79 » | espace
+- hubble-galaxies | Une seule photo de Hubble montre près de 10 000 galaxies. | près de 10 000 galaxies | source 1 : https://science.nasa.gov/asset/hubble/hubble-ultra-deep-field-image-reveals-galaxies-galore/ — « This view of nearly 10,000 galaxies » | source 2 : https://sci.esa.int/web/hubble/-/34840-hubble-ultra-deep-field-heic0406 — « The HUDF field contains an estimated 10 000 galaxies. » | espace
+
+## Terre
+
+- hail-vivian | Un grêlon du Dakota du Sud mesurait 20 centimètres de diamètre. | 8,0 pouces (20,3 cm, conversion) | source 1 : https://www.weather.gov/abr/vivianhailstone — « measuring 8.0 inches in diameter » | source 2 : https://www.atms.unca.edu/dmiller/atms113/largest_hailstone.html — « The hailstone measured 8.0 inches in diameter » | Terre
+- ocean-heat-90 | Les océans ont absorbé environ 90 % de la chaleur en excès. | 90 % | source 1 : https://science.nasa.gov/earth/explore/earth-indicators/ocean-warming/ — « About 90% of the excess heat from planetary warming over the past century has been absorbed by the ocean » | source 2 : https://www.climate.gov/media/13603 — « More than 90 percent of the excess heat trapped in the Earth system » | Terre
+- vostok-cold | Le record mondial de froid : moins 89 degrés, en Antarctique. | -89,2 °C | source 1 : https://nora.nerc.ac.uk/id/eprint/9656/ — « −89.2°C made at Vostok station, Antarctica » | source 2 : https://www.futura-sciences.com/planete/actualites/meteorologie-jour-il-fait-89-c-terre-117742/ — « -89.2°C le 21/07/1983 » | Terre
+
+## objets du quotidien
+
+- paper-fold-12 | Une lycéenne a plié une feuille de papier douze fois. | 12 plis | source 1 : https://blog.doublehelix.csiro.au/fold-paper-in-half/ — « fold a sheet of paper in half 12 times. » | source 2 : https://www.sciencefocus.com/science/whats-the-maximum-number-of-times-that-you-can-fold-a-piece-of-paper — « fold a 1.2km-long piece of tissue paper 12 times. » | objets du quotidien
+- microwave-2450 | Votre micro-ondes agite l'eau 2,45 milliards de fois par seconde. | 2,45 GHz | source 1 : https://illumin.usc.edu/the-engineering-behind-the-microwave-oven/ — « Microwave ovens use 2.45 GHz microwaves » | source 2 : https://www.scientificamerican.com/article/microwaves-and-the-speed/ — « 2.45 gigahertz, usually » | objets du quotidien
+
+## histoire des inventions
+
+- wright-flight-12s | Le premier vol motorisé de l'histoire n'a duré que 12 secondes. | 12 secondes (120 pieds ≈ 36,6 m) | source 1 : https://airandspace.si.edu/collection-objects/stopwatch-wright-brothers/nasm_A19640054000 — « The first effort covered 120 feet in 12 seconds. » | source 2 : https://www.nasa.gov/history/120-years-ago-the-first-powered-flight-at-kitty-hawk/ — « The flight lasted just 12 seconds, traveled 120 feet » | histoire des inventions
+- gutenberg-180-copies | Gutenberg n'a imprimé qu'environ 180 exemplaires de sa Bible. | environ 180 exemplaires | source 1 : https://www.loc.gov/exhibits/bibles/interactives/gutenberg/index.html — « Approximately 180 copies of the Gutenberg Bible were printed » | source 2 : https://www.digitale-sammlungen.de/en/gutenberg-bible — « It is believed that 180 copies of the Bible were printed » | histoire des inventions
+- ferris-wheel-2160 | La grande roue de Chicago en 1893 emportait 2 160 personnes. | 2 160 passagers | source 1 : https://glessnerhouse.org/ferris-wheel — « for a total capacity of 2,160. » | source 2 : https://www.architecture.org/online-resources/stories-of-chicago/chicagos-ferris-wheel-story — « for a total capacity of 2,160 people. » | histoire des inventions
+- difference-engine-8000 | La machine de Babbage, reconstruite, compte 8 000 pièces. | 8 000 pièces | source 1 : https://my3.my.umbc.edu/groups/csee/media/1681 — « The Engine consists of 8,000 parts, weighs 5 tons » | source 2 : https://www.computerhistory.org/babbage/ — « consists of 8,000 parts, weighs five tons. » | histoire des inventions
+
