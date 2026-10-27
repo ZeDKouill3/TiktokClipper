@@ -6,7 +6,7 @@ Sujets par famille : corps 7, animaux 7, espace 5, Terre 7, objets du quotidien 
 
 Règle des sources : 2 sources sérieuses, indépendantes et concordantes par chiffre ; Wikipédia exclue ; deux pages d'un même organisme = une source.
 
-URL vérifiées 200 le 2026-10-27 (73/73 après ajout de 12 URL le 2026-10-27 et retrait de 2 ; 4 d'entre elles répondent 403/405 au HEAD mais 200 au GET).
+URL vérifiées 200 le 2026-10-27 (74/74 après ajout de 12 URL le 2026-10-27 et retrait de 2 ; 4 d'entre elles répondent 403/405 au HEAD mais 200 au GET).
 
 ## corps
 
