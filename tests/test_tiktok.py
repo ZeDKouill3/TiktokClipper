@@ -3844,6 +3844,11 @@ class DomElement:
     def click(self, **kwargs):
         self.page.clicks.append(self.node)
         self.page.click_kwargs.append(kwargs)
+        if (getattr(self.page, "wheel_covers_container", False) and self.page.calendar is not None
+                and self.node.attrs.get("data-e2e") == "schedule_container" and "position" not in kwargs):
+            # releve reel 2026-10-27 00:26 : le centre du bloc « Quand publier » est sous la roue ouverte
+            raise RuntimeError('Locator.click: <button aria-label="Minutes 15"> from <div data-floating-ui-portal> '
+                               "subtree intercepts pointer events")
         if self.page.covered.get(self.node, 0) > 0:   # une minute voisine recouvre l'element pendant que la colonne defile
             self.page.covered[self.node] -= 1
             raise RuntimeError("Locator.click: <button> from <div data-floating-ui-portal> subtree intercepts pointer events")
@@ -4522,4 +4527,18 @@ def test_a_click_still_intercepted_after_three_attempts_stops_with_a_capture_and
 
     assert stop.value.code == "unexpected_page" and "Minutes 30" in str(stop.value) and stop.value.capture is not None
     assert _wheel_clicks(page) == ["Hours 09"] + ["Minutes 30"] * 3   # jamais un autre element de la roue
+    assert all(not k.get("force") for k in page.click_kwargs)
+
+
+def test_the_open_wheel_is_closed_by_a_click_in_the_corner_of_the_schedule_block_not_its_covered_centre(tmp_path, monkeypatch):
+    """Releve reel 2026-10-27 00:26 (ClippTVFR, 17:00) : heure et minute bien choisies, mais le clic de fermeture au
+    centre du bloc « Quand publier » tombait sur la roue ouverte (« Minutes 15 ... intercepts pointer events »)."""
+    page, flow = _wheel_flow(tmp_path, monkeypatch)
+    page.wheel_covers_container = True
+
+    effective, note = flow.schedule_later(datetime(2026, 10, 28, 17, 0, tzinfo=PARIS))
+
+    assert page.value_of("Select time") == "17:00" and note is None
+    closes = [k for c, k in zip(page.clicks, page.click_kwargs) if c.attrs.get("data-e2e") == "schedule_container"]
+    assert closes and all(k.get("position") == tiktok.PICKER_CLOSE_POSITION for k in closes)
     assert all(not k.get("force") for k in page.click_kwargs)

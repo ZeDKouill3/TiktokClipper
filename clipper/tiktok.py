@@ -106,6 +106,19 @@ WHEEL_CENTRE_JS = """e => {
     const r = e.getBoundingClientRect(), l = list.getBoundingClientRect();
     list.scrollTop += (r.top + r.height / 2) - (l.top + l.height / 2);
 }"""   # amene l'element au centre de sa colonne (le panneau flottant couvre les elements hors du centre)
+PICKER_CLOSE_POSITION = {"x": 4, "y": 4}   # coin haut gauche du bloc « Quand publier » : hors de la roue ouverte
+
+
+class _At:
+    """Un element dont le clic vise un point precis (``position`` de Playwright) au lieu de son centre."""
+
+    def __init__(self, element: Any, position: dict[str, float]) -> None:
+        self.element, self.position = element, position
+
+    def click(self, **kwargs: Any) -> None:
+        self.element.click(position=self.position, **kwargs)
+
+
 MAX_POPUP_ROUNDS = 5   # fenetres successives fermees par un meme controle avant d'abandonner
 MAX_MONTH_STEPS = 24   # fleches du calendrier cliquees au plus avant d'abandonner
 REQUIRED_STATS_SELECTORS = ("row", "post_link", "likes", "comments", "metric_card", "traffic_sources", "processing",
@@ -870,10 +883,13 @@ class _Flow:
         self.pause()
 
     def close_list(self, name: str) -> None:
-        """La liste se ferme d'elle-meme au choix ; sinon (encore ouverte), clic hors d'elle."""
+        """La liste se ferme d'elle-meme au choix ; sinon (encore ouverte), clic hors d'elle : dans le coin haut gauche
+        du bloc « Quand publier », jamais en son centre, que la roue ouverte recouvre (releve reel 2026-10-27 00:26 :
+        clic intercepte par « Minutes 15 »)."""
         picker = self.page.query_selector(self.sel["selectors"][name])
         if picker is not None and str(picker.get_attribute("aria-expanded")) == "true":
-            self.click("schedule_picker_close")
+            self.click_with(lambda: _At(self.wait("schedule_picker_close"), PICKER_CLOSE_POSITION))
+            self.pause()
 
     def list_value(self, name: str) -> str:
         picker = self.wait(name)
