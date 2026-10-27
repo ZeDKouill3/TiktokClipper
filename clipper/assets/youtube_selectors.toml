@@ -158,8 +158,10 @@ months = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "s
 # « Traitement de la vidéo » : relevé 2026-10-26 (1re publication publique d'une chaîne : publiée, publique dès la
 # fin du traitement SD ; capture state/browser/670ca85bf1f0/captures/20261026T111018-publish_unconfirmed.png).
 published = ["Vidéo mise en ligne", "Traitement de la vidéo"]
-# NON VÉRIFIÉ : programmation et privee non relevees ; sans l'un de ces titres, arret « publish_unconfirmed » a verifier en reel.
-scheduled = ["Vidéo programmée", "Vidéo planifiée"]
+# « sera publique le » : relevé 2026-10-27 (envoi programmé : fenêtre « Traitement de la vidéo … sera publique le
+# 27 octobre 2026 à 17:00 », capture state/browser/670ca85bf1f0/captures/20261027T115448-publish_unconfirmed.png).
+# Les deux premiers : NON VÉRIFIÉ.
+scheduled = ["Vidéo programmée", "Vidéo planifiée", "sera publique le"]
 # NON VÉRIFIÉ
 saved = ["Vidéo enregistrée"]
 

@@ -1306,6 +1306,17 @@ def test_a_scheduled_publication_types_paris_time_when_the_pc_is_on_london_time(
     assert ("press", "Enter") in page.calls
 
 
+def test_a_scheduled_upload_is_proven_by_the_processing_window_that_names_the_publication_date(tmp_path, monkeypatch):
+    # relevé 27/10 : après « Programmer », Studio montre « Traitement de la vidéo » et non « Vidéo programmée »
+    page = FakeUpload(success_text="Traitement de la vidéo Une fois le traitement en définition standard (SD) "
+                                   "terminé, votre vidéo sera publique le 27 octobre 2026 à 17:00.")
+    at = datetime(2026, 10, 4, 20, 30, tzinfo=LONDON)
+
+    result = publish(tmp_path, monkeypatch, page, mode="scheduled", schedule_at=at)
+
+    assert result["state"] == "scheduled_on_youtube" and result["post_id"] == SHORT_ID
+
+
 def test_the_scheduled_date_is_the_paris_date_not_the_pc_date(tmp_path, monkeypatch):
     page = FakeUpload(success_text="Vidéo programmée")
     at = datetime(2026, 10, 4, 23, 30, tzinfo=LONDON)  # 00:30 le lendemain a Paris
