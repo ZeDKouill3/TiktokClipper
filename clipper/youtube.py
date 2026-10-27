@@ -561,6 +561,20 @@ class _Flow:
         options[0].click()
         self.pause()
 
+    def selected_timezone(self) -> str:
+        """Fuseau retenu par Studio : le bouton « Fuseau horaire » n'affiche jamais le fuseau choisi (relevé 2026-10-27),
+        la liste rouverte marque l'option retenue ``aria-selected="true"`` ; elle est refermee par Echap."""
+        self.click_labeled("labeled_button", "timezone_button")
+        self.wait("timezone_option")
+        chosen = [o for o in self.page.query_selector_all(self.sel["selectors"]["timezone_option"])
+                  if o.is_visible() and o.get_attribute("aria-selected") == "true"]
+        self.page.keyboard.press("Escape")
+        self.pause()
+        if len(chosen) != 1:
+            raise self.stop("unexpected_page", f"{len(chosen)} fuseau(x) marqué(s) retenu(s) dans la liste (un seul "
+                                               f"attendu) : timezone_option")
+        return " ".join(str(chosen[0].inner_text()).split())
+
     def text_fields(self) -> tuple[Any | None, Any | None]:
         """Champs texte visibles de la section Programmer : (date, heure), reperes par leur valeur (les ids input-N
         sont instables). Le champ de date n'existe que dans la liste deroulante ouverte."""
@@ -628,8 +642,7 @@ class _Flow:
         if self.parse_date(shown_date) != (local.year, local.month, local.day) or shown_time != local.strftime("%H:%M"):
             raise self.stop("unexpected_page", f"programmation non prise en compte : {shown_date} {shown_time} affiché, "
                                                f"{self.format_date(local)} {local.strftime('%H:%M')} (heure de Paris) attendu")
-        css, label = self.labeled("labeled_button", "timezone_button")
-        zone = " ".join(str(self.wait_css(css, f"labeled_button « {label} »").inner_text()).split())
+        zone = self.selected_timezone()
         wanted, forbidden = str(self.sel["labels"]["timezone_wanted"]), str(self.sel["labels"]["timezone_forbidden"])
         if wanted.casefold() not in zone.casefold() or forbidden.casefold() in zone.casefold():
             raise self.stop("unexpected_page", f"fuseau horaire non pris en compte : {zone!r} affiché, « {wanted} » attendu")

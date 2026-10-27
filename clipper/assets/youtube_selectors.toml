@@ -93,14 +93,16 @@ labeled_button = "button:has-text(\"{label}\")"
 # (vérifié 2026-10-26 sur la dialog en français : un [aria-label] seul trouvait d'abord un autre controle cache).
 expand = "#second-container-expand-button[aria-label=\"{label}\"]"
 # Date de la section Programmer : depuis 2026-10-26 une liste deroulante (« 27 oct. 2026 ⌄ ») ; son declencheur affiche
-# la date, un clic ouvre la liste qui porte un champ ou taper la date. NON VÉRIFIÉ (releve reel a refaire apres la
-# limite d'envois du 26/10 : le declencheur ytcp-datetime-picker #datepicker-trigger est une hypothese).
+# la date, un clic ouvre un calendrier qui porte un champ ou taper la date.
+# vérifié 2026-10-27 (brouillon rouvert via Modifier le brouillon, rien enregistré) : ytcp-text-dropdown-trigger
+# #datepicker-trigger, texte « 28 oct. 2026 » dans span.dropdown-trigger-text.
 date_trigger = "ytcp-datetime-picker #datepicker-trigger"
-# Champs texte de la section Programmer (heure « 00:00 », et date dans la liste ouverte) : input.tp-yt-paper-input,
-# reperes par leur valeur. Heure : vérifié 2026-10-03 et 2026-10-26 ; champ de date de la liste : NON VÉRIFIÉ.
+# Champs texte de la section Programmer (heure « 00:00 », et date dans le calendrier ouvert) : input.tp-yt-paper-input,
+# reperes par leur valeur. Heure : vérifié 2026-10-03 et 2026-10-27 ; champ de date du calendrier ouvert (valeur
+# « 28 oct. 2026 », autofocus) : vérifié 2026-10-27, mais la saisie + Entree reste a prouver en reel.
 text_input = "input.tp-yt-paper-input"
-# Options de la liste des fuseaux horaires : « (UTC+02:00) Paris ».
-# NON VÉRIFIÉ
+# Options de la liste des fuseaux horaires : « (UTC+01:00) Paris » ; l'option retenue porte aria-selected="true"
+# (le bouton « Fuseau horaire » n'affiche jamais le fuseau choisi). vérifié 2026-10-27, lecture seule.
 timezone_option = "[role='option']"
 # Bouton final de la dialog (Enregistrer, Publier ou Programmer selon le choix) ; son libelle est relu avant le clic.
 # NON VÉRIFIÉ

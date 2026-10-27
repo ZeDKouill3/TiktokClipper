@@ -753,6 +753,8 @@ class FakeKeyboard:
 
     def press(self, key):
         self.page.calls.append(("key", key))
+        if key == "Escape":
+            self.page.tz_open = False
         if key == "Backspace" and self.page.focus is not None:
             self.page.typed[self.page.focus] = ""
 
@@ -919,13 +921,14 @@ class FakeUpload:
                 fields.insert(0, El(self, value=self.date_text))
             return fields
         if selector == S["labeled_button"].format(label=L["timezone_button"]) and self.expanded:
-            return [El(self, text=f"{L['timezone_button']}\n{self.tz_choice}",
-                       on_click=lambda: setattr(self, "tz_open", True))]
+            # relevé 2026-10-27 : le bouton n'affiche jamais le fuseau choisi
+            return [El(self, text=L["timezone_button"], on_click=lambda: setattr(self, "tz_open", True))]
         if selector == S["timezone_option"] and self.tz_open:
-            options = [("(GMT+0100) Heure locale"), "(UTC+01:00) Londres", "(UTC+02:00) Paris", "(UTC+02:00) Berlin"]
+            options = [("(GMT+0100) Heure locale"), "(UTC+00:00) Londres", "(UTC+01:00) Paris", "(UTC+01:00) Berlin"]
             if self.drop_tz_paris:
                 options = [o for o in options if "Paris" not in o]
-            return [El(self, text=o, on_click=lambda o=o: self._pick_tz(o)) for o in options]
+            return [El(self, text=o, on_click=lambda o=o: self._pick_tz(o),
+                       attrs={"aria-selected": "true" if o == self.tz_choice else "false"}) for o in options]
         if selector == S["final_button"]:
             self.polls_final += 1
             label = self.final_label or self._final_label()
@@ -1197,7 +1200,7 @@ def test_a_scheduled_publication_types_paris_time_when_the_pc_is_on_london_time(
     result = publish(tmp_path, monkeypatch, page, mode="scheduled", schedule_at=at)
 
     assert (page.date_text, page.time_text) == ("4 oct. 2026", "21:30")
-    assert page.tz_choice == "(UTC+02:00) Paris"  # fuseau choisi explicitement
+    assert page.tz_choice == "(UTC+01:00) Paris"  # fuseau choisi explicitement
     assert not page.clicked("(GMT+0100) Heure locale")
     assert result["state"] == "scheduled_on_youtube" and result["post_id"] == SHORT_ID
     assert datetime.fromisoformat(result["publish_at"]) == at
