@@ -5,7 +5,7 @@ slug: youtube-programmer-un-short-avec-la-date-en-list
 title: "YouTube : programmer un Short avec la date en liste déroulante"
 created: 2026-10-26T11:45:49Z
 author: nicoc@zedk_ordi
-status: open
+status: in_progress
 scope:
   - clipper/youtube.py
   - clipper/assets/youtube_selectors.toml
@@ -17,7 +17,7 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 schema: 4
-version: 5
+version: 8
 ---
 
 Constat 26/10 (relevé réel, chaîne 670ca85bf1f0) : dans la dialog d'envoi de YouTube Studio (français), section Visibilité > « Programmer », après le chevron #second-container-expand-button (corrigé cf29727), la DATE est désormais une liste déroulante (« 27 oct. 2026 ⌄ »), l'HEURE un champ « 00:00 », le FUSEAU une liste « (UTC+01:00) P… ». `_Flow.schedule_fields` cherche deux `input.tp-yt-paper-input` reconnus par leur valeur et échoue : « champs de programmation inattendus ». Capture : state/browser/670ca85bf1f0/captures/20261026T112142-unexpected_page.png. La publication immédiate fonctionne (0934e08, f8f0f76).

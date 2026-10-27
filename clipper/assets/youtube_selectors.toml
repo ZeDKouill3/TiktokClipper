@@ -59,6 +59,11 @@ visibility_public = "Publique"
 visibility_unlisted = "Non répertoriée"
 visibility_private = "Privée"
 expand_schedule = "Click to expand"
+# Programmer un brouillon existant : entree « Contenus » du menu de gauche, onglet « Shorts », bouton de la ligne.
+# vérifié 2026-10-27 (lecture seule).
+content_nav = "Contenus"
+shorts_tab = "Shorts"
+draft_edit = "Modifier le brouillon"
 timezone_button = "Fuseau horaire"
 # Fuseau a choisir (texte de l'option contenant « Paris ») ; « Heure locale » = fuseau du PC : jamais (SPEC-5e50 R8).
 timezone_wanted = "Paris"
@@ -91,21 +96,40 @@ radio = "tp-yt-paper-radio-button:has-text(\"{label}\")"
 labeled_button = "button:has-text(\"{label}\")"
 # Section « Programmer » repliee : chevron #second-container-expand-button, nom accessible « Click to expand »
 # (vérifié 2026-10-26 sur la dialog en français : un [aria-label] seul trouvait d'abord un autre controle cache).
-# ATTENTION 2026-10-26 : la date y est desormais une liste deroulante (« 27 oct. 2026 ⌄ »), plus un champ texte :
-# schedule_fields ne la trouve plus, la programmation YouTube est a refaire (l'immediat fonctionne).
 expand = "#second-container-expand-button[aria-label=\"{label}\"]"
-# Champs texte de la section Programmer (date et heure) : input.tp-yt-paper-input, reperes par leur valeur.
-# vérifié 2026-10-03
+# Texte exact visé par libellé ({label}) : « Contenus », « Shorts ». vérifié 2026-10-27
+exact_text = "text=\"{label}\""
+# Ligne de la liste de Contenu (un brouillon y porte « Modifier le brouillon » ; titre tronque a ~100 caracteres).
+# vérifié 2026-10-27
+video_row = "ytcp-video-row"
+# Bouton de la ligne d'un brouillon, vise par libelle ({label}) ; son clic rouvre la dialog d'envoi a l'etape Details.
+# vérifié 2026-10-27
+draft_button = "text={label}"
+# Pastille de l'etape Visibilite de la dialog (4e pastille) : un clic y va directement. vérifié 2026-10-27
+step_visibility = "#step-badge-3"
+# Date de la section Programmer : depuis 2026-10-26 une liste deroulante (« 27 oct. 2026 ⌄ ») ; son declencheur affiche
+# la date, un clic ouvre un calendrier qui porte un champ ou taper la date.
+# vérifié 2026-10-27 (brouillon rouvert via Modifier le brouillon, rien enregistré) : ytcp-text-dropdown-trigger
+# #datepicker-trigger, texte « 28 oct. 2026 » dans span.dropdown-trigger-text.
+date_trigger = "ytcp-datetime-picker #datepicker-trigger"
+# Champs texte de la section Programmer (heure « 00:00 », et date dans le calendrier ouvert) : input.tp-yt-paper-input,
+# reperes par leur valeur. Heure : vérifié 2026-10-03 et 2026-10-27 ; champ de date du calendrier ouvert (valeur
+# « 28 oct. 2026 », autofocus) : vérifié 2026-10-27, mais la saisie + Entree reste a prouver en reel.
 text_input = "input.tp-yt-paper-input"
-# Options de la liste des fuseaux horaires : « (UTC+02:00) Paris ».
-# NON VÉRIFIÉ
+# Fuseau affiche une fois choisi : le bouton « Fuseau horaire » est remplace par une liste (role=button) dont le texte
+# est « (UTC+01:00) Paris » (releve reel 2026-10-27, apres choix de Paris, avant le bouton final).
+zone_shown = "ytcp-datetime-picker [role='button']"
+# Options de la liste des fuseaux horaires : « (UTC+01:00) Paris » ; l'option retenue porte aria-selected="true"
+# vérifié 2026-10-27, lecture seule.
 timezone_option = "[role='option']"
 # Bouton final de la dialog (Enregistrer, Publier ou Programmer selon le choix) ; son libelle est relu avant le clic.
 # NON VÉRIFIÉ
 final_button = "#done-button"
 # Lien youtube.com/shorts/<id> affiche des l'etape Details.
 # vérifié 2026-10-03
-video_link = "a[href*='youtube.com/shorts/']"
+# 2026-10-27 : dans Contenu, la ligne du brouillon porte un autre lien youtube.com/shorts/ cache (#anchor-watch-on-yt) qui
+# precede celui de la dialog : le sélecteur est donc fixé sur l'id du lien de la dialog. vérifié 2026-10-27
+video_link = "a#video-link[href*='youtube.com/shorts/']"
 
 [modal]
 # Fenetre surgissante (role ARIA dialog) et son bouton, vise par libelle ({label}, sans guillemet double).

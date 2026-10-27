@@ -63,9 +63,11 @@ POST_OPTIONS = ("title", "visibility", "made_for_kids")
 TITLE_MAX = 100              # limite de YouTube (compteur « n/100 » de l'etape Details)
 REQUIRED_PUBLISH_LABELS = ("create", "upload_menu", "next", "kids_yes", "kids_no", "visibility_public",
                            "visibility_unlisted", "visibility_private", "expand_schedule", "timezone_button",
-                           "timezone_wanted", "timezone_forbidden", "final_publish", "final_save", "final_schedule")
+                           "timezone_wanted", "timezone_forbidden", "final_publish", "final_save", "final_schedule",
+                           "content_nav", "shorts_tab", "draft_edit")
 REQUIRED_PUBLISH_SELECTORS = ("file_input", "menu_item", "text_box", "radio", "labeled_button", "expand",
-                              "text_input", "timezone_option", "final_button", "video_link")
+                              "exact_text", "video_row", "draft_button", "step_visibility", "zone_shown",
+                              "date_trigger", "text_input", "timezone_option", "final_button", "video_link")
 _SHORTS_TAG = re.compile(r"(?<!\w)#shorts\b", re.IGNORECASE)
 
 SELECTORS_PATH = Path(__file__).parent / "assets" / "youtube_selectors.toml"
@@ -561,17 +563,53 @@ class _Flow:
         options[0].click()
         self.pause()
 
-    def schedule_fields(self) -> tuple[Any, Any]:
-        """Champs date et heure de la section Programmer, reperes par leur valeur (les ids input-N sont instables)."""
+    def selected_timezone(self) -> str:
+        """Fuseau retenu par Studio, tel qu'affiche (relevé 2026-10-27) : une fois choisi, le bouton « Fuseau horaire »
+        est remplace par une liste dont le texte est « (UTC+01:00) Paris ». Un seul fuseau affiche est attendu ; aucun
+        (choix non pris en compte, le bouton est toujours la) ou plusieurs = arret."""
+        shown = {" ".join(str(e.inner_text()).split())
+                 for e in self.page.query_selector_all(self.sel["selectors"]["zone_shown"]) if e.is_visible()}
+        zones = sorted(t for t in shown if re.match(r"^\((?:UTC|GMT)", t))
+        if len(zones) != 1:
+            raise self.stop("unexpected_page", f"fuseau horaire non pris en compte : {len(zones)} fuseau(x) affiché(s) "
+                                               f"{zones} (« {self.sel['labels']['timezone_wanted']} » attendu) : zone_shown")
+        return zones[0]
+
+    def text_fields(self) -> tuple[Any | None, Any | None]:
+        """Champs texte visibles de la section Programmer : (date, heure), reperes par leur valeur (les ids input-N
+        sont instables). Le champ de date n'existe que dans la liste deroulante ouverte."""
         expect = self.sel["expect"]
         date_re, time_re = re.compile(str(expect["date_value_pattern"])), re.compile(str(expect["time_value_pattern"]))
         fields = list(self.page.query_selector_all(self.sel["selectors"]["text_input"]))
         date_field = next((f for f in fields if date_re.match(str(f.input_value()).strip())), None)
         time_field = next((f for f in fields if time_re.match(str(f.input_value()).strip())), None)
-        if date_field is None or time_field is None:
-            raise self.stop("unexpected_page", "champs de programmation inattendus : une date (« 4 oct. 2026 ») et une "
-                                               "heure (« 00:00 ») sont attendues")
         return date_field, time_field
+
+    def date_trigger(self) -> Any:
+        """Declencheur de la liste deroulante de date (depuis 2026-10-26 la date n'est plus un champ texte)."""
+        css = self.sel["selectors"]["date_trigger"]
+        return self.wait_css(css, "date_trigger")
+
+    def read_schedule(self) -> tuple[str, str]:
+        """Date affichee par le declencheur et heure du champ, telles que Studio les montre."""
+        time_field = self.text_fields()[1]
+        if time_field is None:
+            raise self.stop("unexpected_page", "champ d'heure de programmation inattendu : une heure (« 00:00 ») "
+                                               "est attendue")
+        return " ".join(str(self.date_trigger().inner_text()).split()), str(time_field.input_value()).strip()
+
+    def set_date(self, text: str) -> None:
+        """Ouvre la liste de date, tape la date dans son champ puis Entree."""
+        self.date_trigger().click()
+        self.pause()
+        field = self.wait_poll(lambda: self.text_fields()[0], "action_timeout_s")
+        if field is None:
+            raise self.stop("element_missing", "liste de date ouverte sans champ de date (« 4 oct. 2026 » attendu) : "
+                                               "text_input")
+        field.click()
+        field.fill(text)
+        field.press("Enter")
+        self.pause()
 
     def format_date(self, target: datetime) -> str:
         return f"{target.day} {self.sel['calendar']['months'][target.month - 1]} {target.year}"
@@ -591,19 +629,20 @@ class _Flow:
         local = schedule_at.astimezone(ZoneInfo(browser.TIMEZONE))  # heure de Paris, jamais le fuseau du PC
         self.click_labeled("expand", "expand_schedule")
         self.choose_timezone()
-        for kind, text in (("date", self.format_date(local)), ("time", local.strftime("%H:%M"))):
-            field = self.schedule_fields()[0 if kind == "date" else 1]
-            field.click()
-            field.fill(text)
-            field.press("Enter")
-            self.pause()
-        date_field, time_field = self.schedule_fields()
-        shown_date, shown_time = str(date_field.input_value()).strip(), str(time_field.input_value()).strip()
+        self.set_date(self.format_date(local))
+        time_field = self.text_fields()[1]
+        if time_field is None:
+            raise self.stop("unexpected_page", "champ d'heure de programmation inattendu : une heure (« 00:00 ») "
+                                               "est attendue")
+        time_field.click()
+        time_field.fill(local.strftime("%H:%M"))
+        time_field.press("Enter")
+        self.pause()
+        shown_date, shown_time = self.read_schedule()
         if self.parse_date(shown_date) != (local.year, local.month, local.day) or shown_time != local.strftime("%H:%M"):
             raise self.stop("unexpected_page", f"programmation non prise en compte : {shown_date} {shown_time} affiché, "
                                                f"{self.format_date(local)} {local.strftime('%H:%M')} (heure de Paris) attendu")
-        css, label = self.labeled("labeled_button", "timezone_button")
-        zone = " ".join(str(self.wait_css(css, f"labeled_button « {label} »").inner_text()).split())
+        zone = self.selected_timezone()
         wanted, forbidden = str(self.sel["labels"]["timezone_wanted"]), str(self.sel["labels"]["timezone_forbidden"])
         if wanted.casefold() not in zone.casefold() or forbidden.casefold() in zone.casefold():
             raise self.stop("unexpected_page", f"fuseau horaire non pris en compte : {zone!r} affiché, « {wanted} » attendu")
@@ -707,6 +746,43 @@ class _Flow:
         self.await_success(titles)
         return self.result(short_id, mode, effective, visibility)
 
+    def open_draft(self, match: str) -> None:
+        """Contenu > Shorts, puis « Modifier le brouillon » de l'unique brouillon dont le titre commence par ``match`` :
+        zero ou plusieurs brouillons = arret (jamais le premier venu)."""
+        self.click_labeled("exact_text", "content_nav")
+        self.wait_css(self.sel["selectors"]["video_row"], "video_row", timeout_key="upload_timeout_s")
+        self.click_labeled("exact_text", "shorts_tab")
+        draft_css, draft_label = self.labeled("draft_button", "draft_edit")
+        wanted = " ".join(match.split()).casefold()
+
+        def drafts() -> list[Any]:
+            rows = self.page.query_selector_all(self.sel["selectors"]["video_row"])
+            return [r for r in rows if r.query_selector(draft_css) is not None
+                    and wanted in " ".join(str(r.inner_text()).split()).casefold()]
+
+        found = self.wait_poll(drafts, "action_timeout_s")
+        if not found:
+            raise self.stop("element_missing", f"aucun brouillon dont le titre contient « {match} » dans Contenu > Shorts")
+        if len(found) > 1:
+            raise self.stop("unexpected_page", f"{len(found)} brouillons dont le titre contient « {match} » : "
+                                               f"un seul attendu (aucun choix au hasard)")
+        found[0].query_selector(draft_css).click()
+        self.pause()
+
+    def run_draft(self, match: str, schedule_at: datetime) -> dict[str, Any]:
+        """Programme un brouillon deja envoye : Modifier le brouillon, Visibilite, meme chemin date/heure/fuseau/bouton
+        final que ``run``. Les details du brouillon (titre, description, enfants) ne sont pas touches."""
+        self.channel_id()
+        self.close_popups()
+        self.open_draft(match)
+        short_id = self.read_short_id()
+        self.wait("step_visibility").click()
+        self.pause()
+        effective = self.schedule_later(schedule_at)
+        self.press_final("final_schedule")
+        self.await_success(list(self.sel["success"]["scheduled"]))
+        return self.result(short_id, "scheduled", effective, str(self.settings["visibility"]))
+
     def result(self, short_id: str, mode: str, effective: datetime | None, visibility: str) -> dict[str, Any]:
         note = {"private": "vidéo publiée en privé", "unlisted": "vidéo non répertoriée"}.get(visibility)
         scheduled = mode == "scheduled"
@@ -717,6 +793,37 @@ class _Flow:
             "publish_at": (effective if scheduled else self.now).isoformat(),
             "note": None if scheduled else note,
         }
+
+
+def publish_draft(
+    account: str, match: str, *, schedule_at: datetime, config: Config | None = None, now: datetime | None = None,
+    selectors: dict[str, Any] | None = None, opener: Opener | None = None,
+    sleep: Callable[[float], None] = time.sleep, rng: Any = None, on_tick: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    """Programme (cote YouTube, heure de Paris, public) le brouillon deja envoye dont le titre contient ``match``
+    (envoi rate d'une publication precedente). Meme resultat et memes arrets que ``publish``."""
+    settings = get_settings(config)
+    if not account:
+        raise YouTubeError("compte YouTube manquant : la publication n'a pas de compte")
+    if not " ".join(str(match).split()):
+        raise YouTubeError("brouillon à programmer : un fragment de titre est requis")
+    if str(settings["visibility"]) != "public":
+        raise YouTubeError("programmation d'un brouillon : seule la visibilité publique est gérée ([youtube] visibility)")
+    now = now or datetime.now(timezone.utc)
+    _check_schedule(schedule_at, settings, now)
+    browser.validate_account(account)
+    sel = selectors or load_selectors()
+    open_profile = opener or functools.partial(browser._open_context, config=config)
+    with open_profile(account, headless=False) as context:
+        page = browser.fresh_page(context)
+        flow = _Flow(page, account, sel, settings, now=now, sleep=sleep, rng=rng or random.Random(), on_tick=on_tick,
+                     config=config)
+        try:
+            return flow.run_draft(match, schedule_at)
+        except YouTubeStop:
+            raise
+        except Exception as exc:  # noqa: BLE001 - erreur Playwright : arret sur avec capture
+            raise flow.stop("unexpected_page", f"page inattendue : {type(exc).__name__} : {exc}") from exc
 
 
 def publish(
