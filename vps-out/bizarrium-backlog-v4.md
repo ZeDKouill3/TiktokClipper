@@ -1,12 +1,12 @@
-# Bizarrium — backlog v4 (PARTIEL : 28 sujets sur 40)
+# Bizarrium — backlog v4 (PARTIEL : 32 sujets sur 40)
 
 Date : 2026-10-27
 
-Sujets par famille : corps 3, animaux 6, espace 5, Terre 4, objets du quotidien 3, histoire des inventions 5 (total 28). Objectif 40 non atteint : quota WebSearch épuisé (passes 2 et 3), manque 12 sujets : corps 4, animaux 1, Terre 3, objets du quotidien 3, histoire des inventions 1.
+Sujets par famille : corps 3, animaux 7, espace 5, Terre 5, objets du quotidien 4, histoire des inventions 6 (total 32). Objectif 40 non atteint : quota WebSearch épuisé (passes 2 et 3), puis dernier lot (4 chercheurs, 8 recherches chacun) peu productif ; manque 8 sujets : corps 4, Terre 2, objets du quotidien 2.
 
 Règle des sources : 2 sources sérieuses, indépendantes et concordantes par chiffre ; Wikipédia exclue ; deux pages d'un même organisme = une source.
 
-URL vérifiées 200 le 2026-10-27 (56/56 ; 4 d'entre elles répondent 403/405 au HEAD mais 200 au GET).
+URL vérifiées 200 le 2026-10-27 (64/64 ; 4 d'entre elles répondent 403/405 au HEAD mais 200 au GET).
 
 ## corps
 
@@ -32,6 +32,7 @@ URL vérifiées 200 le 2026-10-27 (56/56 ; 4 d'entre elles répondent 403/405 au
 - universe-age | Le Big Bang remonte à 13,8 milliards d'années. | 13,8 milliards d'années | source 1 : https://www.esa.int/Science_Exploration/Space_Science/Planck/Planck_reveals_an_almost_perfect_Universe — « the age of the Universe is 13.82 billion years. » | source 2 : https://www.jpl.nasa.gov/news/planck-mission-brings-universe-into-sharp-focus/ — « 13.8 billion years old » | espace
 - neptune-year | Neptune met 165 ans pour faire un seul tour du Soleil. | 165 ans (164,79) | source 1 : https://science.nasa.gov/neptune/neptune-facts/ — « in about 165 Earth years (60,190 Earth days) » | source 2 : https://sci.esa.int/web/solar-system/-/35654-neptune — « Sidereal orbit period | y | 164.79 » | espace
 - hubble-galaxies | Une seule photo de Hubble montre près de 10 000 galaxies. | près de 10 000 galaxies | source 1 : https://science.nasa.gov/asset/hubble/hubble-ultra-deep-field-image-reveals-galaxies-galore/ — « This view of nearly 10,000 galaxies » | source 2 : https://sci.esa.int/web/hubble/-/34840-hubble-ultra-deep-field-heic0406 — « The HUDF field contains an estimated 10 000 galaxies. » | espace
+- electric-eel-860v | Une anguille électrique peut décharger jusqu'à 860 volts. | 860 volts | source 1 : https://agencia.fapesp.br/31386/ — « one of them produces an electric shock up to 860 volts. » | source 2 : https://www.snexplores.org/article/newly-discovered-eel-sets-jolting-record-animal-voltage — « Scientists measured a zap of 860 volts, making it the record holder among known » | animaux | fragile : étude unique de 2019, un spécimen d'Electrophorus voltai, Nature.com inaccessible (403) | à dire : « jusqu'à 860 volts, record connu chez un animal, mesuré sur une espèce décrite en 2019 »
 
 ## Terre
 
@@ -39,12 +40,14 @@ URL vérifiées 200 le 2026-10-27 (56/56 ; 4 d'entre elles répondent 403/405 au
 - ocean-heat-90 | Les océans ont absorbé environ 90 % de la chaleur en excès. | 90 % | source 1 : https://science.nasa.gov/earth/explore/earth-indicators/ocean-warming/ — « About 90% of the excess heat from planetary warming over the past century has been absorbed by the ocean » | source 2 : https://www.climate.gov/media/13603 — « More than 90 percent of the excess heat trapped in the Earth system » | Terre
 - vostok-cold | Le record mondial de froid : moins 89 degrés, en Antarctique. | -89,2 °C | source 1 : https://nora.nerc.ac.uk/id/eprint/9656/ — « −89.2°C made at Vostok station, Antarctica » | source 2 : https://www.futura-sciences.com/planete/actualites/meteorologie-jour-il-fait-89-c-terre-117742/ — « -89.2°C le 21/07/1983 » | Terre
 - lake-baikal-20 | Le lac Baïkal renferme environ un cinquième de l'eau douce mondiale. | 20 % | source 1 : https://www.nationalgeographic.com/travel/article/drive-across-the-deepest-lake-in-the-world — « a lake that holds 20 percent of the world’s (unfrozen) freshwater supply » | source 2 : https://pubs.usgs.gov/fs/baikal/ — « roughly 20 percent of the world's total surface fresh water » | Terre (fragile : qualificatifs différents, NatGeo « non gelée », USGS « de surface » ; formuler « environ 20 % de l'eau douce de surface liquide »)
+- challenger-deep | Le point le plus profond des océans frôle 11 kilomètres. | près de 11 km (10 935 m NOAA, 10 994 m NASA) | source 1 : https://oceanservice.noaa.gov/facts/oceandepth.html — « approximately 10,935 meters (35,876 feet) deep » | source 2 : https://science.nasa.gov/earth/earth-observatory/new-view-of-the-deepest-trench-77640 — « 10,994 meters deep (36,069 feet), plus or minus 40 meters » | Terre | fragile : les deux organismes divergent de 59 m (mesures différentes) | à dire : « près de 11 kilomètres de profondeur »
 
 ## objets du quotidien
 
 - paper-fold-12 | Une lycéenne a plié une feuille de papier douze fois. | 12 plis | source 1 : https://blog.doublehelix.csiro.au/fold-paper-in-half/ — « fold a sheet of paper in half 12 times. » | source 2 : https://www.sciencefocus.com/science/whats-the-maximum-number-of-times-that-you-can-fold-a-piece-of-paper — « fold a 1.2km-long piece of tissue paper 12 times. » | objets du quotidien
 - microwave-2450 | Votre micro-ondes agite l'eau 2,45 milliards de fois par seconde. | 2,45 GHz | source 1 : https://illumin.usc.edu/the-engineering-behind-the-microwave-oven/ — « Microwave ovens use 2.45 GHz microwaves » | source 2 : https://www.scientificamerican.com/article/microwaves-and-the-speed/ — « 2.45 gigahertz, usually » | objets du quotidien
 - cd-track-5km | Un CD cache une piste en spirale longue d'environ 5 kilomètres. | environ 5 km | source 1 : https://www.physics.hku.hk/~phys1055/lectures/chap03.html — « The length of CD track is about 5 km. » | source 2 : https://patents.google.com/patent/KR0141114B1/en — « the length of the entire track is approximately 5 km » | objets du quotidien (fragile : source 1 = cours universitaire, source 2 = brevet coréen en traduction automatique, pas d'organisme de référence)
+- pressure-cooker | Dans une cocotte-minute, l'eau bout à 121 degrés. | environ 121 °C | source 1 : https://hyperphysics.gsu.edu/hbase/thermo/precook.html — « That raises the boiling point to about 121°C or 257 °F. » | source 2 : https://modernistcuisine.com/mc/how-pressure-cookers-work/ — « water boils at 114 °C or 121 °C / 237 °F or 250 °F, respectively. » | objets du quotidien | fragile : source 2 = éditeur culinaire (Modernist Cuisine), pas un organisme scientifique ; HyperPhysics convertit 121 °C en 257 °F (incohérent, 250 °F attendu) ; valable pour 15 psi relatifs | à dire : « environ 121 °C à 15 psi au-dessus de la pression atmosphérique »
 
 ## histoire des inventions
 
@@ -53,4 +56,4 @@ URL vérifiées 200 le 2026-10-27 (56/56 ; 4 d'entre elles répondent 403/405 au
 - ferris-wheel-2160 | La grande roue de Chicago en 1893 emportait 2 160 personnes. | 2 160 passagers | source 1 : https://glessnerhouse.org/ferris-wheel — « for a total capacity of 2,160. » | source 2 : https://www.architecture.org/online-resources/stories-of-chicago/chicagos-ferris-wheel-story — « for a total capacity of 2,160 people. » | histoire des inventions
 - difference-engine-8000 | La machine de Babbage, reconstruite, compte 8 000 pièces. | 8 000 pièces | source 1 : https://my3.my.umbc.edu/groups/csee/media/1681 — « The Engine consists of 8,000 parts, weighs 5 tons » | source 2 : https://www.computerhistory.org/babbage/ — « consists of 8,000 parts, weighs five tons. » | histoire des inventions
 - hollerith-census | Les cartes perforées ont fait économiser 5 millions de dollars au recensement de 1890. | 5 millions de dollars | source 1 : https://www.ibm.com/history/punched-card-tabulator — « Hollerith’s tabulating system saved the Census Office USD 5 million and more than two years of labor. » | source 2 : https://www.uspto.gov/learning-and-resources/journeys-innovation/historical-stories/count-me — « $5 million below projected costs » | histoire des inventions (fragile : IBM est partie prenante ; USPTO dit « sous le coût prévu », pas « économisé »)
-
+- liquid-paper-sale | Une secrétaire invente le correcteur, Gillette le rachète 47,5 millions. | 47,5 millions de dollars (vente en 1979) | source 1 : https://lemelson.mit.edu/resources/bette-graham — « In 1979, she sold her company to the Gillette Corporation for $47.5 million. » | source 2 : https://www.inventionandtech.com/node/87083 — « In 1979 Bette sold Liquid Paper to the Gillette Corporation for $47.5 million. » | histoire des inventions | fragile : montant nominal 1979, non réévalué ; source 2 = magazine (American Heritage), pas un institut
