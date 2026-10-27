@@ -131,6 +131,41 @@ final_button = "#done-button"
 # precede celui de la dialog : le sélecteur est donc fixé sur l'id du lien de la dialog. vérifié 2026-10-27
 video_link = "a#video-link[href*='youtube.com/shorts/']"
 
+[stats]
+# Releve des statistiques par Short (SPEC-5e50 R6), lecture seule. Tout vérifié 2026-10-27 sur la chaîne 670ca85bf1f0
+# (Chrome piloté, YouTube Studio en français) : liste Contenus > Shorts, Données analytiques d'une vidéo, vue avancée.
+# Page Données analytiques d'une vidéo (SANS /channel/<UC...> : avec, Studio répond « Une erreur s'est produite »).
+overview_url = "https://studio.youtube.com/video/{id}/analytics/tab-overview/period-default"
+# Vue avancée de la vidéo, depuis la publication (time_period=lifetime) : colonnes Vues, J'aime, Commentaires ajoutés.
+# Les métriques sont dans l'adresse (rien n'est enregistré dans Studio). RATINGS_LIKES et COMMENTS sont acceptées ;
+# AVERAGE_WATCH_PERCENTAGE et SHARES font répondre « Une erreur s'est produite ».
+explore_url = "https://studio.youtube.com/video/{id}/analytics/tab-overview/period-default/explore?entity_type=VIDEO&entity_id={id}&time_period=lifetime&explore_type=TABLE_AND_CHART&metric=EXTERNAL_VIEWS&granularity=DAY&t_metrics=EXTERNAL_VIEWS&t_metrics=RATINGS_LIKES&t_metrics=COMMENTS&dimension=VIDEO&o_column=EXTERNAL_VIEWS&o_direction=ANALYTICS_ORDER_DIRECTION_DESC"
+# Lien de la vignette d'une ligne de la liste : href « /video/<id>/edit » (absent d'un brouillon en cours d'envoi).
+row_link = "a#thumbnail-anchor"
+row_link_pattern = '^/video/([\w-]+)/'
+# Pied de la liste : « Lignes par page : 30 / 1 à 20 sur 20 » (ytcp-table-footer).
+paginator = "ytcp-table-footer"
+paginator_pattern = '(\d+)\s*à\s*(\d+)\s*sur\s*(\d+)'
+# Onglet « Engagement » de la page Données analytiques (role=tab, id interest_viewers).
+tab_engagement = "[role='tab']#interest_viewers"
+# Fragment d'adresse de l'onglet Shorts de la liste Contenus.
+shorts_url_marker = "/videos/short"
+# Page d'erreur de Studio (une adresse refusée, un chargement qui échoue).
+error_text = "Une erreur s'est produite"
+# Aperçu : « Ce Short a enregistré 1 158 vues depuis sa publication » (valeur exacte ; le compteur affiche « 1,2 k »).
+views_pattern = 'enregistré\s+([\d\s  ]+?)\s+vues'
+subscribers = "Abonnés"
+# Engagement : libellé puis valeur sur la ligne suivante.
+engaged_views = "Vues engagées"
+watch_hours = "Durée de visionnage (heures)"
+avg_view = "Durée moyenne d'une vue"
+# « Engagement des spectateurs » : deux pourcentages puis « ont continué à regarder » / « ont balayé » (les vues vs balayées).
+stayed = "ont continué à regarder"
+swiped = "ont balayé"
+# Vue avancée : en-tête du tableau (après « Date de publication »), puis le titre de la vidéo, puis une valeur par colonne.
+explore_anchor = "Date de publication"
+explore_header = ["Vues", "J'aime", "Commentaires ajoutés"]
+
 [modal]
 # Fenetre surgissante (role ARIA dialog) et son bouton, vise par libelle ({label}, sans guillemet double).
 # NON VÉRIFIÉ

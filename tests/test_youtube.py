@@ -1660,3 +1660,346 @@ def test_a_verification_capture_follows_the_browser_state_dir_setting(tmp_path, 
                                   sleep=lambda s: None, rng=random.Random(1))
 
     assert result["capture"] and Path(result["capture"]).parent == state / "ma_chaine" / "captures"
+
+
+# ---------------------------------------------------------------- statistiques par Short (SPEC-5e50 R6, TASK-0a40)
+# Pages relevees le 2026-10-27 sur la chaine 670ca85bf1f0 (lecture seule, Chrome pilote) : liste Contenus > Shorts,
+# Donnees analytiques d'une video (Apercu, onglet Engagement) et vue avancee (J'aime, commentaires).
+
+NBSP = " "
+ASTRO, LIGHT, SATURN, SCHEDULED = "5QEIvGni498", "Mww_Jue5bfU", "fLLh4JQ2lM0", "Zn194Oq6ka0"
+THIRD = datetime(2026, 10, 3, 14, 0, tzinfo=timezone.utc)
+
+
+class FakeAttr(FakeElement):
+    def __init__(self, page, attrs):
+        super().__init__(page)
+        self.attrs = attrs
+
+    def get_attribute(self, name):
+        return self.attrs.get(name)
+
+
+def _list_row(page, vid, title, visibility, date, status, views, comments, *, description=True):
+    lines = ["0:38", title] + ([f"{title} #science #Shorts"] if description else []) + [
+        "—", visibility, date, status, views, comments]
+    row = FakeElement(page, text="\n".join(lines))
+    if vid:
+        row.children[_sel()["stats"]["row_link"]] = FakeAttr(page, {"href": f"/video/{vid}/edit"})
+    return row
+
+
+def _overview(views_sentence, subscribers):
+    return ("Statistiques de la vidéo\nMode avancé\nAperçu\nCouverture\nEngagement\nAudience\n26 oct. 2026 – aujourd'hui\n"
+            f"Depuis la publication\n{views_sentence}\nVues\nVues\n1,2 k\nTotal des vues depuis la mise en ligne.\n"
+            f"Abonnés\n{subscribers}\nÉvolution du nombre d'abonnés.\nRétention d'audience\nTemps réel")
+
+
+def _engagement(engaged, hours, average, stayed, swiped):
+    shares = (f"Engagement des spectateurs\nDepuis la publication\n{stayed}\n{swiped}\nont continué à regarder\nont balayé\n"
+              if stayed is not None else "Engagement des spectateurs\nDepuis la publication\nDonnées insuffisantes\n")
+    return ("Statistiques de la vidéo\nMode avancé\nAperçu\nCouverture\nEngagement\nAudience\nDepuis la publication\n"
+            f"Vues engagées\nVues engagées\n{engaged}\nNombre de fois que les spectateurs sont restés.\n"
+            f"Spectateurs uniques\n—\nEstimation.\nDurée de visionnage (heures)\n{hours}\nDurée totale.\n"
+            f"Durée moyenne d'une vue\n{average}\nDurée moyenne de visionnage.\nBoost\n{shares}Voir plus")
+
+
+def _explore(views, likes, comments):
+    return ("Statistiques de la vidéo\nMode avancé\nRapport\nDécomposition\nContenu\nMétriques\nVues, J'aime et Commentaires "
+            "ajoutés\nVues (Contenu)\nVues\nContenu\nDurée\nDate de publication\nVues\nJ'aime\nCommentaires ajoutés\n"
+            f"Dans l'espace, tu peux grandir jusqu'à cinq centimètres…\n{views}\n{likes}\n{comments}")
+
+
+class FakeStatsStudio:
+    """Studio simule : Contenus > Shorts liste ``rows`` ; la page d'une video rend le texte de ``details[id]``
+    ({"overview", "engagement", "explore"}) ; ``errors`` = ids dont une page affiche « Une erreur s'est produite »."""
+
+    def __init__(self, *, errors=(), captcha=False, total=None, no_engagement_tab=False):
+        self.sel = _sel()
+        self.rows, self.details, self.errors, self.captcha = [], {}, set(errors), captcha
+        self.total, self.no_engagement_tab = total, no_engagement_tab
+        self.url, self.view, self.video, self.tab = "about:blank", "dashboard", None, None
+        self.calls: list[tuple] = []
+
+    def goto(self, url, **kwargs):
+        self.calls.append(("goto", url))
+        head = self.sel["stats"]["overview_url"].split("{id}")[0]
+        if url.startswith(head):
+            kind = "explore" if "/explore" in url else "overview"
+            self.video, self.view, self.tab = url[len(head):].split("/")[0].split("?")[0], kind, kind
+            self.url = url
+            return
+        self.url = f"{STUDIO}/channel/{UC}/videos/short" if url.rstrip("/") == STUDIO else url
+        self.view = "dashboard"
+
+    def wait_for_timeout(self, ms):
+        self.calls.append(("poll", ms))
+
+    def screenshot(self, path=None, **kwargs):
+        Path(path).write_bytes(b"\x89PNG fake")
+
+    def inner_text(self, selector="body"):
+        assert selector == "body"
+        if self.video in self.errors and self.view in ("overview", "explore"):
+            return "Petit problème… Une erreur s'est produite."
+        return self.details[self.video][self.tab]
+
+    def _go(self, view):
+        self.view = view
+
+    def _tab(self, name):
+        self.tab = name
+
+    def query_selector_all(self, selector):
+        S, L, st = self.sel["selectors"], self.sel["labels"], self.sel["stats"]
+        if self.captcha and selector in self.sel["detect"]["captcha"]:
+            return [FakeElement(self, text="captcha")]
+        if selector == self.sel["modal"]["container"]:
+            return []
+        if selector == S["navigation"]:
+            return [FakeElement(self, text="Votre chaîne Ma Chaîne\nTableau de bord")]
+        if selector == S["exact_text"].format(label=L["content_nav"]):
+            return [FakeElement(self, text=L["content_nav"], on_click=lambda: self._go("content"))]
+        if selector == S["exact_text"].format(label=L["shorts_tab"]) and self.view == "content":
+            return [FakeElement(self, text=L["shorts_tab"], on_click=lambda: self._go("shorts"))]
+        if selector == S["video_row"] and self.view in ("content", "shorts"):
+            return list(self.rows)
+        if selector == st["paginator"] and self.view == "shorts":
+            total = len(self.rows) if self.total is None else self.total
+            return [FakeElement(self, text=f"Lignes par page :\n30\n1 à {len(self.rows)} sur {total}")]
+        if selector == st["tab_engagement"] and self.view == "overview" and not self.no_engagement_tab:
+            return [FakeElement(self, text="Engagement", on_click=lambda: self._tab("engagement"))]
+        return []
+
+    def query_selector(self, selector):
+        found = self.query_selector_all(selector)
+        return found[0] if found else None
+
+    def wait_for_selector(self, selector, timeout=None, state=None):
+        found = self.query_selector(selector)
+        if found is None:
+            raise FakeTimeoutError(f"Timeout {timeout} ms : {selector}")
+        return found
+
+
+def _shorts_page(**kwargs):
+    """Chaine du 27/10 : un Short programme, un brouillon sans lien, trois Shorts publies (lumiere, astronaute, saturne)."""
+    page = FakeStatsStudio(**kwargs)
+    page.rows = [
+        _list_row(page, SCHEDULED, "Le tout premier feu de circulation", "Programmée", "30 oct. 2026", "Programmée", "0", "0"),
+        _list_row(page, "", "test", "Brouillon", "—", "Modifier le brouillon", "—", "—"),
+        _list_row(page, LIGHT, "Ton corps émet de la lumière visible", "Publique", "26 oct. 2026", "Publiée", "318", "0"),
+        _list_row(page, ASTRO, "Dans l'espace, tu peux grandir", "Publique", "26 oct. 2026", "Publiée", f"1{NBSP}155", "1"),
+        _list_row(page, SATURN, "Saturne est moins dense que l'eau", "Publique", "26 oct. 2026", "Publiée", f"1{NBSP}130", "0",
+                  description=False),
+    ]
+    page.details = {
+        LIGHT: {"overview": _overview("Ce Short a enregistré 318 vues depuis sa publication", "—"),
+                "engagement": _engagement("127", "0,8", "0:21", "36,6 %", "63,4 %"), "explore": _explore("318", "7", "0")},
+        ASTRO: {"overview": _overview(f"Ce Short a enregistré 1{NBSP}158 vues depuis sa publication", "+3"),
+                "engagement": _engagement("692", "4,2", "0:21", "57,6 %", "42,4 %"), "explore": _explore("1 155", "26", "1")},
+        SATURN: {"overview": _overview("Ce Short a enregistré 1 130 vues depuis sa publication", "+1"),
+                 "engagement": _engagement("640", "3,9", "0:20", None, None), "explore": _explore("1 130", "—", "0")},
+    }
+    return page
+
+
+def fetch(tmp_path, monkeypatch, page, *, account="ma_chaine", now=NOW, **settings):
+    monkeypatch.chdir(tmp_path)
+    opened, sleeps = [], []
+
+    @contextmanager
+    def opener(acc, *, headless):
+        opened.append((acc, headless))
+        yield FakeContext(page)
+
+    config = Config(mode="review", workspace_dir=tmp_path / "w", output_dir=tmp_path / "o",
+                    _sections={"youtube": {"poll_interval_s": 1, "action_timeout_s": 2, **settings}})
+    fetch.config, fetch.opened, fetch.sleeps = config, opened, sleeps
+    return youtube.fetch_stats(account, config=config, now=now, opener=opener, sleep=sleeps.append, rng=random.Random(1))
+
+
+def posts_by_id(snapshot):
+    return {p["post_id"]: p for p in snapshot["posts"]}
+
+
+# -- lecture des valeurs affichees
+
+@pytest.mark.parametrize("text,expected", [("318", 318), (f"1{NBSP}155", 1155), ("1 155", 1155), ("1 155", 1155),
+                                           ("+3", 3), ("0", 0), ("—", None), ("", None), (None, None), ("1,2 k", None)])
+def test_a_displayed_count_is_read_exactly_and_an_absent_or_rounded_one_is_none(text, expected):
+    assert youtube.parse_count(text) == expected
+
+
+@pytest.mark.parametrize("text,expected", [("57,6 %", 0.576), ("36,6 %", 0.366), ("0 %", 0.0), ("—", None), ("abc", None)])
+def test_a_displayed_percentage_becomes_a_fraction(text, expected):
+    value = youtube.parse_percent(text)
+    assert value is None if expected is None else value == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("text,expected", [("0:21", 21.0), ("1:05", 65.0), ("—", None), ("1:02:03", 3723.0), ("x", None)])
+def test_a_displayed_duration_becomes_seconds(text, expected):
+    assert youtube.parse_duration(text) == expected
+
+
+def test_a_displayed_decimal_uses_the_french_comma():
+    assert youtube.parse_decimal("4,2") == 4.2
+    assert youtube.parse_decimal("—") is None
+
+
+# -- reglages et reperes
+
+def test_the_stats_settings_have_defaults_and_are_validated():
+    d = youtube.CONFIG_DEFAULTS
+    assert d["stats_dir"] == "state/stats/youtube"
+    assert d["stats_stale_min"] == 60 and d["stats_detail_max"] == 30
+    for key, value in (("stats_dir", ""), ("stats_stale_min", -1), ("stats_detail_max", True), ("stats_detail_max", -2)):
+        with pytest.raises(youtube.YouTubeError, match=key):
+            youtube.get_settings(Config(mode="review", workspace_dir=Path("w"), output_dir=Path("o"),
+                                        _sections={"youtube": {key: value}}))
+
+
+@pytest.mark.parametrize("key", ["row_link", "paginator", "tab_engagement", "overview_url", "explore_url"])
+def test_a_missing_stats_selector_is_an_explicit_error_naming_the_key(tmp_path, key):
+    text = SELECTORS.read_text(encoding="utf-8")
+    broken = tmp_path / "s.toml"
+    broken.write_text(re.sub(rf"^{key} = .*$", "", text, flags=re.M), encoding="utf-8")
+    with pytest.raises(youtube.YouTubeError, match=key):
+        youtube.load_selectors(broken)
+
+
+# -- releve
+
+def test_the_real_shorts_are_read_with_their_values_and_the_scheduled_one_has_none(tmp_path, monkeypatch):
+    posts = posts_by_id(fetch(tmp_path, monkeypatch, _shorts_page()))
+    assert set(posts) == {SCHEDULED, LIGHT, ASTRO, SATURN}          # le brouillon sans lien n'est pas un Short releve
+    astro = posts[ASTRO]
+    assert (astro["views"], astro["likes"], astro["comments"]) == (1158, 26, 1)    # la phrase de la page, pas « 1,2 k »
+    assert astro["post_url"] == "https://youtube.com/shorts/5QEIvGni498"
+    assert astro["visibility"] == "Publique" and astro["state"] == "published" and astro["posted_at"] == "2026-10-26"
+    assert astro["avg_view_s"] == 21.0 and astro["watched_share"] == pytest.approx(0.576)
+    assert astro["swiped_share"] == pytest.approx(0.424) and astro["engaged_views"] == 692
+    assert astro["watch_hours"] == 4.2 and astro["subscribers_gained"] == 3
+    light = posts[LIGHT]
+    assert (light["views"], light["likes"], light["comments"]) == (318, 7, 0) and light["subscribers_gained"] is None
+    assert light["watched_share"] == pytest.approx(0.366)
+    scheduled = posts[SCHEDULED]
+    assert scheduled["state"] == "scheduled" and scheduled["views"] is None and scheduled["likes"] is None
+    assert scheduled["posted_at"] == "2026-10-30"
+
+
+def test_a_value_the_page_does_not_give_is_none_never_zero(tmp_path, monkeypatch):
+    saturn = posts_by_id(fetch(tmp_path, monkeypatch, _shorts_page()))[SATURN]
+    assert saturn["likes"] is None and saturn["watched_share"] is None and saturn["swiped_share"] is None
+    assert saturn["comments"] == 0 and saturn["views"] == 1130                    # un vrai 0 reste 0
+
+
+def test_the_snapshot_is_appended_to_the_account_history_and_never_overwritten(tmp_path, monkeypatch):
+    first = fetch(tmp_path, monkeypatch, _shorts_page())
+    folder = tmp_path / "state" / "stats" / "youtube" / "ma_chaine"
+    assert len(list(folder.glob("*.json"))) == 1
+    assert first["account"] == "ma_chaine" and first["source"] == "youtube_studio" and first["origin"] == "full"
+    assert first["channel"] == UC and first["fetched_at"] == NOW.isoformat()
+    fetch(tmp_path, monkeypatch, _shorts_page(), now=NOW)                          # meme horodatage : un nouveau fichier
+    assert len(list(folder.glob("*.json"))) == 2
+    history = youtube.read_history("ma_chaine", config=fetch.config)
+    assert len(history) == 2 and history[0]["posts"] == first["posts"]
+
+
+def test_the_stats_dir_is_a_setting(tmp_path, monkeypatch):
+    fetch(tmp_path, monkeypatch, _shorts_page(), stats_dir="elsewhere/yt")
+    assert len(list((tmp_path / "elsewhere" / "yt" / "ma_chaine").glob("*.json"))) == 1
+
+
+def test_the_fetch_is_read_only_only_navigation_and_the_engagement_tab_are_clicked(tmp_path, monkeypatch):
+    page = _shorts_page()
+    fetch(tmp_path, monkeypatch, page)
+    assert {c[1] for c in page.calls if c[0] == "click"} == {"Contenus", "Shorts", "Engagement"}
+
+
+def test_the_detail_is_read_only_for_the_published_shorts_up_to_the_cap(tmp_path, monkeypatch):
+    page = _shorts_page()
+    posts = posts_by_id(fetch(tmp_path, monkeypatch, page, stats_detail_max=1))
+    assert posts[LIGHT]["detail_not_read"] is False and posts[LIGHT]["likes"] == 7        # le plus recent de la liste
+    assert posts[ASTRO]["detail_not_read"] is True and posts[ASTRO]["likes"] is None and posts[ASTRO]["views"] == 1155
+    assert not [c for c in page.calls if c[0] == "goto" and f"/video/{ASTRO}/" in c[1]]
+
+
+def test_the_fetch_pauses_like_a_human_and_opens_a_visible_profile(tmp_path, monkeypatch):
+    fetch(tmp_path, monkeypatch, _shorts_page())
+    assert fetch.opened == [("ma_chaine", False)]
+    assert fetch.sleeps and all(0.3 <= s <= 1 for s in fetch.sleeps)
+
+
+# -- arrets surs (R3)
+
+def _stats_stop(tmp_path, monkeypatch, page, **kwargs):
+    with pytest.raises(youtube.YouTubeStop) as caught:
+        fetch(tmp_path, monkeypatch, page, **kwargs)
+    return caught.value
+
+
+def test_an_error_page_is_a_stop_with_a_capture_and_is_recorded_in_the_history(tmp_path, monkeypatch):
+    stop = _stats_stop(tmp_path, monkeypatch, _shorts_page(errors={ASTRO}))
+    assert stop.code == "unexpected_page" and "erreur" in stop.reason and stop.capture and stop.capture.is_file()
+    assert youtube.read_history("ma_chaine", config=fetch.config) == []           # rien d'a moitie releve n'est garde
+    error = youtube.read_error("ma_chaine", config=fetch.config)
+    assert error["code"] == "unexpected_page" and "erreur" in error["reason"] and error["at"] == NOW.isoformat()
+
+
+def test_a_captcha_is_a_stop(tmp_path, monkeypatch):
+    assert _stats_stop(tmp_path, monkeypatch, _shorts_page(captcha=True)).code == "captcha"
+
+
+def test_an_expired_google_session_is_a_stop(tmp_path, monkeypatch):
+    page = _shorts_page()
+    page.goto = lambda url, **kw: setattr(page, "url", LOGIN_URL)
+    assert _stats_stop(tmp_path, monkeypatch, page).code in ("login", "unexpected_page")
+
+
+def test_a_list_shorter_than_its_total_is_a_stop_never_a_partial_list(tmp_path, monkeypatch):
+    stop = _stats_stop(tmp_path, monkeypatch, _shorts_page(total=45))
+    assert stop.code == "unexpected_page" and "45" in stop.reason
+
+
+def test_a_missing_engagement_tab_is_a_stop(tmp_path, monkeypatch):
+    assert _stats_stop(tmp_path, monkeypatch, _shorts_page(no_engagement_tab=True)).code == "element_missing"
+
+
+def test_an_invalid_account_id_is_refused_before_any_browser(tmp_path, monkeypatch):
+    with pytest.raises(browser.BrowserError):
+        fetch(tmp_path, monkeypatch, _shorts_page(), account="../x")
+    assert fetch.opened == []
+
+
+# -- relecture de l'historique
+
+def test_the_videos_merge_the_history_and_sort_and_filter(tmp_path, monkeypatch):
+    fetch(tmp_path, monkeypatch, _shorts_page())
+    config = fetch.config
+    assert [v["post_id"] for v in youtube.list_videos("ma_chaine", sort="views", config=config)][:3] == [ASTRO, SATURN, LIGHT]
+    assert [v["post_id"] for v in youtube.list_videos("ma_chaine", query="saturne", config=config)] == [SATURN]
+    assert youtube.list_videos("ma_chaine", config=config)[0]["post_id"] == SCHEDULED       # date decroissante
+    with pytest.raises(youtube.YouTubeError, match="tri"):
+        youtube.list_videos("ma_chaine", sort="nimporte", config=config)
+    assert youtube.list_videos("jamais_releve", config=config) == []
+
+
+def test_the_overview_adds_the_latest_values_and_keeps_missing_ones_missing(tmp_path, monkeypatch):
+    fetch(tmp_path, monkeypatch, _shorts_page())
+    tiles = youtube.account_overview("ma_chaine", config=fetch.config)["tiles"]
+    assert tiles["views"] == 318 + 1158 + 1130 and tiles["likes"] == 7 + 26 and tiles["comments"] == 1
+    assert tiles["shorts"] == 3
+    assert youtube.account_overview("jamais_releve", config=fetch.config)["tiles"]["views"] is None
+
+
+def test_the_stats_are_stale_after_the_delay_and_a_stop_counts_as_an_attempt(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert youtube.stats_stale("ma_chaine", config=make_config(tmp_path)) is True      # jamais releve
+    fetch(tmp_path, monkeypatch, _shorts_page())
+    assert youtube.stats_stale("ma_chaine", config=fetch.config, now=datetime(2026, 10, 3, 12, 30, tzinfo=timezone.utc)) is False
+    assert youtube.stats_stale("ma_chaine", config=fetch.config, now=datetime(2026, 10, 3, 13, 1, tzinfo=timezone.utc)) is True
+    never = Config(mode="review", workspace_dir=Path("w"), output_dir=Path("o"), _sections={"youtube": {"stats_stale_min": 0}})
+    assert youtube.stats_stale("ma_chaine", config=never, now=datetime(2026, 10, 9, tzinfo=timezone.utc)) is False
+    _stats_stop(tmp_path, monkeypatch, _shorts_page(errors={ASTRO}), now=THIRD)
+    assert youtube.stats_stale("ma_chaine", config=fetch.config, now=datetime(2026, 10, 3, 14, 30, tzinfo=timezone.utc)) is False

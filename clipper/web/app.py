@@ -1971,12 +1971,14 @@ def _measures(config: Config, since: str | None, until: str | None, channel: str
 # ----------------------------------------------------------------
 
 
-def _stats_account_info(config: Config, account_id: str) -> dict[str, Any]:
+def _stats_account_info(config: Config, account_id: str, service: str | None = None) -> dict[str, Any]:
     """Un compte de l'ecran Statistiques : son etat de releve ; ``HTTPException`` 404
-    si le compte n'existe pas dans l'ecran Comptes. Un compte non pret n'est pas releve (R4) : la raison est dite."""
+    si le compte n'existe pas dans l'ecran Comptes (ou, avec ``service``, n'est pas de ce service). Un compte non
+    pret n'est pas releve (R4) : la raison est dite."""
     found = next((a for a in _accounts_call(accounts_mod.list_accounts, config) if a["id"] == account_id), None)
-    if found is None:
-        raise HTTPException(status_code=404, detail=f"compte introuvable : {account_id!r}")
+    if found is None or (service is not None and (found.get("service") or "tiktok") != service):
+        raise HTTPException(status_code=404, detail=f"compte introuvable : {account_id!r}"
+                            + ("" if found is None else f" (ce n'est pas un compte {service})"))
     ready = _stats_relevable(found)
     reason = None if ready else ((accounts_mod.connection_blocked_reason(found) if found.get("paused_at") else None)
                                  or accounts_mod.ready_blocked_reason(found) or found.get("ready_note")
@@ -1991,6 +1993,16 @@ def _stats_relevable(found: dict[str, Any]) -> bool:
     if found.get("ready_to_publish"):
         return True
     return bool(found.get("paused_at")) and accounts_mod.connection_blocked_reason(found) is None
+
+
+def _stats_youtube_call(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Lecture de l'historique des releves YouTube : un parametre invalide ou un fichier illisible est une erreur nette."""
+    try:
+        return fn(*args, **kwargs)
+    except youtube_mod.YouTubeError as exc:
+        message = str(exc)
+        raise HTTPException(status_code=422 if ("invalide" in message or "inconnu" in message) else 500,
+                            detail=message) from exc
 
 
 def _stats_tiktok_call(fn: Any, *args: Any, **kwargs: Any) -> Any:
@@ -4008,6 +4020,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         chaine liee, si le compte est pret a etre releve, si son releve est perime et s'il est en cours (SPEC-47e2 R3, R4)."""
         accounts = []
         for found in _accounts_call(accounts_mod.list_accounts, config):
+            if found.get("service") == "youtube":  # les comptes YouTube ont leurs routes /api/stats/youtube
+                continue
             info = _stats_account_info(config, found["id"])
             history = _stats_tiktok_call(tiktok_mod.read_history, found["id"], config=config)
             full = [s for s in history if s.get("origin") == "full"]
@@ -4102,6 +4116,102 @@ def create_app(config: Config | None = None) -> FastAPI:
             finally:
                 stats_refreshes.release(account)
             done[account] = {"fetched_at": report["fetched_at"], "posts": len(report["posts"])}
+        return {"accounts": done}
+
+    # -- Statistiques YouTube par Short (SPEC-5e50 R6) : memes declencheurs que TikTok (SPEC-47e2)
+
+    def _stats_youtube_info(account_id: str) -> dict[str, Any]:
+        return _stats_account_info(config, account_id, "youtube")
+
+    @app.get("/api/stats/youtube")
+    async def stats_youtube_accounts() -> dict[str, Any]:
+        """Les comptes YouTube de l'ecran Statistiques : etat du releve (date, nombre de releves, dernier arret sur),
+        pret ou non (avec la raison), releve perime, releve en cours."""
+        accounts = []
+        for found in _accounts_call(accounts_mod.list_accounts, config):
+            if found.get("service") != "youtube":
+                continue
+            info = _stats_account_info(config, found["id"], "youtube")
+            history = _stats_youtube_call(youtube_mod.read_history, found["id"], config=config)
+            stale = info["ready"] and _stats_youtube_call(youtube_mod.stats_stale, found["id"], config=config)
+            accounts.append({**info, "fetched_at": history[-1]["fetched_at"] if history else None,
+                             "known_posts": len(history[-1]["posts"]) if history else 0, "snapshots": len(history),
+                             "error": _stats_youtube_call(youtube_mod.read_error, found["id"], config=config),
+                             "stale": bool(stale), "refreshing": stats_refreshes.running(found["id"]),
+                             "refresh_error": stats_refreshes.failure(found["id"])})
+        return {"accounts": accounts}
+
+    @app.get("/api/stats/youtube/{account_id}")
+    def stats_youtube_overview(account_id: str) -> dict[str, Any]:
+        """Tuiles d'un compte YouTube : totaux des dernieres valeurs relevees de ses Shorts publies."""
+        info = _stats_youtube_info(account_id)
+        return {**info, **_stats_youtube_call(youtube_mod.account_overview, account_id, config=config)}
+
+    @app.get("/api/stats/youtube/{account_id}/videos")
+    def stats_youtube_videos(account_id: str, sort: str = "posted_at", dir: str = "desc", q: str = "") -> dict[str, Any]:
+        """Les Shorts du dernier releve, triables (``sort``, ``dir`` asc|desc) et filtrables (``q``, dans le titre)."""
+        if dir not in ("asc", "desc"):
+            raise HTTPException(status_code=422, detail=f"sens de tri invalide : {dir!r} (attendu : asc | desc)")
+        info = _stats_youtube_info(account_id)
+        videos = _stats_youtube_call(youtube_mod.list_videos, account_id, sort=sort, descending=dir == "desc",
+                                     query=q, config=config)
+        return {**info, "videos": videos}
+
+    @app.post("/api/stats/youtube/open")
+    async def stats_youtube_open(request: Request) -> dict[str, Any]:
+        """Ouverture de l'ecran Statistiques pour ``{"account": id}`` : si le dernier essai de releve a plus de
+        ``[youtube] stats_stale_min`` minutes, lance un releve en tache de fond et rend tout de suite (``reason`` si le
+        compte n'est pas pret, ``running`` si un releve tourne deja)."""
+        account = _stats_body_account(await request.body(), required=True)
+        info = _stats_youtube_info(account)
+        if not info["ready"]:
+            return {"account": account, "started": False, "running": False, "stale": False, "reason": info["not_ready_reason"]}
+        stale = bool(_stats_youtube_call(youtube_mod.stats_stale, account, config=config))
+        running = stats_refreshes.running(account)
+        started = stale and not running and stats_refreshes.claim(account)
+        if started:
+            threading.Thread(target=_stats_youtube_background, args=(account,), name=f"stats-yt-{account}", daemon=True).start()
+        return {"account": account, "started": started, "running": started or running, "stale": stale, "reason": None}
+
+    def _stats_youtube_background(account: str) -> None:
+        failure = None
+        try:
+            youtube_mod.fetch_stats(account, config=config)
+        except Exception as exc:  # noqa: BLE001 - jamais perdu : journalise et affiche sur le compte
+            failure = str(exc) if isinstance(exc, (youtube_mod.YouTubeError, browser_mod.BrowserError)) else f"{type(exc).__name__} : {exc}"
+            logger.error("relevé des statistiques YouTube du compte %s impossible : %s", account, failure)
+        finally:
+            stats_refreshes.release(account, failure)
+
+    @app.post("/api/stats/youtube/refresh")
+    async def stats_youtube_refresh(request: Request) -> dict[str, Any]:
+        """Releve a la demande (« Relever maintenant ») : un compte (``{"account": id}``) ou, sans corps, tous les comptes
+        YouTube prets. Un compte non pret n'est pas releve (409 avec la raison) ; un releve deja en cours n'est pas
+        relance (``{"running": true}``). Ouvre le Chrome visible du profil ; un arret sur est une 409 avec sa raison."""
+        account = _stats_body_account(await request.body(), required=False)
+        known = {a["id"]: a for a in _accounts_call(accounts_mod.list_accounts, config) if a.get("service") == "youtube"}
+        if account is not None:
+            info = _stats_youtube_info(account)
+            if not info["ready"]:
+                raise HTTPException(status_code=409, detail=f"compte {info['label']} non prêt à publier, pas de relevé : "
+                                                            f"{info['not_ready_reason']}")
+        accounts = [account] if account is not None else [a for a, found in known.items() if _stats_relevable(found)]
+        if not accounts:
+            raise HTTPException(status_code=409, detail="aucun compte YouTube prêt à publier : rien à relever")
+        done: dict[str, Any] = {}
+        for wanted in accounts:
+            if not stats_refreshes.claim(wanted):
+                done[wanted] = {"running": True, "fetched_at": None, "posts": None}
+                continue
+            try:
+                report = await run_in_threadpool(youtube_mod.fetch_stats, wanted, config=config)
+            except (youtube_mod.YouTubeStop, browser_mod.BrowserError) as exc:
+                raise HTTPException(status_code=409, detail=f"relevé du compte {wanted} arrêté : {exc}") from exc
+            except youtube_mod.YouTubeError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            finally:
+                stats_refreshes.release(wanted)
+            done[wanted] = {"fetched_at": report["fetched_at"], "posts": len(report["posts"])}
         return {"accounts": done}
 
     # ----------------------------------------------------------------

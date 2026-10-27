@@ -12237,3 +12237,170 @@ def test_worker_drain_api_reports_the_publication_being_piloted(tmp_path, monkey
 
     assert body["draining"] is True and body["idle"] is False
     assert body["publishing"] == {"video_id": "aaaaaaaaaaa", "clip_id": "01", "account": "ab12cd"}
+
+
+# --------------------------------------------------------------------------
+# Statistiques YouTube par Short, a partir du releve de YouTube Studio (SPEC-5e50 R6)
+# --------------------------------------------------------------------------
+
+from clipper import youtube as youtube_stats_mod  # noqa: E402
+
+YT_ACCOUNT, YT_OTHER = "yt12cd", "yt34ab"
+
+
+def _yt_accounts(tmp_path, *, ready=(YT_ACCOUNT,)):
+    """Deux comptes YouTube et un compte TikTok (ecran Comptes) ; ``ready`` : ceux « prets a publier »."""
+    rows = [{"id": YT_ACCOUNT, "label": "Chaîne exemple", "service": "youtube"},
+            {"id": YT_OTHER, "label": "Autre chaîne", "service": "youtube"},
+            {"id": TT_ACCOUNT, "label": "Compte TikTok", "platform": "TikTok"}]
+    for row in rows:
+        on = row["id"] in ready or row["id"] == TT_ACCOUNT
+        row["ready_to_publish"] = on
+        row["login"] = {"state": "connected" if on else "expired", "checked_at": "2026-10-01T10:00:00+00:00",
+                        "expires_at": None}
+    (tmp_path / "state").mkdir(exist_ok=True)
+    (tmp_path / "state" / "accounts.json").write_text(json.dumps({"accounts": rows}), encoding="utf-8")
+
+
+def _yt_post(post_id, title, **fields):
+    return {"post_id": post_id, "post_url": f"https://youtube.com/shorts/{post_id}", "title": title, "description": "",
+            "visibility": "Publique", "posted_at_text": "26 oct. 2026", "posted_at": "2026-10-26", "state": "published",
+            "status": "Publiée", "views": 1158, "likes": 26, "comments": 1, "avg_view_s": 21.0, "watched_share": 0.576,
+            "swiped_share": 0.424, "engaged_views": 692, "watch_hours": 4.2, "subscribers_gained": 3,
+            "detail_not_read": False, **fields}
+
+
+def _yt_snapshot(tmp_path, day, posts, *, account=YT_ACCOUNT, hour=12):
+    stamp = f"2026-10-{day:02d}T{hour:02d}:00:00+00:00"
+    _write_json(tmp_path / "state" / "stats" / "youtube" / account / f"202610{day:02d}T{hour:02d}0000000000Z.json",
+                {"account": account, "fetched_at": stamp, "source": "youtube_studio", "origin": "full",
+                 "channel": "UCabc", "posts": list(posts)})
+
+
+def _yt_get(tmp_path, path, **params):
+    return client(tmp_path).get(f"/api/stats/youtube{path}", params=params)
+
+
+def test_the_youtube_stats_accounts_are_only_the_youtube_accounts_with_their_last_fetch(tmp_path, isolated_cwd):
+    _yt_accounts(tmp_path)
+    _yt_snapshot(tmp_path, 2, [_yt_post("aaa", "Un")])
+    accounts = {a["account"]: a for a in _yt_get(tmp_path, "").json()["accounts"]}
+    assert set(accounts) == {YT_ACCOUNT, YT_OTHER}                       # le compte TikTok n'est pas propose ici
+    ready, other = accounts[YT_ACCOUNT], accounts[YT_OTHER]
+    assert ready["ready"] is True and ready["label"] == "Chaîne exemple" and ready["fetched_at"] == "2026-10-02T12:00:00+00:00"
+    assert ready["snapshots"] == 1 and ready["known_posts"] == 1 and ready["error"] is None and ready["refreshing"] is False
+    assert other["ready"] is False and "expirée" in other["not_ready_reason"] and other["snapshots"] == 0
+
+
+def test_the_tiktok_stats_accounts_no_longer_list_youtube_accounts(tmp_path, isolated_cwd):
+    _yt_accounts(tmp_path)
+    ids = {a["account"] for a in _tt_get(tmp_path, "").json()["accounts"]}
+    assert ids == {TT_ACCOUNT}
+
+
+def test_the_youtube_stats_accounts_carry_the_last_safe_stop(tmp_path, isolated_cwd):
+    _yt_accounts(tmp_path)
+    error = {"at": "2026-10-02T08:00:00+00:00", "code": "captcha", "reason": "captcha détecté", "capture": None}
+    _write_json(tmp_path / "state" / "stats" / "youtube" / YT_ACCOUNT / "20261002T080000000000Z.error.json", error)
+    account = next(a for a in _yt_get(tmp_path, "").json()["accounts"] if a["account"] == YT_ACCOUNT)
+    assert account["error"] == error
+
+
+def test_the_youtube_videos_are_the_latest_shorts_sortable_and_filterable(tmp_path, isolated_cwd):
+    _yt_accounts(tmp_path)
+    _yt_snapshot(tmp_path, 2, [_yt_post("aaa", "Saturne flotte", views=1130), _yt_post("bbb", "Lumière", views=318),
+                               _yt_post("ccc", "Programmé", state="scheduled", views=None, posted_at="2026-10-30")])
+    videos = _yt_get(tmp_path, f"/{YT_ACCOUNT}/videos", sort="views", dir="desc").json()["videos"]
+    assert [v["post_id"] for v in videos] == ["aaa", "bbb", "ccc"]       # la valeur absente est la derniere, jamais 0
+    assert videos[2]["views"] is None and videos[0]["likes"] == 26
+    assert [v["post_id"] for v in _yt_get(tmp_path, f"/{YT_ACCOUNT}/videos", q="lumi").json()["videos"]] == ["bbb"]
+    body = _yt_get(tmp_path, f"/{YT_ACCOUNT}/videos").json()
+    assert body["account"] == YT_ACCOUNT and body["label"] == "Chaîne exemple"
+    assert _yt_get(tmp_path, f"/{YT_ACCOUNT}/videos", sort="nimporte").status_code == 422
+    assert _yt_get(tmp_path, f"/{YT_ACCOUNT}/videos", dir="sideways").status_code == 422
+
+
+def test_the_youtube_routes_refuse_an_unknown_or_non_youtube_account(tmp_path, isolated_cwd):
+    _yt_accounts(tmp_path)
+    assert _yt_get(tmp_path, "/inconnu/videos").status_code == 404
+    assert _yt_get(tmp_path, f"/{TT_ACCOUNT}/videos").status_code == 404
+    assert _yt_get(tmp_path, f"/{TT_ACCOUNT}").status_code == 404
+
+
+def test_the_youtube_overview_gives_the_tiles_and_leaves_missing_values_null(tmp_path, isolated_cwd):
+    _yt_accounts(tmp_path)
+    _yt_snapshot(tmp_path, 2, [_yt_post("aaa", "Un"), _yt_post("bbb", "Deux", likes=None, views=100)])
+    body = _yt_get(tmp_path, f"/{YT_ACCOUNT}").json()
+    assert body["tiles"]["views"] == 1258 and body["tiles"]["likes"] == 26 and body["tiles"]["shorts"] == 2
+    empty = _yt_get(tmp_path, f"/{YT_OTHER}").json()
+    assert empty["tiles"]["views"] is None and empty["ready"] is False
+
+
+class FakeYtFetch:
+    def __init__(self, error=None):
+        self.calls, self.error = [], error
+
+    def __call__(self, account, *, config=None, **kwargs):
+        self.calls.append(account)
+        if self.error is not None:
+            raise self.error
+        return {"account": account, "fetched_at": "2026-10-27T08:00:00+00:00", "posts": [{}, {}, {}]}
+
+
+def test_the_youtube_refresh_fetches_the_given_ready_account(tmp_path, isolated_cwd, monkeypatch):
+    _yt_accounts(tmp_path)
+    fetch = FakeYtFetch()
+    monkeypatch.setattr(youtube_stats_mod, "fetch_stats", fetch)
+    resp = client(tmp_path).post("/api/stats/youtube/refresh", json={"account": YT_ACCOUNT})
+    assert resp.status_code == 200, resp.text
+    assert fetch.calls == [YT_ACCOUNT]
+    assert resp.json() == {"accounts": {YT_ACCOUNT: {"fetched_at": "2026-10-27T08:00:00+00:00", "posts": 3}}}
+
+
+def test_the_youtube_refresh_without_body_fetches_every_ready_youtube_account_only(tmp_path, isolated_cwd, monkeypatch):
+    _yt_accounts(tmp_path, ready=(YT_ACCOUNT, YT_OTHER))
+    fetch = FakeYtFetch()
+    monkeypatch.setattr(youtube_stats_mod, "fetch_stats", fetch)
+    assert client(tmp_path).post("/api/stats/youtube/refresh").status_code == 200
+    assert sorted(fetch.calls) == sorted([YT_ACCOUNT, YT_OTHER])
+
+
+def test_the_youtube_refresh_refuses_a_not_ready_account_with_the_reason(tmp_path, isolated_cwd, monkeypatch):
+    _yt_accounts(tmp_path)
+    fetch = FakeYtFetch()
+    monkeypatch.setattr(youtube_stats_mod, "fetch_stats", fetch)
+    resp = client(tmp_path).post("/api/stats/youtube/refresh", json={"account": YT_OTHER})
+    assert resp.status_code == 409 and "expirée" in resp.json()["detail"] and fetch.calls == []
+    assert client(tmp_path).post("/api/stats/youtube/refresh", json={"account": TT_ACCOUNT}).status_code == 404
+    assert client(tmp_path).post("/api/stats/youtube/refresh", json={"account": "../x"}).status_code == 422
+    assert client(tmp_path).post("/api/stats/youtube/refresh", json={"autre": 1}).status_code == 422
+
+
+def test_a_safe_stop_during_the_youtube_refresh_is_a_409_with_its_reason(tmp_path, isolated_cwd, monkeypatch):
+    _yt_accounts(tmp_path)
+    monkeypatch.setattr(youtube_stats_mod, "fetch_stats",
+                        FakeYtFetch(error=youtube_stats_mod.YouTubeStop("captcha", "captcha détecté", None)))
+    resp = client(tmp_path).post("/api/stats/youtube/refresh", json={"account": YT_ACCOUNT})
+    assert resp.status_code == 409 and "captcha détecté" in resp.json()["detail"]
+
+
+def test_the_youtube_open_starts_one_background_fetch_when_stale_and_says_why_when_not_ready(tmp_path, isolated_cwd, monkeypatch):
+    _yt_accounts(tmp_path)
+    done = threading.Event()
+    fetch = FakeYtFetch()
+    monkeypatch.setattr(youtube_stats_mod, "fetch_stats", lambda account, **kw: (fetch(account), done.set())[0])
+    web = _tt_client(tmp_path)
+    resp = web.post("/api/stats/youtube/open", json={"account": YT_ACCOUNT})
+    assert resp.status_code == 200 and resp.json()["started"] is True and resp.json()["stale"] is True
+    assert done.wait(5) and fetch.calls == [YT_ACCOUNT]
+    not_ready = web.post("/api/stats/youtube/open", json={"account": YT_OTHER}).json()
+    assert not_ready["started"] is False and "expirée" in not_ready["reason"]
+    assert web.post("/api/stats/youtube/open", json={"autre": 1}).status_code == 422
+
+
+def test_the_stats_screen_offers_the_accounts_of_both_services():
+    static = Path(__file__).resolve().parent.parent / "clipper" / "web" / "static" / "screens" / "stats.js"
+    js = static.read_text(encoding="utf-8")
+    for needle in ("/api/stats/youtube", "/api/stats/youtube/open", "/api/stats/youtube/refresh", "service",
+                   "J'aime", "avg_view_s", "watched_share", "swiped_share", "Relever maintenant"):
+        assert needle in js, needle

@@ -1,5 +1,6 @@
-/* Ecran « Statistiques » (SPEC-47e2) : un tableau de bord TikTok par compte, alimente UNIQUEMENT par le releve de
-   TikTok Studio, releve seulement quand on s'en sert. Lit GET /api/stats/tiktok (comptes, avec `refreshing`),
+/* Ecran « Statistiques » (SPEC-47e2) : un tableau de bord par compte, alimente UNIQUEMENT par le releve de
+   TikTok Studio (ou, pour un compte YouTube, de YouTube Studio : GET /api/stats/youtube, /api/stats/youtube/<compte>,
+   /api/stats/youtube/<compte>/videos, POST /api/stats/youtube/open et /refresh, SPEC-5e50 R6), releve seulement quand on s'en sert. Lit GET /api/stats/tiktok (comptes, avec `refreshing`),
    /api/stats/tiktok/<compte>?period= (vue d'ensemble), /api/stats/tiktok/<compte>/videos (liste triable) et
    /api/stats/tiktok/<compte>/videos/<id> (fiche). A l'ouverture, POST /api/stats/tiktok/open lance un releve en tache
    de fond si le dernier est perime (le dernier releve connu reste affiche, « Relevé en cours » jusqu'a la fin) ; le
@@ -29,6 +30,19 @@ const STATS_COLUMNS = [
 const STATS_VISIBILITY = { public: "Public", friends: "Amis", private: "Privé" };
 const STATS_VIDEO_TABS = [["overview", "Vue d'ensemble"], ["viewers", "Spectateurs"], ["engagement", "Engagement"]];
 const STATS_VIEWER_SECTIONS = [["types", "Types de spectateurs"], ["age", "Âge"], ["gender", "Sexe"], ["locations", "Lieux"]];
+
+/* Colonnes de la liste des Shorts d'un compte YouTube : cle -> [libelle, numerique] (cle de ?sort=, clipper.youtube.VIDEO_SORTS). */
+const STATS_YT_COLUMNS = [
+  ["title", "Short", false], ["posted_at", "Date", false], ["views", "Vues", true], ["likes", "J'aime", true],
+  ["comments", "Commentaires", true], ["avg_view_s", "Durée moy. d'une vue", true], ["watched_share", "Restés à regarder", true],
+  ["swiped_share", "Balayés", true], ["subscribers_gained", "Abonnés gagnés", true],
+];
+const STATS_YT_TILES = [
+  ["views", "Vues"], ["likes", "J'aime"], ["comments", "Commentaires"], ["engaged_views", "Vues engagées"],
+  ["watch_hours", "Heures regardées"], ["subscribers_gained", "Abonnés gagnés"], ["shorts", "Shorts publiés"],
+];
+const STATS_SERVICES = { tiktok: "TikTok", youtube: "YouTube" };
+const statsIsYoutube = (account) => Boolean(account && account.service === "youtube");
 
 const statsUi = {
   accounts: null, overview: null, videos: null, videosAccount: "", video: null, videoAccount: "", error: null, loading: null, dirty: false, at: 0, key: "",
@@ -115,7 +129,7 @@ function statsRemember() {
 async function statsPickDefault() {
   const accounts = statsUi.accounts || [];
   if (statsRoute().account || accounts.some((a) => a.account === statsLastConsulted())) return;
-  for (const a of accounts) {
+  for (const a of accounts.filter((x) => !statsIsYoutube(x))) {
     const overview = await api(`/api/stats/tiktok/${encodeURIComponent(a.account)}?period=${statsUi.period}`);
     if (overview.tiles && overview.tiles.views && overview.tiles.views.value > 0) { statsUi.defaultAccount = a.account; return; }
   }
@@ -135,7 +149,11 @@ function statsLoad() {
   if (statsUi.loading) { statsUi.dirty = true; return statsUi.loading; }
   statsUi.loading = (async () => {
     try {
-      statsUi.accounts = (await api("/api/stats/tiktok")).accounts;
+      statsUi.accounts = (await api("/api/stats/tiktok")).accounts.map((a) => ({ ...a, service: "tiktok" }));
+      try { // une panne de la liste YouTube ne masque pas TikTok, mais elle est dite a l'ecran (jamais silencieuse)
+        statsUi.accounts.push(...(await api("/api/stats/youtube")).accounts.map((a) => ({ ...a, service: "youtube" })));
+        statsUi.youtubeError = null;
+      } catch (err) { statsUi.youtubeError = err; }
       statsRemember();
       if (statsUi.defaultAccount === undefined) await statsPickDefault();
       try { statsUi.learning = await api("/api/learning"); statsUi.learningError = null; } catch (err) { statsUi.learningError = err; }
@@ -143,9 +161,15 @@ function statsLoad() {
       const account = statsAccount();
       if (account) {
         const r = statsRoute();
-        const base = `/api/stats/tiktok/${encodeURIComponent(account.account)}`;
+        const youtube = statsIsYoutube(account);
+        const base = `${youtube ? "/api/stats/youtube" : "/api/stats/tiktok"}/${encodeURIComponent(account.account)}`;
         if (r.tab === "overview") {
-          statsUi.overview = await api(`${base}?period=${statsUi.period}`);
+          statsUi.overview = await api(youtube ? base : `${base}?period=${statsUi.period}`);
+        } else if (youtube) {
+          const sort = STATS_YT_COLUMNS.some(([key]) => key === statsUi.sort.key) ? statsUi.sort : { key: "posted_at", dir: "desc" };
+          const params = new URLSearchParams({ sort: sort.key, dir: sort.dir, q: statsUi.q });
+          statsUi.videos = (await api(`${base}/videos?${params}`)).videos;
+          statsUi.videosAccount = account.account;
         } else if (r.post) {
           statsUi.video = (await api(`${base}/videos/${encodeURIComponent(r.post)}`)).video;
           statsUi.videoAccount = account.account;
@@ -185,10 +209,10 @@ async function statsOpen(account) {
   if (statsUi.opened[account.account] || !account.ready) return;
   statsUi.opened[account.account] = Date.now();
   try {
-    const sent = await api("/api/stats/tiktok/open", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ account: account.account }) });
+    const sent = await api(statsIsYoutube(account) ? "/api/stats/youtube/open" : "/api/stats/tiktok/open", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ account: account.account }) });
     if (!sent.started) return;
   } catch (err) {
-    toastError("Relevé TikTok impossible", err);
+    toastError(`Relevé ${STATS_SERVICES[account.service] || "TikTok"} impossible`, err);
     return;
   }
   statsUi.at = 0;
@@ -210,7 +234,7 @@ function statsNotifyDone() {
     const was = statsUi.wasRefreshing[a.account];
     statsUi.wasRefreshing[a.account] = Boolean(a.refreshing);
     if (!was || a.refreshing) continue;
-    if (a.refresh_error) toast({ kind: "bad", title: "Relevé TikTok impossible", body: `${a.label} : ${a.refresh_error}`, ms: 7000 });
+    if (a.refresh_error) toast({ kind: "bad", title: `Relevé ${STATS_SERVICES[a.service] || "TikTok"} impossible`, body: `${a.label} : ${a.refresh_error}`, ms: 7000 });
     else toast({ kind: "ok", title: "Relevé terminé", body: `${a.label} : statistiques à jour.` });
   }
 }
@@ -300,7 +324,8 @@ function statsFullConfirmBody(account) {
 
 function statsControls(account) {
   const accounts = statsUi.accounts;
-  const options = accounts.map((a) => `<option value="${esc(a.account)}"${a.account === account.account ? " selected" : ""}>${esc(a.label)} · ${esc(a.account)}</option>`).join("");
+  const options = accounts.map((a) => `<option value="${esc(a.account)}"${a.account === account.account ? " selected" : ""}>${esc(STATS_SERVICES[a.service] || "TikTok")} · ${esc(a.label)} · ${esc(a.account)}</option>`).join("");
+  const youtube = statsIsYoutube(account);
   const periods = `${STATS_PERIODS.map((n) => `<button type="button" data-stats-period="${n}" class="${n === statsUi.period ? "on" : ""}" aria-pressed="${n === statsUi.period}">${n} jours</button>`).join("")}`;
   const when = account.fetched_at
     ? `Dernier relevé : <b>${esc(statsWhen(account.fetched_at))}</b><br><span class="muted">${esc(fr(account.snapshots))} relevé${account.snapshots > 1 ? "s" : ""} enregistré${account.snapshots > 1 ? "s" : ""}</span>`
@@ -309,9 +334,9 @@ function statsControls(account) {
   const running = statsRefreshing(account) ? `<div class="alert" role="status" data-stats-running>${icon("refresh-cw", "spin")}<h2>Relevé en cours.</h2><section>${account.fetched_at ? "Les chiffres affichés sont ceux du dernier relevé ; ils se mettent à jour à la fin." : "Aucun relevé enregistré pour l'instant ; les chiffres apparaissent à la fin."}</section></div>` : "";
   const failed = account.error ? `<div class="alert" data-variant="destructive" role="alert" data-stats-error>${icon("circle-alert")}<h2>Dernier relevé arrêté (${esc(account.error.code)}).</h2><section>${esc(account.error.reason)}</section></div>` : "";
   return `<section class="ctl" aria-label="Compte et période">
-      <div class="acct field"><label for="stats-account">Compte TikTok</label><select class="input" id="stats-account" data-stats-account>${options}</select></div>
-      <div class="field"><span class="field-label" id="stats-lbl-period">Période</span><div class="seg" data-stats-periods role="group" aria-labelledby="stats-lbl-period">${periods}</div></div>
-      <div class="scan"><div class="scan-when">${when}</div>${statsScanButton(account)}${statsFullButton(account)}</div>
+      <div class="acct field"><label for="stats-account">Compte TikTok ou YouTube</label><select class="input" id="stats-account" data-stats-account>${options}</select></div>
+      ${youtube ? "" : `<div class="field"><span class="field-label" id="stats-lbl-period">Période</span><div class="seg" data-stats-periods role="group" aria-labelledby="stats-lbl-period">${periods}</div></div>`}
+      <div class="scan"><div class="scan-when">${when}</div>${statsScanButton(account)}${youtube ? "" : statsFullButton(account)}</div>
     </section>${notReady}${running}${failed}`;
 }
 
@@ -350,6 +375,45 @@ function statsOverview(account) {
       <div class="legend"><span><i></i>${period} derniers jours</span><span><i class="prev"></i>${period} jours précédents</span><span><i class="gap"></i>Jour sans relevé</span></div>
       <div class="pager-note"><span class="note">${icon("info", "i-sm")}<span>Les tuiles viennent du dernier relevé de la page Données analytiques. Un point de la courbe est la valeur de la tuile ${period} jours au dernier relevé du jour : un jour sans relevé reste vide au lieu d'être inventé.</span></span></div>
     </div>`;
+}
+
+/* ---------- compte YouTube : tuiles et liste des Shorts relevés dans YouTube Studio ---------- */
+
+const statsYtValue = (n) => (n === null || n === undefined ? "non fourni par YouTube Studio" : fr(n));
+const statsYtCell = (key, v) => {
+  const value = v[key];
+  if (key === "title") return null;
+  if (key === "posted_at") return statsPostedAt(value, v.posted_at_text);
+  if (key === "avg_view_s") return statsDuration(value);
+  if (key === "watched_share" || key === "swiped_share") return statsPctValue(value, 1);
+  return statsNum(value);
+};
+
+function statsYoutubeOverview(account) {
+  const data = statsUi.overview;
+  if (!data || data.account !== account.account) return `<div class="skeleton sk-card"></div>`;
+  if (!data.fetched_at) return statsEmpty("inbox", `Aucun relevé pour ${account.label}`, "Clipper n'a encore rien relevé sur YouTube Studio pour ce compte. Le premier relevé remplit les tuiles et la liste des Shorts.");
+  const tiles = STATS_YT_TILES.map(([id, label]) => `<div class="kpi"><div class="kpi-label">${esc(label)}</div><div class="kpi-value${data.tiles[id] === null || data.tiles[id] === undefined ? " none" : ""}">${esc(statsYtValue(data.tiles[id]))}</div></div>`).join("");
+  return `<div class="kpis" data-stats-tiles>${tiles}</div>
+    <div class="card s3-card"><div class="pager-note"><span class="note">${icon("info", "i-sm")}<span>Totaux des dernières valeurs relevées dans YouTube Studio pour les Shorts publiés. « Restés à regarder » et « Balayés » sont la part des vues qui ont continué ou balayé (vues vs balayées) ; une valeur que Studio n'affiche pas reste vide, jamais 0.</span></span></div></div>`;
+}
+
+function statsYoutubeVideos(account) {
+  const videos = statsUi.videos;
+  if (!videos || statsUi.videosAccount !== account.account) return `<div class="skeleton sk-card"></div>`;
+  if (!account.fetched_at) return statsEmpty("inbox", `Aucun Short relevé pour ${account.label}`, "Les Shorts apparaissent après le premier relevé de Contenus > Shorts dans YouTube Studio.");
+  const sort = STATS_YT_COLUMNS.some(([key]) => key === statsUi.sort.key) ? statsUi.sort : { key: "posted_at", dir: "desc" };
+  const head = STATS_YT_COLUMNS.map(([key, label, right]) =>
+    `<th class="${right ? "r" : ""}" ${sort.key === key ? `aria-sort="${sort.dir === "asc" ? "ascending" : "descending"}"` : ""}><button type="button" data-stats-sort="${key}">${esc(label)}<span class="arr" aria-hidden="true">${sort.key === key ? (sort.dir === "asc" ? "▲" : "▼") : ""}</span></button></th>`).join("");
+  const rows = videos.map((v) => `<tr data-stats-yt="${esc(v.post_id)}">
+    <td class="c-cap"><div class="cap"><a href="${esc(v.post_url)}" target="_blank" rel="noopener">${esc(v.title || "(sans titre)")}</a></div><div class="vis"><span class="chip plain ${v.state === "published" ? "ok" : ""}">${esc(v.status || v.visibility || "—")}</span>${v.detail_not_read ? `<span class="chip plain" title="Le détail n'a pas été relu à ce relevé (plafond stats_detail_max)">détail non relu</span>` : ""}</div></td>
+    ${STATS_YT_COLUMNS.slice(1).map(([key, label]) => { const cell = statsYtCell(key, v); return `<td class="${key === "posted_at" ? "c-date" : "r"} ${cell === "—" ? "dim" : ""}" data-l="${esc(label)}">${esc(cell)}</td>`; }).join("")}</tr>`).join("")
+    || `<tr><td colspan="${STATS_YT_COLUMNS.length}" class="muted" style="text-align:center;padding:32px">Aucun Short ne contient « ${esc(statsUi.q)} ».</td></tr>`;
+  return `<div class="card s3-card" data-stats-videos>
+    <div class="s3-head"><h2>Shorts de ${esc(account.label)}</h2><div class="s3-right"><span class="input-ico">${icon("search")}<input class="input" id="stats-q" data-stats-q type="search" placeholder="Filtrer par titre" value="${esc(statsUi.q)}" aria-label="Filtrer par titre" style="width:220px"></span></div></div>
+    <div class="sort-m"><select class="input" data-stats-sort-select aria-label="Trier par">${STATS_YT_COLUMNS.map(([key, label]) => `<option value="${key}"${sort.key === key ? " selected" : ""}>Trier : ${esc(label)}</option>`).join("")}</select><button class="btn" data-variant="outline" type="button" data-stats-sort-dir aria-label="Inverser le tri">${sort.dir === "asc" ? "▲" : "▼"}</button></div>
+    <div class="s3-scroll"><table class="table s3-table ptable"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="pager-note">${icon("info", "i-sm")}<span>${esc(fr(videos.length))} Short${videos.length > 1 ? "s" : ""} relevé${videos.length > 1 ? "s" : ""} dans YouTube Studio (Contenus &gt; Shorts). Un Short programmé n'a pas encore de chiffres.</span></div></div>`;
 }
 
 /* Restriction « Pour toi » (bandeau de TikTok Studio, relevé par vidéo) : false = restreinte, true = éligible,
@@ -657,12 +721,12 @@ async function statsScan(account, full) {
   statsUi.refreshing = true;
   renderCurrent();
   try {
-    const sent = await api("/api/stats/tiktok/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(full ? { account: account.account, full: true } : { account: account.account }) });
+    const sent = await api(statsIsYoutube(account) ? "/api/stats/youtube/refresh" : "/api/stats/tiktok/refresh", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(full ? { account: account.account, full: true } : { account: account.account }) });
     const posts = Object.values(sent.accounts).reduce((t, a) => t + (a.posts || 0), 0);
     if (Object.values(sent.accounts).some((a) => a.running)) toast({ kind: "info", title: "Relevé déjà en cours", body: `${account.label} : un relevé tourne déjà, rien n'est relancé.` });
     else toast({ kind: "ok", title: "Relevé terminé", body: `${account.label} : ${posts} publication${posts > 1 ? "s" : ""} relevée${posts > 1 ? "s" : ""}.` });
   } catch (err) {
-    toastError("Relevé TikTok impossible", err);
+    toastError(`Relevé ${STATS_SERVICES[account.service] || "TikTok"} impossible`, err);
   } finally {
     statsUi.refreshing = false;
     statsUi.at = 0;
@@ -681,12 +745,12 @@ function statsWire(body, account) {
   if (fullScan) fullScan.onclick = () => statsScan(account, true);
   $$("[data-stats-sort]", body).forEach((b) => (b.onclick = () => {
     const key = b.dataset.statsSort;
-    statsUi.sort = statsUi.sort.key === key ? { key, dir: statsUi.sort.dir === "asc" ? "desc" : "asc" } : { key, dir: key === "caption" ? "asc" : "desc" };
+    statsUi.sort = statsUi.sort.key === key ? { key, dir: statsUi.sort.dir === "asc" ? "desc" : "asc" } : { key, dir: key === "caption" || key === "title" ? "asc" : "desc" };
     renderCurrent();
     statsLoad();
   }));
   const sortSelect = $("[data-stats-sort-select]", body);
-  if (sortSelect) sortSelect.onchange = () => { statsUi.sort = { key: sortSelect.value, dir: sortSelect.value === "caption" ? "asc" : "desc" }; renderCurrent(); statsLoad(); };
+  if (sortSelect) sortSelect.onchange = () => { statsUi.sort = { key: sortSelect.value, dir: sortSelect.value === "caption" || sortSelect.value === "title" ? "asc" : "desc" }; renderCurrent(); statsLoad(); };
   const sortDir = $("[data-stats-sort-dir]", body);
   if (sortDir) sortDir.onclick = () => { statsUi.sort = { key: statsUi.sort.key, dir: statsUi.sort.dir === "asc" ? "desc" : "asc" }; renderCurrent(); statsLoad(); };
   const search = $("[data-stats-q]", body);
@@ -725,18 +789,20 @@ Screens.stats = {
     }
     const account = statsAccount();
     if (!account) {
-      morph(body, `<div class="s3">${emptyState("users", "Aucun compte TikTok", "Ajoute un compte dans l'écran Comptes : les statistiques sont relevées compte par compte.", `<a class="btn" data-variant="outline" href="#/accounts">${icon("users")}Aller à Comptes</a>`)}</div>`);
+      morph(body, `<div class="s3">${emptyState("users", "Aucun compte TikTok ou YouTube", "Ajoute un compte TikTok ou YouTube dans l'écran Comptes : les statistiques sont relevées compte par compte.", `<a class="btn" data-variant="outline" href="#/accounts">${icon("users")}Aller à Comptes</a>`)}</div>`);
       return;
     }
     const route = statsRoute();
     let pane;
-    if (route.tab === "videos" && route.post) pane = statsVideoSheet(account);
+    const youtube = statsIsYoutube(account);
+    if (route.tab === "videos" && route.post && !youtube) pane = statsVideoSheet(account);
     else {
       const count = statsUi.videos && route.tab === "videos" ? statsUi.videos.length : null;
-      pane = statsTabs(account, route.tab, count) + (route.tab === "videos" ? statsVideosList(account) : statsOverview(account));
+      const list = youtube ? statsYoutubeVideos : statsVideosList;
+      pane = statsTabs(account, route.tab, count) + (route.tab === "videos" ? list(account) : (youtube ? statsYoutubeOverview : statsOverview)(account));
     }
-    const sheet = route.tab === "videos" && route.post;
-    morph(body, `<div class="s3">${statsUi.error ? `<p class="reason bad">Actualisation impossible : ${esc(statsUi.error.message || statsUi.error)}</p>` : ""}${statsControls(account)}${pane}${sheet ? "" : statsMeasuresSection() + statsLearningSection()}</div>`);
+    const sheet = route.tab === "videos" && route.post && !youtube;
+    morph(body, `<div class="s3">${statsUi.error ? `<p class="reason bad">Actualisation impossible : ${esc(statsUi.error.message || statsUi.error)}</p>` : ""}${statsUi.youtubeError ? `<p class="reason bad" data-stats-youtube-error>Comptes YouTube indisponibles : ${esc(statsUi.youtubeError.message || statsUi.youtubeError)}</p>` : ""}${statsControls(account)}${pane}${sheet ? "" : statsMeasuresSection() + statsLearningSection()}</div>`);
     statsWire(body, account);
   },
 };
