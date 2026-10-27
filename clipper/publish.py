@@ -950,6 +950,18 @@ def account_publish_times(
     return sorted(times)
 
 
+def account_sent_entries(
+    account: str, *, state_dir: str | Path | None = None, presets_dir: str | Path = "presets",
+    base: str | Path = "config.toml",
+) -> list[tuple[datetime, dict[str, Any]]]:
+    """(instant d'envoi reel, entree) des entrees ``published`` du compte, toutes chaines, du plus ancien au plus
+    recent. L'instant est ``published_at`` (pose par ``mark_published`` quand le worker a fini l'envoi), PAS
+    ``tiktok_publish_at`` (date de mise en ligne, future pour un post programme sur TikTok)."""
+    sent = [(datetime.fromisoformat(e["published_at"]), e) for _name, e in _account_entries(account, state_dir, presets_dir, base)
+            if e["status"] == "published" and e.get("published_at")]
+    return sorted(sent, key=lambda pair: pair[0])
+
+
 def halted_account(
     account: str, *, state_dir: str | Path | None = None, presets_dir: str | Path = "presets",
     base: str | Path = "config.toml",

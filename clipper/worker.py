@@ -1514,6 +1514,12 @@ class Worker:
                                "capture": None}, config=self.config)
             return False
 
+        if service == "tiktok":
+            cap_reason = self._content_check_cap_reason(entry, account, settings, now, scope)
+            if cap_reason is not None:  # plafond preventif : l'entree attend, ni echec ni arret R4 (waiting_reason)
+                self._wait(entry, name, account, cap_reason, paths["state_dir"])
+                return False
+
         if service == "tiktok" and not self._connected(entry, name, account, paths["state_dir"]):
             return False  # YouTube : la connexion est « prete a publier » (derniere verification) ; Studio arrete sur Google
         try:
@@ -1599,6 +1605,27 @@ class Worker:
                                "reason": f"{done} : {result['post_url'] or result['note']}", "capture": None},
                               config=self.config)
         return True
+
+    @staticmethod
+    def _content_check_cap_reason(entry: dict[str, Any], account: str, settings: dict[str, Any], now: datetime,
+                                  scope: dict[str, Any]) -> str | None:
+        """Plafond preventif de verifications de contenu TikTok : ``[tiktok] content_check_daily_cap`` envois avec
+        verification (content_check = wait) par compte sur 24 h glissantes ; 0 = pas de plafond. Rend la raison
+        d'attente (avec l'heure de reprise, heure de Paris) si l'entree en demande une et que le plafond est atteint,
+        sinon None. Seuls les envois ``published`` du compte comptent (instant ``published_at``) ; un envoi sans
+        verification de contenu n'est ni compte ni bloque."""
+        cap = int(settings["content_check_daily_cap"])
+        if cap <= 0 or tiktok.post_settings(settings, entry.get("post_options"))["content_check"] != "wait":
+            return None
+        since = now - timedelta(hours=24)
+        counted = [at for at, sent in publish_mod.account_sent_entries(account, **scope)
+                   if at > since and tiktok.post_settings(settings, sent.get("post_options"))["content_check"] == "wait"]
+        if len(counted) < cap:
+            return None
+        # la place se libere quand le (len - cap + 1)-ieme plus ancien envoi sort de la fenetre
+        resume = (counted[len(counted) - cap] + timedelta(hours=24)).astimezone(_PARIS)
+        when = resume.strftime("%H:%M") if resume.date() == now.astimezone(_PARIS).date() else resume.strftime("%d/%m %H:%M")
+        return f"plafond de vérifications TikTok ({cap}/24 h) : reprise vers {when} (heure de Paris)"
 
     @staticmethod
     def _previous_part_missing(entry: dict[str, Any], channel: str, target: datetime,
