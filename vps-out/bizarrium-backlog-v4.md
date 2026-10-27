@@ -1,12 +1,12 @@
-# Bizarrium — backlog v4 (PARTIEL : 23 sujets sur 40)
+# Bizarrium — backlog v4 (PARTIEL : 28 sujets sur 40)
 
 Date : 2026-10-27
 
-Sujets par famille : corps 3, animaux 4, espace 5, Terre 3, objets du quotidien 2, histoire des inventions 4 (total 23). Objectif 40 non atteint : budget WebSearch épuisé en cours de passe 2 (voir rapport).
+Sujets par famille : corps 3, animaux 6, espace 5, Terre 4, objets du quotidien 3, histoire des inventions 5 (total 28). Objectif 40 non atteint : quota WebSearch épuisé (passes 2 et 3), manque 12 sujets : corps 4, animaux 1, Terre 3, objets du quotidien 3, histoire des inventions 1.
 
 Règle des sources : 2 sources sérieuses, indépendantes et concordantes par chiffre ; Wikipédia exclue ; deux pages d'un même organisme = une source.
 
-URL vérifiées 200 le 2026-10-27 (46/46 ; 4 d'entre elles répondent 403/405 au HEAD mais 200 au GET).
+URL vérifiées 200 le 2026-10-27 (56/56 ; 4 d'entre elles répondent 403/405 au HEAD mais 200 au GET).
 
 ## corps
 
@@ -20,6 +20,8 @@ URL vérifiées 200 le 2026-10-27 (46/46 ; 4 d'entre elles répondent 403/405 au
 - sea-otter-fur | La loutre de mer porte plus d'un million de poils par pouce carré. | plus d'un million de poils par pouce carré (≈155 000 par cm², conversion) | source 1 : https://oceantoday.noaa.gov/seaotteranatomy/ — « more than a million fibers per square inch. » | source 2 : https://www.montereybayaquarium.org/animals-the-ocean/animals-a-to-z/sea-otter — « thick fur made up of more than a million hairs per square inch. » | animaux
 - bombardier-beetle | Ce coléoptère tire sur ses prédateurs un jet à 100 degrés. | 100 °C | source 1 : https://www.nationalgeographic.com/science/article/how-this-beetle-creates-500-explosions-per-second-in-its-bum — « at temperatures of around 100 degrees Celsius. » | source 2 : https://pmc.ncbi.nlm.nih.gov/articles/PMC8420871/ — « can eject toxic chemicals at temperatures of 100 °C from the tips of their abdomens » | animaux
 - periodical-cicada | Ces cigales passent dix-sept ans sous terre avant d'émerger. | 17 ans | source 1 : https://www.nationalgeographic.com/animals/article/after-17-years-the-cicada-choruses-are-back — « spends 17 years underground. » | source 2 : https://pmc.ncbi.nlm.nih.gov/articles/PMC3637745/ — « 17-y species are Magicicada septendecim, Magicicada cassini, and Magicicada septendecula. » | animaux
+- ming-clam | Cette palourde d'Islande a vécu environ cinq siècles. | 507 ans (estimation par comptage des stries de la coquille) | source 1 : https://www.nationalgeographic.com/animals/article/131116-oldest-clam-dead-ming-science-ocean-507 — « a specimen of Arctica islandica that was found to have lived for approximately 507 years » | source 2 : https://www.guinnessworldrecords.com/world-records/113005-longest-lived-non-colonial-animal — « they revised this figure up to an extraordinary 507 years. » | animaux (fragile : source 2 = organisme de records, pas une revue scientifique)
+- mantis-shrimp | La crevette-mante frappe à la vitesse d'une balle de pistolet. | 23 m/s (pic) | source 1 : https://www.nhm.ac.uk/discover/mantis-shrimps.html — « They can hit prey at speeds of around 23 metres per second, which is about as fast as a bullet fires from a gun. » | source 2 : https://newsarchive.berkeley.edu/news/media/releases/2004/04/21_shrimp.shtml — « The shrimp flail their club-shaped front leg at peak speeds of 23 meters per second » | animaux (23 m/s = pic des espèces frappeuses, Berkeley donne 14 à 23 m/s)
 
 ## espace
 
@@ -36,11 +38,13 @@ URL vérifiées 200 le 2026-10-27 (46/46 ; 4 d'entre elles répondent 403/405 au
 - hail-vivian | Un grêlon du Dakota du Sud mesurait 20 centimètres de diamètre. | 8,0 pouces (20,3 cm, conversion) | source 1 : https://www.weather.gov/abr/vivianhailstone — « measuring 8.0 inches in diameter » | source 2 : https://www.atms.unca.edu/dmiller/atms113/largest_hailstone.html — « The hailstone measured 8.0 inches in diameter » | Terre
 - ocean-heat-90 | Les océans ont absorbé environ 90 % de la chaleur en excès. | 90 % | source 1 : https://science.nasa.gov/earth/explore/earth-indicators/ocean-warming/ — « About 90% of the excess heat from planetary warming over the past century has been absorbed by the ocean » | source 2 : https://www.climate.gov/media/13603 — « More than 90 percent of the excess heat trapped in the Earth system » | Terre
 - vostok-cold | Le record mondial de froid : moins 89 degrés, en Antarctique. | -89,2 °C | source 1 : https://nora.nerc.ac.uk/id/eprint/9656/ — « −89.2°C made at Vostok station, Antarctica » | source 2 : https://www.futura-sciences.com/planete/actualites/meteorologie-jour-il-fait-89-c-terre-117742/ — « -89.2°C le 21/07/1983 » | Terre
+- lake-baikal-20 | Le lac Baïkal renferme environ un cinquième de l'eau douce mondiale. | 20 % | source 1 : https://www.nationalgeographic.com/travel/article/drive-across-the-deepest-lake-in-the-world — « a lake that holds 20 percent of the world’s (unfrozen) freshwater supply » | source 2 : https://pubs.usgs.gov/fs/baikal/ — « roughly 20 percent of the world's total surface fresh water » | Terre (fragile : qualificatifs différents, NatGeo « non gelée », USGS « de surface » ; formuler « environ 20 % de l'eau douce de surface liquide »)
 
 ## objets du quotidien
 
 - paper-fold-12 | Une lycéenne a plié une feuille de papier douze fois. | 12 plis | source 1 : https://blog.doublehelix.csiro.au/fold-paper-in-half/ — « fold a sheet of paper in half 12 times. » | source 2 : https://www.sciencefocus.com/science/whats-the-maximum-number-of-times-that-you-can-fold-a-piece-of-paper — « fold a 1.2km-long piece of tissue paper 12 times. » | objets du quotidien
 - microwave-2450 | Votre micro-ondes agite l'eau 2,45 milliards de fois par seconde. | 2,45 GHz | source 1 : https://illumin.usc.edu/the-engineering-behind-the-microwave-oven/ — « Microwave ovens use 2.45 GHz microwaves » | source 2 : https://www.scientificamerican.com/article/microwaves-and-the-speed/ — « 2.45 gigahertz, usually » | objets du quotidien
+- cd-track-5km | Un CD cache une piste en spirale longue d'environ 5 kilomètres. | environ 5 km | source 1 : https://www.physics.hku.hk/~phys1055/lectures/chap03.html — « The length of CD track is about 5 km. » | source 2 : https://patents.google.com/patent/KR0141114B1/en — « the length of the entire track is approximately 5 km » | objets du quotidien (fragile : source 1 = cours universitaire, source 2 = brevet coréen en traduction automatique, pas d'organisme de référence)
 
 ## histoire des inventions
 
@@ -48,4 +52,5 @@ URL vérifiées 200 le 2026-10-27 (46/46 ; 4 d'entre elles répondent 403/405 au
 - gutenberg-180-copies | Gutenberg n'a imprimé qu'environ 180 exemplaires de sa Bible. | environ 180 exemplaires | source 1 : https://www.loc.gov/exhibits/bibles/interactives/gutenberg/index.html — « Approximately 180 copies of the Gutenberg Bible were printed » | source 2 : https://www.digitale-sammlungen.de/en/gutenberg-bible — « It is believed that 180 copies of the Bible were printed » | histoire des inventions
 - ferris-wheel-2160 | La grande roue de Chicago en 1893 emportait 2 160 personnes. | 2 160 passagers | source 1 : https://glessnerhouse.org/ferris-wheel — « for a total capacity of 2,160. » | source 2 : https://www.architecture.org/online-resources/stories-of-chicago/chicagos-ferris-wheel-story — « for a total capacity of 2,160 people. » | histoire des inventions
 - difference-engine-8000 | La machine de Babbage, reconstruite, compte 8 000 pièces. | 8 000 pièces | source 1 : https://my3.my.umbc.edu/groups/csee/media/1681 — « The Engine consists of 8,000 parts, weighs 5 tons » | source 2 : https://www.computerhistory.org/babbage/ — « consists of 8,000 parts, weighs five tons. » | histoire des inventions
+- hollerith-census | Les cartes perforées ont fait économiser 5 millions de dollars au recensement de 1890. | 5 millions de dollars | source 1 : https://www.ibm.com/history/punched-card-tabulator — « Hollerith’s tabulating system saved the Census Office USD 5 million and more than two years of labor. » | source 2 : https://www.uspto.gov/learning-and-resources/journeys-innovation/historical-stories/count-me — « $5 million below projected costs » | histoire des inventions (fragile : IBM est partie prenante ; USPTO dit « sous le coût prévu », pas « économisé »)
 
