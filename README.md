@@ -370,6 +370,26 @@ Pour l'ouvrir depuis un téléphone du réseau local :
 `config.toml`. Pas de TLS : ne pas exposer le port sur Internet sans reverse
 proxy TLS. Détails dans [`docs/GUIDE.md`](docs/GUIDE.md).
 
+**Redémarrer `serve` sans couper une publication.** Le worker enchaîne les
+envois TikTok et YouTube : un Ctrl+C en plein pilotage du navigateur passe la
+publication en échec « publication interrompue », à vérifier à la main avant de
+réessayer (risque de doublon). Avant de redémarrer, mets les publications en
+attente :
+
+```powershell
+python -m clipper drain --wait 900   # code 0 dès que plus rien n'est piloté
+# puis Ctrl+C sur serve et relance : le nouveau worker lève la demande
+```
+
+Tant que la demande est posée (fichier `state/drain.json`, relu à chaque tour),
+le worker ne commence plus aucune publication ni relevé de statistiques, mais
+termine celle en cours ; le traitement des vidéos n'est pas concerné.
+`clipper drain` ne tue jamais rien : au délai dépassé il rend le code 1 et dit
+ce qui tourne encore. Même chose par l'API : `POST`, `GET` (`draining`,
+`publishing` = `null` ou `{video_id, clip_id, account}`, `idle`) et
+`DELETE /api/worker/drain`. Un worker qui démarre lève une demande restée
+posée et le journalise.
+
 ## Veille des sujets chauds
 
 La veille (`[veille] enabled = true`, désactivée par défaut) relève chaque jour
