@@ -931,7 +931,7 @@ class FakeUpload:
             return [El(self, text=L["content_nav"], on_click=lambda: setattr(self, "view", "content"))]
         if selector == S["exact_text"].format(label=L["shorts_tab"]) and self.view != "dashboard":
             return [El(self, text=L["shorts_tab"], on_click=lambda: setattr(self, "view", "shorts"))]
-        if selector == S["video_row"] and self.view != "dashboard":
+        if selector == S["video_row"] and self.view == "shorts":  # « Vidéos » (onglet par defaut) vide : releve 28/10
             rows = [El(self, text="0:43\nUn Short publié\nPublique\nPubliée")]
             for title in self.draft_titles:
                 row = El(self, text=f"0:39\n{title}\nAjoutez une description\n—\nBrouillon\n{L['draft_edit']}")
@@ -1825,7 +1825,7 @@ class FakeStatsStudio:
             return [FakeElement(self, text=L["content_nav"], on_click=lambda: self._go("content"))]
         if selector == S["exact_text"].format(label=L["shorts_tab"]) and self.view == "content":
             return [FakeElement(self, text=L["shorts_tab"], on_click=lambda: self._go("shorts"))]
-        if selector == S["video_row"] and self.view in ("content", "shorts"):
+        if selector == S["video_row"] and self.view == "shorts":  # Contenus s'ouvre sur « Vidéos », vide (releve 28/10)
             return list(self.rows)
         if selector == st["paginator"] and self.view == "shorts":
             total = len(self.rows) if self.total is None else self.total

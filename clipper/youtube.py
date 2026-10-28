@@ -803,7 +803,8 @@ class _Flow:
         """Contenu > Shorts, puis « Modifier le brouillon » de l'unique brouillon dont le titre commence par ``match`` :
         zero ou plusieurs brouillons = arret (jamais le premier venu)."""
         self.click_labeled("exact_text", "content_nav")
-        self.wait_css(self.sel["selectors"]["video_row"], "video_row", timeout_key="upload_timeout_s")
+        # pas d'attente d'une ligne sur l'onglet ouvert par defaut : depuis 2026-10-28, Contenus s'ouvre sur « Vidéos »,
+        # vide pour une chaine de Shorts ; le clic sur l'onglet attend l'onglet lui-meme
         self.click_labeled("exact_text", "shorts_tab")
         draft_css, draft_label = self.labeled("draft_button", "draft_edit")
         wanted = " ".join(match.split()).casefold()
@@ -1060,8 +1061,7 @@ class _StatsFlow(_Flow):
         """Lignes de Contenus > Shorts, toutes : le pied « 1 a N sur T » doit couvrir la liste (T = N), sinon arret
         (jamais une liste partielle)."""
         self.click_labeled("exact_text", "content_nav")
-        self.wait_css(self.sel["selectors"]["video_row"], "video_row")
-        self.click_labeled("exact_text", "shorts_tab")
+        self.click_labeled("exact_text", "shorts_tab")  # l'onglet par defaut (« Vidéos ») peut etre vide : releve 2026-10-28
         marker = str(self.sel["stats"]["shorts_url_marker"])
         rows_css = self.sel["selectors"]["video_row"]
 
