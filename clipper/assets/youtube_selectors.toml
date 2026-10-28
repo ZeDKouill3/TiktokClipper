@@ -180,6 +180,10 @@ button = "button:has-text(\"{label}\")"
 # Rappel affiché à la 1re publication publique d'une chaîne, après le choix « Publique », par-dessus le bouton final
 # (relevé 2026-10-26, capture state/browser/670ca85bf1f0/captures/20261026T110637-unexpected_page.png).
 "tout le monde peut regarder les vidéos publiques" = "OK"
+# Avertissement affiché au clic sur « Programmer » pendant la vérification initiale (droits d'auteur), bouton « OK » ;
+# la fenêtre de succès ne vient qu'après (relevé 2026-10-28, capture
+# state/browser/670ca85bf1f0/captures/20261028T074648-publish_unconfirmed.png).
+"toujours en cours de vérification" = "OK"
 
 [calendar]
 # Mois abreges tels que YouTube Studio (en francais) les affiche dans la date : « 4 oct. 2026 ».

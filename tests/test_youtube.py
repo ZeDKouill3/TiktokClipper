@@ -170,7 +170,8 @@ def test_the_selectors_file_is_loaded_and_holds_the_surveyed_landmarks():
     assert "accounts.google.com" in data["expect"]["login_url_markers"]
     assert data["labels"]["channel_prefix"] == "Votre chaîne"
     assert data["popups"] == {"Bienvenue dans YouTube Studio": "Continuer",
-                              "tout le monde peut regarder les vidéos publiques": "OK"}
+                              "tout le monde peut regarder les vidéos publiques": "OK",
+                              "toujours en cours de vérification": "OK"}
 
 
 def test_the_surveyed_landmarks_are_marked_verified_on_2026_10_03():
@@ -773,7 +774,8 @@ class FakeUpload:
     def __init__(self, *, welcome=True, studio_redirect=CHANNEL_URL, menu_items=DEFAULT_MENU_ITEMS, link=True,
                  upload_polls=0, success_polls=0, success_text=None, drop_tz_paris=False, ignore_date=False,
                  ignore_tz=False, text_boxes=2, captcha=False, final_label=None, screenshot_error=None,
-                 public_notice=False, draft_titles=None, limit_text=None):
+                 public_notice=False, draft_titles=None, limit_text=None, checking_notice=False):
+        self.checking_notice = checking_notice  # « toujours en cours de vérification » apres le clic final (releve 28/10)
         self.limit_text = limit_text  # texte d'une dialog de refus affichee apres l'envoi du fichier
         self.sel = _sel()
         self.draft_titles = draft_titles    # liste de titres : la dialog d'envoi n'est pas ouverte, Contenu les liste
@@ -878,6 +880,12 @@ class FakeUpload:
                 notice.children[self.sel["modal"]["button"].format(label="OK")] = El(
                     self, text="OK", on_click=lambda: setattr(self, "public_notice", False))
                 shown.append(notice)
+            if self.final_clicked and self.checking_notice:
+                notice = El(self, text="Votre contenu est toujours en cours de vérification\nOK")
+                notice.children[self.sel["modal"]["button"].format(label="OK")] = El(
+                    self, text="OK", on_click=lambda: setattr(self, "checking_notice", False))
+                shown.append(notice)
+                return shown
             if self.final_clicked:
                 self.polls_success += 1
                 if self.success_text is not None and self.polls_success > self.success_polls:
@@ -1129,6 +1137,18 @@ def test_the_first_public_notice_over_the_final_button_is_closed_with_ok(tmp_pat
 
     assert result["state"] == "published"
     assert page.public_notice is False and page.clicked("OK") and page.clicked("Publier")
+
+
+def test_the_still_checking_notice_after_the_final_click_is_closed_and_the_success_still_awaited(tmp_path, monkeypatch):
+    # releve reel 2026-10-28 : au clic sur « Programmer » pendant la verification initiale, fenetre « Votre contenu est
+    # toujours en cours de vérification » avec « OK » ; la fenetre de succes ne vient qu'apres
+    page = FakeUpload(success_text="Traitement de la vidéo … sera publique le 4 octobre 2026 à 21:30.", checking_notice=True)
+    at = datetime(2026, 10, 4, 20, 30, tzinfo=LONDON)
+
+    result = publish(tmp_path, monkeypatch, page, mode="scheduled", schedule_at=at)
+
+    assert result["state"] == "scheduled_on_youtube"
+    assert page.checking_notice is False and page.clicked("OK")
 
 
 def test_the_processing_window_also_proves_an_immediate_publication(tmp_path, monkeypatch):

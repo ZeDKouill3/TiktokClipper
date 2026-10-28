@@ -755,6 +755,9 @@ class _Flow:
         container = self.sel["modal"]["container"]
 
         def seen() -> bool:
+            # une fenetre connue peut venir par-dessus apres le clic final (« toujours en cours de vérification ») :
+            # fermee, puis la preuve reste attendue
+            self.dismiss_known()
             for modal in self.page.query_selector_all(container):
                 text = " ".join(str(modal.inner_text()).split()).casefold()
                 if modal.is_visible() and any(t.casefold() in text for t in titles):
