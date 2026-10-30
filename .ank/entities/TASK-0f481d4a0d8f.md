@@ -5,7 +5,7 @@ slug: clipmaniaq3-publish-confirm-timeout-r-p-t-apr-s
 title: "ClipManiaq3 : publish_confirm_timeout répété après « Programmer » (cause, puis correctif testé)"
 created: 2026-10-30T07:18:39Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/tiktok.py
 blocked_by: []
@@ -14,8 +14,15 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: diagnose
+proof:
+  - type: test
+    ref: local/107e284f488d@b7bd9e6
+    tree: scope/e1b1dfe0ee1a
+    criteria: 85b07bfb95fa
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 Faits (relevés MAIN 30/10) :
