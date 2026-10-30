@@ -59,6 +59,7 @@ CONFIG_DEFAULTS: dict[str, object] = {
     "max_action_delay_s": 1,
     "schedule_max_days": 10,           # limite native de TikTok Studio
     "schedule_min_minutes": 15,        # avance minimale native de TikTok Studio
+    "schedule_max_pending": 47,        # posts programmes en attente par compte au-dela desquels « Programmer » ne fait plus rien (releve reel 22-28/10 : 2 comptes bloques a 47)
     "action_timeout_s": 30,            # attente d'un element de la page
     "click_timeout_s": 10,             # attente d'un clic (Playwright : 30 s) ; intercepte par une fenetre : elle est fermee, puis un seul nouvel essai
     "upload_timeout_s": 300,           # attente de la fin de l'envoi du mp4
@@ -161,7 +162,7 @@ def get_settings(config: Config | None) -> dict[str, Any]:
         if settings[key] not in allowed:
             raise TikTokError(f"[tiktok] {key} invalide : {settings[key]!r} (attendu : {' | '.join(allowed)})")
     for key, minimum in (("max_posts_per_day", 1), ("min_gap_minutes", 0), ("min_action_delay_s", 0),
-                         ("max_action_delay_s", 0), ("schedule_max_days", 1), ("schedule_min_minutes", 0),
+                         ("max_action_delay_s", 0), ("schedule_max_days", 1), ("schedule_min_minutes", 0), ("schedule_max_pending", 1),
                          ("action_timeout_s", 1), ("click_timeout_s", 1), ("upload_timeout_s", 1), ("publish_confirm_timeout_s", 1),
                          ("content_check_timeout_s", 1), ("content_check_retrigger_s", 1), ("content_check_retriggers", 0),
                          ("content_check_daily_cap", 0),
@@ -1818,6 +1819,7 @@ def publish(
                               "ne peuvent pas être programmées ») : règle [tiktok] visibility = \"public\" ou publie "
                               "en mode immédiat")
         _check_schedule(schedule_at, settings, now)
+        _check_pending(account, settings, now, config)
     if isinstance(backend, ApiBackend):
         return backend.publish()
     return backend.publish(
@@ -1840,6 +1842,30 @@ def _check_schedule(schedule_at: datetime | None, settings: dict[str, Any], now:
         raise TikTokError(
             f"programmation refusée : {schedule_at.isoformat()} est à moins de {minutes} minutes "
             f"(avance minimale de TikTok, [tiktok] schedule_min_minutes) : publie en mode immédiat"
+        )
+
+
+def _check_pending(account: str, settings: dict[str, Any], now: datetime, config: Config | None) -> None:
+    """Refuse de programmer quand le dernier releve complet compte deja ``schedule_max_pending`` posts en attente
+    (date de publication encore a venir, heure de Paris) : au-dela TikTok laisse le formulaire intact, sans message,
+    et l'echec n'etait vu qu'au bout de ``publish_confirm_timeout_s`` (ClipManiaq3 : 6 arrets, toujours a 47 en
+    attente). Le releve peut dater : il sous-estime les programmations faites depuis, jamais l'inverse."""
+    last = _last_full(read_history(account, config=config))
+    if last is None:
+        return
+    paris = ZoneInfo("Europe/Paris")
+    local_now = now.astimezone(paris).replace(tzinfo=None)
+    pending = 0
+    for post in last["posts"]:
+        raw = post.get("posted_at")
+        if isinstance(raw, str) and datetime.fromisoformat(raw) > local_now:
+            pending += 1
+    cap = settings["schedule_max_pending"]
+    if pending >= cap:
+        raise TikTokError(
+            f"programmation refusée : {pending} posts déjà programmés en attente sur ce compte au relevé du "
+            f"{last['fetched_at']} (plafond observé de TikTok, [tiktok] schedule_max_pending = {cap}) : "
+            f"attends qu'ils partent ou choisis un autre compte"
         )
 
 
