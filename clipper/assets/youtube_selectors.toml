@@ -146,6 +146,9 @@ row_link_pattern = '^/video/([\w-]+)/'
 # Pied de la liste : « Lignes par page : 30 / 1 à 20 sur 20 » (ytcp-table-footer).
 paginator = "ytcp-table-footer"
 paginator_pattern = '(\d+)\s*à\s*(\d+)\s*sur\s*(\d+)'
+# Bouton « Page suivante » du pied (icône id navigate-after, aria-label « Page suivante » en FR). NON VÉRIFIÉ : relevé
+# sur la description de la tâche, pas encore sur la page réelle.
+next_page = "ytcp-table-footer #navigate-after, ytcp-table-footer [aria-label='Page suivante']"
 # Onglet « Engagement » de la page Données analytiques (role=tab, id interest_viewers).
 tab_engagement = "[role='tab']#interest_viewers"
 # Fragment d'adresse de l'onglet Shorts de la liste Contenus.

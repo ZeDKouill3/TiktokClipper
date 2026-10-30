@@ -1777,8 +1777,10 @@ class FakeStatsStudio:
     """Studio simule : Contenus > Shorts liste ``rows`` ; la page d'une video rend le texte de ``details[id]``
     ({"overview", "engagement", "explore"}) ; ``errors`` = ids dont une page affiche « Une erreur s'est produite »."""
 
-    def __init__(self, *, errors=(), captcha=False, total=None, no_engagement_tab=False):
+    def __init__(self, *, errors=(), captcha=False, total=None, no_engagement_tab=False, page_size=None,
+                 no_next_button=False, stuck_next=False):
         self.sel = _sel()
+        self.page_size, self.no_next_button, self.stuck_next, self.start = page_size, no_next_button, stuck_next, 0
         self.rows, self.details, self.errors, self.captcha = [], {}, set(errors), captcha
         self.total, self.no_engagement_tab = total, no_engagement_tab
         self.url, self.view, self.video, self.tab = "about:blank", "dashboard", None, None
@@ -1810,6 +1812,13 @@ class FakeStatsStudio:
     def _go(self, view):
         self.view = view
 
+    def _visible(self):
+        return list(self.rows) if self.page_size is None else self.rows[self.start:self.start + self.page_size]
+
+    def _next(self):
+        if not self.stuck_next:
+            self.start += self.page_size
+
     def _tab(self, name):
         self.tab = name
 
@@ -1826,10 +1835,13 @@ class FakeStatsStudio:
         if selector == S["exact_text"].format(label=L["shorts_tab"]) and self.view == "content":
             return [FakeElement(self, text=L["shorts_tab"], on_click=lambda: self._go("shorts"))]
         if selector == S["video_row"] and self.view == "shorts":  # Contenus s'ouvre sur « Vidéos », vide (releve 28/10)
-            return list(self.rows)
+            return self._visible()
         if selector == st["paginator"] and self.view == "shorts":
             total = len(self.rows) if self.total is None else self.total
-            return [FakeElement(self, text=f"Lignes par page :\n30\n1 à {len(self.rows)} sur {total}")]
+            shown = self._visible()
+            return [FakeElement(self, text=f"Lignes par page :\n30\n{self.start + 1} à {self.start + len(shown)} sur {total}")]
+        if selector == st["next_page"] and self.view == "shorts" and self.page_size and not self.no_next_button:
+            return [FakeElement(self, text="Page suivante", on_click=self._next)]
         if selector == st["tab_engagement"] and self.view == "overview" and not self.no_engagement_tab:
             return [FakeElement(self, text="Engagement", on_click=lambda: self._tab("engagement"))]
         return []
@@ -1922,7 +1934,7 @@ def test_the_stats_settings_have_defaults_and_are_validated():
                                         _sections={"youtube": {key: value}}))
 
 
-@pytest.mark.parametrize("key", ["row_link", "paginator", "tab_engagement", "overview_url", "explore_url"])
+@pytest.mark.parametrize("key", ["row_link", "paginator", "next_page", "tab_engagement", "overview_url", "explore_url"])
 def test_a_missing_stats_selector_is_an_explicit_error_naming_the_key(tmp_path, key):
     text = SELECTORS.read_text(encoding="utf-8")
     broken = tmp_path / "s.toml"
@@ -2022,7 +2034,7 @@ def test_an_expired_google_session_is_a_stop(tmp_path, monkeypatch):
 
 def test_a_list_shorter_than_its_total_is_a_stop_never_a_partial_list(tmp_path, monkeypatch):
     stop = _stats_stop(tmp_path, monkeypatch, _shorts_page(total=45))
-    assert stop.code == "unexpected_page" and "45" in stop.reason
+    assert stop.code == "element_missing" and "45" in stop.reason and "next_page" in stop.reason
 
 
 def test_a_missing_engagement_tab_is_a_stop(tmp_path, monkeypatch):
@@ -2066,3 +2078,48 @@ def test_the_stats_are_stale_after_the_delay_and_a_stop_counts_as_an_attempt(tmp
     assert youtube.stats_stale("ma_chaine", config=never, now=datetime(2026, 10, 9, tzinfo=timezone.utc)) is False
     _stats_stop(tmp_path, monkeypatch, _shorts_page(errors={ASTRO}), now=THIRD)
     assert youtube.stats_stale("ma_chaine", config=fetch.config, now=datetime(2026, 10, 3, 14, 30, tzinfo=timezone.utc)) is False
+
+
+# -- pagination de Contenus > Shorts
+
+def _many_shorts(count, **kwargs):
+    page = FakeStatsStudio(**kwargs)
+    page.rows = [_list_row(page, f"vid{i:08d}", f"Short {i}", "Publique", "26 oct. 2026", "Publiée", str(i), "0")
+                 for i in range(count)]
+    page.details = {f"vid{i:08d}": {"overview": _overview("Ce Short a enregistré 5 vues depuis sa publication", "—"),
+                                    "engagement": _engagement("1", "0,1", "0:10", None, None),
+                                    "explore": _explore("5", "1", "0")} for i in range(count)}
+    return page
+
+
+def test_two_pages_of_shorts_are_all_read_in_order(tmp_path, monkeypatch):
+    page = _many_shorts(5, page_size=3)
+    snapshot = fetch(tmp_path, monkeypatch, page)
+    assert [p["post_id"] for p in snapshot["posts"]] == [f"vid{i:08d}" for i in range(5)]
+    assert [c for c in page.calls if c[0] == "click" and c[1] == "Page suivante"] == [("click", "Page suivante")]
+
+
+def test_three_pages_of_shorts_are_all_read(tmp_path, monkeypatch):
+    page = _many_shorts(7, page_size=3)
+    snapshot = fetch(tmp_path, monkeypatch, page)
+    assert len(snapshot["posts"]) == 7
+    assert len([c for c in page.calls if c == ("click", "Page suivante")]) == 2
+
+
+def test_a_single_page_never_clicks_next(tmp_path, monkeypatch):
+    page = _many_shorts(3)
+    fetch(tmp_path, monkeypatch, page)
+    assert ("click", "Page suivante") not in page.calls
+
+
+def test_a_missing_next_button_stops_explicitly_with_no_partial_snapshot(tmp_path, monkeypatch):
+    page = _many_shorts(5, page_size=3, no_next_button=True)
+    with pytest.raises(youtube.YouTubeError, match="element_missing|page suivante"):
+        fetch(tmp_path, monkeypatch, page)
+    assert not list((tmp_path / "state" / "stats" / "youtube" / "ma_chaine").glob("*[0-9].json"))
+
+
+def test_a_footer_that_does_not_move_after_next_stops_explicitly(tmp_path, monkeypatch):
+    page = _many_shorts(5, page_size=3, stuck_next=True)
+    with pytest.raises(youtube.YouTubeError, match="page suivante"):
+        fetch(tmp_path, monkeypatch, page)
