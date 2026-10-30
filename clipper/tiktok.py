@@ -59,6 +59,7 @@ CONFIG_DEFAULTS: dict[str, object] = {
     "max_action_delay_s": 1,
     "schedule_max_days": 10,           # limite native de TikTok Studio
     "schedule_min_minutes": 15,        # avance minimale native de TikTok Studio
+    "schedule_max_pending": 47,        # posts programmes en attente par compte au-dela desquels « Programmer » ne fait plus rien (releve reel 22-28/10 : 2 comptes bloques a 47)
     "action_timeout_s": 30,            # attente d'un element de la page
     "click_timeout_s": 10,             # attente d'un clic (Playwright : 30 s) ; intercepte par une fenetre : elle est fermee, puis un seul nouvel essai
     "upload_timeout_s": 300,           # attente de la fin de l'envoi du mp4
@@ -161,7 +162,7 @@ def get_settings(config: Config | None) -> dict[str, Any]:
         if settings[key] not in allowed:
             raise TikTokError(f"[tiktok] {key} invalide : {settings[key]!r} (attendu : {' | '.join(allowed)})")
     for key, minimum in (("max_posts_per_day", 1), ("min_gap_minutes", 0), ("min_action_delay_s", 0),
-                         ("max_action_delay_s", 0), ("schedule_max_days", 1), ("schedule_min_minutes", 0),
+                         ("max_action_delay_s", 0), ("schedule_max_days", 1), ("schedule_min_minutes", 0), ("schedule_max_pending", 1),
                          ("action_timeout_s", 1), ("click_timeout_s", 1), ("upload_timeout_s", 1), ("publish_confirm_timeout_s", 1),
                          ("content_check_timeout_s", 1), ("content_check_retrigger_s", 1), ("content_check_retriggers", 0),
                          ("content_check_daily_cap", 0),
@@ -1841,6 +1842,21 @@ def _check_schedule(schedule_at: datetime | None, settings: dict[str, Any], now:
             f"programmation refusée : {schedule_at.isoformat()} est à moins de {minutes} minutes "
             f"(avance minimale de TikTok, [tiktok] schedule_min_minutes) : publie en mode immédiat"
         )
+
+
+def pending_scheduled(account: str, now: datetime, *, config: Config | None = None) -> tuple[int, datetime | None, str] | None:
+    """Posts programmes encore a venir (date de publication future, heure de Paris) au dernier releve complet du
+    compte : ``(nombre, prochain depart ou None, date du releve)``, ``None`` sans releve complet. Le releve peut
+    dater : il sous-estime les programmations faites depuis, jamais l'inverse. Sert a la raison d'attente du worker
+    (``[tiktok] schedule_max_pending`` : au plafond « Programmer » ne fait plus rien, relevé réel 22-28/10)."""
+    last = _last_full(read_history(account, config=config))
+    if last is None:
+        return None
+    paris = ZoneInfo("Europe/Paris")
+    local_now = now.astimezone(paris).replace(tzinfo=None)
+    upcoming = sorted(datetime.fromisoformat(p["posted_at"]) for p in last["posts"]
+                      if isinstance(p.get("posted_at"), str) and datetime.fromisoformat(p["posted_at"]) > local_now)
+    return len(upcoming), (upcoming[0].replace(tzinfo=paris) if upcoming else None), last["fetched_at"]
 
 
 # ---------------------------------------------------------------- historique des releves (SPEC-86fe R2)

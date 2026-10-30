@@ -1520,6 +1520,10 @@ class Worker:
             if cap_reason is not None:  # plafond preventif : l'entree attend, ni echec ni arret R4 (waiting_reason)
                 self._wait(entry, name, account, cap_reason, paths["state_dir"])
                 return False
+            pending_reason = self._pending_cap_reason(mode, account, settings, now, self.config)
+            if pending_reason is not None:  # plafond de posts programmes : attente, ni echec ni arret R4
+                self._wait(entry, name, account, pending_reason, paths["state_dir"])
+                return False
 
         if service == "tiktok" and not self._connected(entry, name, account, paths["state_dir"]):
             return False  # YouTube : la connexion est « prete a publier » (derniere verification) ; Studio arrete sur Google
@@ -1645,6 +1649,28 @@ class Worker:
         resume = (counted[len(counted) - cap] + timedelta(hours=24)).astimezone(_PARIS)
         when = resume.strftime("%H:%M") if resume.date() == now.astimezone(_PARIS).date() else resume.strftime("%d/%m %H:%M")
         return f"plafond de vérifications TikTok ({cap}/24 h) : reprise vers {when} (heure de Paris)"
+
+    @staticmethod
+    def _pending_cap_reason(mode: str, account: str, settings: dict[str, Any], now: datetime,
+                            config: Any) -> str | None:
+        """Plafond de posts programmes en attente (``[tiktok] schedule_max_pending``) : au plafond TikTok laisse le
+        formulaire intact sans message (ClipManiaq3, 6 ``publish_unconfirmed``). Rend la raison d'attente, avec
+        l'heure du prochain depart si connue (heure de Paris), si l'entree se programme et que le dernier releve
+        complet du compte atteint le plafond ; sinon None (sans releve : pas de blocage)."""
+        if mode != "scheduled":
+            return None
+        found = tiktok.pending_scheduled(account, now, config=config)
+        cap = int(settings["schedule_max_pending"])
+        if found is None or found[0] < cap:
+            return None
+        count, first, _ = found
+        resume = ""
+        if first is not None:
+            shown = first.astimezone(_PARIS)
+            when = shown.strftime("%H:%M") if shown.date() == now.astimezone(_PARIS).date() else shown.strftime("%d/%m %H:%M")
+            resume = f" (prochain départ vers {when}, heure de Paris)"
+        return (f"{count} posts déjà programmés en attente sur TikTok (plafond schedule_max_pending = {cap}) : "
+                f"reprise quand des posts seront partis{resume}")
 
     @staticmethod
     def _previous_part_missing(entry: dict[str, Any], channel: str, target: datetime,

@@ -5641,3 +5641,57 @@ def test_a_worker_that_starts_lifts_a_drain_left_raised_and_logs_it(tmp_path, mo
 
     assert worker.drain_status(config)["draining"] is False
     assert any("mise en attente" in r.getMessage() for r in caplog.records)
+
+
+# Plafond de posts programmes en attente (schedule_max_pending) : l'entree attend, ni echec ni arret R4.
+
+
+def _pending_config(tmp_path, future, cap=5):
+    local = _CC_NOW.astimezone(ZoneInfo("Europe/Paris")).replace(tzinfo=None)
+    config = Config(mode="review", workspace_dir=tmp_path / "w", output_dir=tmp_path / "output",
+                    _sections={"tiktok": {"stats_dir": str(tmp_path / "stats"), "schedule_max_pending": cap}})
+    posts = [{"post_id": str(i), "posted_at": (local + timedelta(hours=i + 2)).isoformat()} for i in range(future)]
+    posts.append({"post_id": "old", "posted_at": (local - timedelta(hours=3)).isoformat()})
+    if future is not None:
+        tiktok.append_snapshot(ACCOUNT, tiktok.get_settings(config), {
+            "account": ACCOUNT, "fetched_at": _CC_NOW.isoformat(), "origin": "full", "posts": posts})
+    return config
+
+
+def _pending_reason(config, mode="scheduled"):
+    return worker.Worker._pending_cap_reason(mode, ACCOUNT, tiktok.get_settings(config), _CC_NOW, config)
+
+
+def test_pending_cap_makes_a_scheduled_entry_wait_with_the_next_departure(tmp_path):
+    reason = _pending_reason(_pending_config(tmp_path, 5))
+    assert reason == ("5 posts déjà programmés en attente sur TikTok (plafond schedule_max_pending = 5) : "
+                      "reprise quand des posts seront partis (prochain départ vers 16:00, heure de Paris)")
+
+
+def test_pending_cap_lets_an_entry_go_below_the_cap_or_in_immediate_mode(tmp_path):
+    assert _pending_reason(_pending_config(tmp_path, 4)) is None
+    assert _pending_reason(_pending_config(tmp_path / "b", 5), mode="immediate") is None
+
+
+def test_pending_cap_does_not_block_without_a_snapshot(tmp_path):
+    config = Config(mode="review", workspace_dir=tmp_path / "w", output_dir=tmp_path / "output",
+                    _sections={"tiktok": {"stats_dir": str(tmp_path / "vide"), "schedule_max_pending": 5}})
+    assert _pending_reason(config) is None
+
+
+def test_pending_cap_waits_in_the_worker_without_opening_the_browser(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch, tiktok_settings={**_CC_SETTINGS, "schedule_max_pending": 5,
+                                                              "stats_dir": str(tmp_path / "stats")})
+    _frozen_now(monkeypatch, _CC_NOW)
+    local = _CC_NOW.astimezone(ZoneInfo("Europe/Paris")).replace(tzinfo=None)
+    tiktok.append_snapshot(ACCOUNT, tiktok.get_settings(config), {
+        "account": ACCOUNT, "fetched_at": _CC_NOW.isoformat(), "origin": "full",
+        "posts": [{"post_id": str(i), "posted_at": (local + timedelta(hours=i + 2)).isoformat()} for i in range(5)]})
+    _seed(tmp_path, "ma_chaine", "zz", _CC_NOW + timedelta(days=1), publish_mode="scheduled")
+    pub = FakePublisher()
+
+    _pub_worker(config, pub).tick()
+
+    entry = _cc_zz(tmp_path)
+    assert pub.calls == [] and entry["status"] == "scheduled"
+    assert "plafond schedule_max_pending = 5" in entry["waiting_reason"]
