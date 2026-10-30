@@ -34,7 +34,7 @@ import tomllib
 from contextlib import AbstractContextManager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 from zoneinfo import ZoneInfo
 
 from clipper import browser
@@ -73,7 +73,7 @@ REQUIRED_PUBLISH_LABELS = ("create", "upload_menu", "next", "kids_yes", "kids_no
 REQUIRED_PUBLISH_SELECTORS = ("file_input", "menu_item", "text_box", "radio", "labeled_button", "expand",
                               "exact_text", "video_row", "draft_button", "step_visibility", "zone_shown",
                               "date_trigger", "text_input", "timezone_option", "final_button", "video_link")
-REQUIRED_STATS_SELECTORS = ("overview_url", "explore_url", "row_link", "row_link_pattern", "paginator", "paginator_pattern",
+REQUIRED_STATS_SELECTORS = ("overview_url", "explore_url", "row_link", "row_link_pattern", "paginator", "paginator_pattern", "next_page",
                             "tab_engagement", "shorts_url_marker", "error_text", "views_pattern", "subscribers",
                             "engaged_views", "watch_hours", "avg_view", "stayed", "swiped", "explore_anchor")
 _SHORTS_TAG = re.compile(r"(?<!\w)#shorts\b", re.IGNORECASE)
@@ -1057,27 +1057,42 @@ class _StatsFlow(_Flow):
         match = re.search(str(self.sel["stats"]["paginator_pattern"]), str(found.inner_text())) if found is not None else None
         return (int(match.group(1)), int(match.group(2)), int(match.group(3))) if match else None
 
-    def shorts_rows(self) -> list[Any]:
-        """Lignes de Contenus > Shorts, toutes : le pied « 1 a N sur T » doit couvrir la liste (T = N), sinon arret
-        (jamais une liste partielle)."""
+    def shorts_pages(self) -> Iterator[list[Any]]:
+        """Pages de Contenus > Shorts, une a une : le pied « D a F sur T » doit correspondre aux lignes de chaque page,
+        puis « page suivante » jusqu'a F = T. Les lignes d'une page ne valent plus apres le changement de page : le
+        consommateur les lit avant de reprendre l'iterateur. Bouton absent ou pied immobile = arret, jamais une liste
+        partielle."""
         self.click_labeled("exact_text", "content_nav")
-        self.click_labeled("exact_text", "shorts_tab")  # l'onglet par defaut (« Vidéos ») peut etre vide : releve 2026-10-28
+        self.click_labeled("exact_text", "shorts_tab")  # l'onglet par defaut (« Vidéo ») peut etre vide : releve 2026-10-28
         marker = str(self.sel["stats"]["shorts_url_marker"])
         rows_css = self.sel["selectors"]["video_row"]
+        previous: tuple[int, int, int] | None = None
 
         def settled() -> tuple[list[Any], tuple[int, int, int]] | None:
             rows, footer = list(self.page.query_selector_all(rows_css)), self.footer()
-            return (rows, footer) if marker in str(self.page.url) and footer and len(rows) == footer[1] else None
+            if not (marker in str(self.page.url) and footer and len(rows) == footer[1] - footer[0] + 1):
+                return None
+            return (rows, footer) if footer != previous else None
 
-        found = self.wait_poll(settled, "action_timeout_s")
-        if found is None:
-            raise self.stop("element_missing", "liste des Shorts de Contenus illisible (pied « 1 à N sur T » absent ou "
-                                               "différent du nombre de lignes) : paginator")
-        rows, (_, shown, total) = found
-        if total > shown:
-            raise self.stop("unexpected_page", f"{total} Shorts dans la chaîne mais {shown} affichés : la pagination de "
-                                               f"la liste n'est pas gérée")
-        return rows
+        while True:
+            found = self.wait_poll(settled, "action_timeout_s")
+            if found is None:
+                if previous:
+                    raise self.stop("element_missing", "liste des Shorts de Contenus illisible (le pied n'a pas avancé "
+                                                       "après le clic) : page suivante")
+                raise self.stop("element_missing", "liste des Shorts de Contenus illisible (pied « D à F sur T » absent "
+                                                   "ou différent du nombre de lignes) : paginator")
+            rows, footer = found
+            yield rows
+            if footer[1] >= footer[2]:
+                return
+            button = self.page.query_selector(self.sel["stats"]["next_page"])
+            if button is None:
+                raise self.stop("element_missing", f"{footer[2]} Shorts dans la chaîne mais {footer[1]} atteints et pas de "
+                                                   f"bouton page suivante : next_page")
+            self.pause()
+            button.click()
+            previous = footer
 
     def read_row(self, row: Any) -> dict[str, Any] | None:
         """Un Short de la liste ; ``None`` pour une ligne sans lien de video (brouillon en cours d'envoi)."""
@@ -1114,10 +1129,11 @@ class _StatsFlow(_Flow):
         channel = self.channel_id()
         self.close_popups()
         posts, remaining = [], int(self.settings["stats_detail_max"])
-        for row in self.shorts_rows():
-            post = self.read_row(row)
-            if post is not None:
-                posts.append(post)
+        for rows in self.shorts_pages():
+            for row in rows:
+                post = self.read_row(row)
+                if post is not None:
+                    posts.append(post)
         for post in posts:
             read = post["state"] == "published" and remaining > 0
             post["detail_not_read"] = post["state"] == "published" and not read

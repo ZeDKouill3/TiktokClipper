@@ -5,7 +5,7 @@ slug: stats-youtube-relever-toutes-les-pages-de-conten
 title: "Stats YouTube : relever toutes les pages de Contenus > Shorts (plus de 30 Shorts)"
 created: 2026-10-30T07:56:17Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/youtube.py
 blocked_by: []
@@ -14,8 +14,15 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/66fa97eebbb1@ba490ba
+    tree: scope/62dbf474ca96
+    criteria: c8506a22b66f
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 Relevé réel 30/10 08:54 (Paris) sur la chaîne Bizarrium 670ca85bf1f0 : « relevé du compte 670ca85bf1f0 arrêté : 38 Shorts dans la chaîne mais 30 affichés : la pagination de la liste n'est pas gérée » (clipper/youtube.py shorts_rows, ~l.1060). Capture : state/browser/670ca85bf1f0/captures/20261030T075406-unexpected_page.png (dépôt principal, png seulement).
