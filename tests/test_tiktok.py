@@ -670,34 +670,37 @@ def test_scheduled_without_a_date_or_too_close_is_refused(env):
     assert env.opened == []
 
 
-def _pending_snapshot(env, tmp_path, future, past=3):
+def _pending_snapshot(tmp_path, future, past=3):
     """Releve complet ou ``future`` posts sont encore a venir (heure de Paris) et ``past`` deja partis."""
-    env.config = Config(mode="review", workspace_dir=tmp_path / "w", output_dir=tmp_path / "output",
-                        _sections={"tiktok": {"content_check": "wait", "stats_dir": str(tmp_path / "stats"),
-                                              "schedule_max_pending": 5}})
+    config = Config(mode="review", workspace_dir=tmp_path / "w", output_dir=tmp_path / "output",
+                    _sections={"tiktok": {"stats_dir": str(tmp_path / "stats")}})
     local = NOW.astimezone(ZoneInfo("Europe/Paris")).replace(tzinfo=None)
     posts = [{"post_id": str(i), "posted_at": (local + timedelta(hours=i + 1)).isoformat()} for i in range(future)]
     posts += [{"post_id": f"p{i}", "posted_at": (local - timedelta(hours=i + 1)).isoformat()} for i in range(past)]
     posts.append({"post_id": "none", "posted_at": None})
-    tiktok.append_snapshot("ma_chaine", tiktok.get_settings(env.config), {
+    tiktok.append_snapshot("ma_chaine", tiktok.get_settings(config), {
         "account": "ma_chaine", "fetched_at": NOW.isoformat(), "origin": "full", "posts": posts})
+    return config
 
 
-def test_scheduling_is_refused_before_the_browser_when_the_account_is_at_the_pending_cap(env, tmp_path):
-    """ClipManiaq3 (22-28/10) : 47 posts en attente, « Programmer » ne faisait plus rien et l'echec n'etait vu
-    qu'apres 60 s (publish_unconfirmed). Le plafond est refuse avant d'ouvrir le navigateur."""
-    _pending_snapshot(env, tmp_path, future=5)
+def test_pending_scheduled_counts_only_future_posts_and_gives_the_next_departure(tmp_path):
+    config = _pending_snapshot(tmp_path, future=4)
+    count, first, fetched = tiktok.pending_scheduled("ma_chaine", NOW, config=config)
+    assert count == 4 and fetched == NOW.isoformat()
+    assert first == (NOW + timedelta(hours=1)).astimezone(ZoneInfo("Europe/Paris"))
+
+
+def test_pending_scheduled_is_none_without_a_full_snapshot(tmp_path):
+    config = Config(mode="review", workspace_dir=tmp_path / "w", output_dir=tmp_path / "output",
+                    _sections={"tiktok": {"stats_dir": str(tmp_path / "vide")}})
+    assert tiktok.pending_scheduled("ma_chaine", NOW, config=config) is None
+
+
+def test_schedule_max_pending_default_is_47_and_validated():
+    assert tiktok.CONFIG_DEFAULTS["schedule_max_pending"] == 47
     with pytest.raises(tiktok.TikTokError, match="schedule_max_pending"):
-        env.publish("scheduled", NOW + timedelta(days=2))
-    assert env.opened == []
-
-
-def test_scheduling_below_the_pending_cap_or_without_snapshot_goes_on(env, tmp_path):
-    _pending_snapshot(env, tmp_path, future=4)  # les posts deja partis et la date vide ne comptent pas
-    tiktok._check_pending("ma_chaine", tiktok.get_settings(env.config), NOW, env.config)
-    env.config = Config(mode="review", workspace_dir=tmp_path / "w", output_dir=tmp_path / "output",
-                        _sections={"tiktok": {"stats_dir": str(tmp_path / "autre")}})
-    tiktok._check_pending("ma_chaine", tiktok.get_settings(env.config), NOW, env.config)
+        tiktok.get_settings(Config(mode="review", workspace_dir=Path("w"), output_dir=Path("o"),
+                                   _sections={"tiktok": {"schedule_max_pending": 0}}))
 
 
 def test_unknown_mode_missing_mp4_and_empty_account_are_refused(env):

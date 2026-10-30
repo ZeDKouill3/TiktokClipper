@@ -1819,7 +1819,6 @@ def publish(
                               "ne peuvent pas être programmées ») : règle [tiktok] visibility = \"public\" ou publie "
                               "en mode immédiat")
         _check_schedule(schedule_at, settings, now)
-        _check_pending(account, settings, now, config)
     if isinstance(backend, ApiBackend):
         return backend.publish()
     return backend.publish(
@@ -1845,28 +1844,19 @@ def _check_schedule(schedule_at: datetime | None, settings: dict[str, Any], now:
         )
 
 
-def _check_pending(account: str, settings: dict[str, Any], now: datetime, config: Config | None) -> None:
-    """Refuse de programmer quand le dernier releve complet compte deja ``schedule_max_pending`` posts en attente
-    (date de publication encore a venir, heure de Paris) : au-dela TikTok laisse le formulaire intact, sans message,
-    et l'echec n'etait vu qu'au bout de ``publish_confirm_timeout_s`` (ClipManiaq3 : 6 arrets, toujours a 47 en
-    attente). Le releve peut dater : il sous-estime les programmations faites depuis, jamais l'inverse."""
+def pending_scheduled(account: str, now: datetime, *, config: Config | None = None) -> tuple[int, datetime | None, str] | None:
+    """Posts programmes encore a venir (date de publication future, heure de Paris) au dernier releve complet du
+    compte : ``(nombre, prochain depart ou None, date du releve)``, ``None`` sans releve complet. Le releve peut
+    dater : il sous-estime les programmations faites depuis, jamais l'inverse. Sert a la raison d'attente du worker
+    (``[tiktok] schedule_max_pending`` : au plafond « Programmer » ne fait plus rien, relevé réel 22-28/10)."""
     last = _last_full(read_history(account, config=config))
     if last is None:
-        return
+        return None
     paris = ZoneInfo("Europe/Paris")
     local_now = now.astimezone(paris).replace(tzinfo=None)
-    pending = 0
-    for post in last["posts"]:
-        raw = post.get("posted_at")
-        if isinstance(raw, str) and datetime.fromisoformat(raw) > local_now:
-            pending += 1
-    cap = settings["schedule_max_pending"]
-    if pending >= cap:
-        raise TikTokError(
-            f"programmation refusée : {pending} posts déjà programmés en attente sur ce compte au relevé du "
-            f"{last['fetched_at']} (plafond observé de TikTok, [tiktok] schedule_max_pending = {cap}) : "
-            f"attends qu'ils partent ou choisis un autre compte"
-        )
+    upcoming = sorted(datetime.fromisoformat(p["posted_at"]) for p in last["posts"]
+                      if isinstance(p.get("posted_at"), str) and datetime.fromisoformat(p["posted_at"]) > local_now)
+    return len(upcoming), (upcoming[0].replace(tzinfo=paris) if upcoming else None), last["fetched_at"]
 
 
 # ---------------------------------------------------------------- historique des releves (SPEC-86fe R2)
