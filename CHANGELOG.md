@@ -12,6 +12,7 @@ Notes de version détaillées : [`docs/releases/`](docs/releases/).
 
 ### Corrigé
 
+- Publication : un fichier de file illisible ou une entrée au `slot_at` mal formé ou naïf n'empêche plus les autres styles de partir (journal avec le nom du fichier, événement `error`) ; un sidecar illisible ou sans `video_id` fait échouer cette seule entrée sans arrêter le compte ; la marque « en cours » est libérée si une exception survient avant l'envoi ; un créneau programmé dépassé ou à moins de `schedule_min_minutes` est reporté au prochain créneau libre du compte (ou attend avec la raison), et « Réessayer » replanifie de même ; `[tiktok] schedule_lead_max_hours` strictement positif trop court pour envoyer à temps est refusé (message avec le minimum).
 - Worker et `serve` : plus de mort silencieuse. Un tour du worker qui lève est journalisé avec sa trace et la boucle continue (`[worker] max_consecutive_failures`, 20 par défaut : sortie en erreur explicite au-delà) ; les reprises de démarrage et le battement (toute `OSError`) sont gardés ; `sys.excepthook` et `threading.excepthook` journalisent en critique ; le journal porte « démarré pid=… » et « arrêté (raison) », Ctrl+C et `uvicorn.run` qui lève compris ; le second kill d'un processus revérifie son identité avant de tuer (pid réattribué).
 
 ### Ajouté

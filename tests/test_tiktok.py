@@ -4639,3 +4639,35 @@ def test_on_file_sent_is_not_called_when_the_failure_precedes_the_upload(tmp_pat
         env.publish(on_file_sent=_sent_marks(env))
 
     assert "file_sent" not in _kinds(env) and "upload" not in _kinds(env)
+
+
+# --------------------------------------------------------------------------
+# TASK-81e04 : schedule_lead_max_hours borne par schedule_min_minutes
+# --------------------------------------------------------------------------
+
+
+def _lead_config(**tiktok_settings):
+    return Config(mode="review", workspace_dir=Path("."), output_dir=Path("."), _sections={"tiktok": tiktok_settings})
+
+
+@pytest.mark.parametrize("hours", [0.1, 0.25, 0.3])
+def test_a_lead_max_too_short_to_send_in_time_is_refused_naming_the_setting_and_the_minimum(hours):
+    with pytest.raises(tiktok.TikTokError, match=r"schedule_lead_max_hours.*20 min"):
+        tiktok.get_settings(_lead_config(schedule_lead_max_hours=hours))
+
+
+def test_the_lead_minimum_adds_the_content_check_wait_when_it_is_on():
+    # 15 (schedule_min_minutes) + 5 + 900 s / 60 = 35 min
+    with pytest.raises(tiktok.TikTokError, match=r"schedule_lead_max_hours.*35 min"):
+        tiktok.get_settings(_lead_config(schedule_lead_max_hours=0.5, content_check="wait"))
+    assert tiktok.get_settings(_lead_config(schedule_lead_max_hours=0.6, content_check="wait"))["schedule_lead_max_hours"] == 0.6
+
+
+def test_a_lead_max_of_zero_or_long_enough_is_accepted():
+    assert tiktok.get_settings(_lead_config(schedule_lead_max_hours=0))["schedule_lead_max_hours"] == 0
+    assert tiktok.get_settings(_lead_config(schedule_lead_max_hours=12))["schedule_lead_max_hours"] == 12
+
+
+def test_a_sidecar_without_video_id_is_a_tiktok_error():
+    with pytest.raises(tiktok.TikTokError, match="video_id"):
+        tiktok.clip_payload({"clip_id": "01", "caption": "x", "hashtags": []}, Path("o"))

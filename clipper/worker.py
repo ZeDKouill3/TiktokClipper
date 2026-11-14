@@ -1444,6 +1444,17 @@ class Worker:
             cache[service] = youtube.get_settings(self.config) if service == "youtube" else tiktok.get_settings(self.config)
         return cache[service]
 
+    def _publish_problem(self, filename: str, message: str) -> None:
+        """Un fichier ou une entree de la file illisible : journal (nom du fichier) et evenement console de niveau
+        error, a chaque changement de message ; jamais d'arret des autres entrees (ADR-ad2e)."""
+        text = f"{filename} : {message}"
+        if text in self._logged_publish_errors:
+            return
+        self._logged_publish_errors.add(text)
+        log.error("publication TikTok impossible : %s", text)
+        tiktok.emit_event({"level": "error", "account": None, "channel": None, "video_id": None, "clip_id": None,
+                           "reason": text, "capture": None}, config=self.config)
+
     def _publish_next(self) -> bool:
         now = datetime.now(timezone.utc)
         services = {a["id"]: a.get("service") or "tiktok" for a in accounts_mod.list_accounts(self.config)}
@@ -1454,10 +1465,24 @@ class Worker:
         due = []
         # la file des videos sans chaine (SPEC-1ed3 R3) est lue comme celle d'une chaine sans creneau ni compte
         for name in [*channel_mod.list_channels(paths["presets_dir"]), publish_mod.NO_CHANNEL]:
-            for entry in publish_mod.list_entries(name, state_dir=paths["state_dir"]):
+            try:
+                entries = publish_mod.list_entries(name, state_dir=paths["state_dir"])
+            except (publish_mod.PublishError, ValueError, OSError) as exc:
+                # un fichier de file illisible ne gate pas les autres styles (TASK-81e04, revue C2)
+                self._publish_problem(f"{name}.json", f"file de publication illisible : {exc}")
+                continue
+            for entry in entries:
                 if entry["status"] != "scheduled" or not entry["slot_at"]:
                     continue
-                slot = datetime.fromisoformat(entry["slot_at"])
+                try:
+                    slot = datetime.fromisoformat(entry["slot_at"])
+                    if slot.tzinfo is None:
+                        raise ValueError("date sans fuseau")
+                except (ValueError, TypeError) as exc:
+                    self._publish_problem(
+                        f"{name}.json", f"{entry.get('video_id')}/{entry.get('clip_id')} : slot_at "
+                                        f"{entry['slot_at']!r} invalide ({exc}) : corrige ou annule la publication")
+                    continue
                 account = publish_mod.entry_account(entry)
                 service = services.get(account, "tiktok")  # compte inconnu : _publish_one l'explique (R4)
                 settings = self._service_settings(service, cache)
@@ -1507,6 +1532,29 @@ class Worker:
         times = publish_mod.account_publish_times(account, **scope)
         # Plafonds par compte (SPEC-6076 R6) : le fuseau est celui du COMPTE, pas du style (revue r-comptes 9).
         tz = ZoneInfo(str(schedule["timezone"]))
+        if mode == "scheduled":
+            floor = now + timedelta(minutes=float(settings["schedule_min_minutes"]))
+            if slot < floor:  # creneau passe ou trop proche : le service refuserait la programmation (I2, revue)
+                reason = ("créneau dépassé ou à moins de l'avance minimale "
+                          f"([{service}] schedule_min_minutes = {settings['schedule_min_minutes']:g} min)")
+                if entry.get("manual") or not schedule["slots"]:
+                    why = ("modifie son heure ou annule-la" if entry.get("manual")
+                           else "le compte n'a aucun créneau pour la reporter (Comptes > Créneaux), modifie son heure ou annule-la")
+                    self._wait(entry, name, account, f"{reason} : la publication attend, {why}", paths["state_dir"])
+                    return False
+                try:
+                    moved = publish_mod.postpone(
+                        video_id, clip_id, name, reason, now=now, schedule=schedule,
+                        allowed=lambda c: ("trop proche" if c < floor else tiktok.check_limits(times, c, settings, tz)),
+                        **scope)
+                except publish_mod.PublishError as exc:
+                    log.warning("%s/%s : report impossible : %s", video_id, clip_id, exc)
+                    self._wait(entry, name, account, str(exc), paths["state_dir"])
+                    return False
+                log.warning("%s/%s : %s", video_id, clip_id, moved["postponed_reason"])
+                tiktok.emit_event({"level": "warn", "account": account, **where, "reason": moved["postponed_reason"],
+                                   "capture": None}, config=self.config)
+                return False
         blocked = tiktok.check_limits(times, slot if mode == "scheduled" else now, settings, tz)
         if blocked is not None and entry.get("manual"):
             # publication pilotee depuis l'ecran Publication : le plafond a deja ete verifie au formulaire ; s'il
@@ -1571,17 +1619,28 @@ class Worker:
         except publish_mod.PublishError as exc:
             log.warning("%s/%s : non pilotée : %s", video_id, clip_id, exc)
             return False
-        paused = next((a for a in accounts_mod.list_accounts(self.config) if a["id"] == account), {}).get("paused_at")
-        if paused:  # pause posee entre la verification et la prise en main : aucun post (TASK-0c97)
-            reason = (f"compte {account} mis en pause (manuel) avant le post : recoche « Prêt à publier » dans "
-                      "Comptes pour reprendre, ou choisis un autre compte")
-            publish_mod.release_in_progress(video_id, clip_id, name, reason, state_dir=paths["state_dir"])
-            log.warning("%s/%s : publication en attente : %s", video_id, clip_id, reason)
-            return False
+        try:
+            paused = next((a for a in accounts_mod.list_accounts(self.config) if a["id"] == account), {}).get("paused_at")
+            if paused:  # pause posee entre la verification et la prise en main : aucun post (TASK-0c97)
+                reason = (f"compte {account} mis en pause (manuel) avant le post : recoche « Prêt à publier » dans "
+                          "Comptes pour reprendre, ou choisis un autre compte")
+                publish_mod.release_in_progress(video_id, clip_id, name, reason, state_dir=paths["state_dir"])
+                log.warning("%s/%s : publication en attente : %s", video_id, clip_id, reason)
+                return False
+        except Exception as exc:  # noqa: BLE001 - la marque « en cours » ne reste jamais posee (TASK-81e04, M2)
+            try:
+                publish_mod.release_in_progress(video_id, clip_id, name, f"erreur avant l'envoi : {exc}",
+                                                state_dir=paths["state_dir"])
+            except Exception:  # noqa: BLE001 - l'erreur d'origine prime, celle-ci est journalisee
+                log.exception("%s/%s : marque « en cours » non libérée", video_id, clip_id)
+            raise
         prev_content_check = self._content_check_last.pop(account, None)  # toute autre issue remet la suite à zéro
         try:
             payload = youtube.clip_payload if service == "youtube" else tiktok.clip_payload
-            clip = payload(publish_mod.read_sidecar(self.config.output_dir, video_id, clip_id), self.config.output_dir)
+            sidecar = publish_mod.read_sidecar(self.config.output_dir, video_id, clip_id)
+            if not isinstance(sidecar, dict) or not sidecar.get("video_id") or not sidecar.get("clip_id"):
+                raise publish_mod.PublishError(f"sidecar de clip sans video_id ou clip_id : {video_id}/{clip_id}")
+            clip = payload(sidecar, self.config.output_dir)
             extra = {"options": entry["post_options"]} if entry.get("post_options") else {}
             if service == "tiktok":  # le publieur appelle ceci quand le fichier part : la tentative est datee a cet instant
                 extra["on_file_sent"] = functools.partial(self._record_attempt, entry, name, account, paths["state_dir"])

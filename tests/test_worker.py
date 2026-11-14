@@ -2064,6 +2064,7 @@ def test_the_daily_cap_is_counted_in_the_accounts_timezone_not_the_styles(tmp_pa
 
     published_at = datetime(2026, 1, 1, 16, 0, tzinfo=timezone.utc)   # Tokyo 2026-01-02 01:00, LA 2026-01-01 08:00
     target_at = datetime(2026, 1, 2, 14, 0, tzinfo=timezone.utc)      # Tokyo 2026-01-02 23:00, LA 2026-01-02 06:00
+    _frozen_now(monkeypatch, datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc))  # creneau a venir (pas depasse)
     _seed(tmp_path, "ma_chaine", "00", published_at, status="published", video_id="bbbbbbbbbbb",
           tiktok_publish_at=published_at.isoformat(), published_at=published_at.isoformat())
     _seed(tmp_path, "ma_chaine", "01", target_at, publish_mode="scheduled")
@@ -5861,3 +5862,158 @@ def test_terminate_pid_second_kill_rechecks_process_identity(monkeypatch):
     worker._terminate_pid(4242, 0.0, created_at=111)
 
     assert killed == [worker.signal.SIGTERM]  # pas de second kill sur un pid qui n'est plus le nôtre
+
+
+# --------------------------------------------------------------------------
+# TASK-81e04 : un fichier ou un clip casse n'arrete pas les autres, un creneau depasse est reporte
+# --------------------------------------------------------------------------
+
+
+def _capture_events(monkeypatch):
+    events = []
+    monkeypatch.setattr(tiktok, "emit_event", lambda event, **kw: events.append(event) or event)
+    return events
+
+
+def test_a_corrupt_publish_file_of_one_style_does_not_stop_the_due_entries_of_the_others(tmp_path, monkeypatch, caplog):
+    config = _pub_env(tmp_path, monkeypatch, channels=("ma_chaine", "autre"))
+    events = _capture_events(monkeypatch)
+    _seed(tmp_path, "ma_chaine", "01", _ago(minutes=1))
+    (tmp_path / "state" / "publish" / "autre.json").write_text("{corrupt", encoding="utf-8")
+    pub = FakePublisher()
+    w = _pub_worker(config, pub)
+
+    with caplog.at_level(logging.ERROR):
+        w.tick()
+        w.tick()
+
+    assert [c["clip"]["caption"] for c in pub.calls] == ["legende 01"]
+    # une fois par message, avec le nom du fichier
+    assert [r.getMessage() for r in caplog.records if r.name == worker.log.name and "autre.json" in r.getMessage()] != []
+    assert sum("autre.json" in r.getMessage() for r in caplog.records if r.name == worker.log.name) == 1
+    assert [e["level"] for e in events if "autre.json" in e["reason"]] == ["error"]
+
+
+def test_a_naive_or_malformed_slot_at_is_isolated_to_its_entry(tmp_path, monkeypatch, caplog):
+    config = _pub_env(tmp_path, monkeypatch)
+    events = _capture_events(monkeypatch)
+    _seed(tmp_path, "ma_chaine", "01", _ago(minutes=1))
+    _seed(tmp_path, "ma_chaine", "02", _ago(minutes=1))
+    _seed(tmp_path, "ma_chaine", "03", _ago(minutes=1))
+    path = tmp_path / "state" / "publish" / "ma_chaine.json"
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    rows[0]["slot_at"] = "2026-10-05T18:00:00"  # naif
+    rows[1]["slot_at"] = "pas une date"
+    path.write_text(json.dumps(rows), encoding="utf-8")
+    pub = FakePublisher()
+
+    with caplog.at_level(logging.ERROR):
+        _pub_worker(config, pub).tick()
+
+    assert [c["clip"]["caption"] for c in pub.calls] == ["legende 03"]
+    assert "ma_chaine.json" in caplog.text and any(e["level"] == "error" for e in events)
+
+
+def test_an_unreadable_sidecar_fails_that_entry_alone_without_halting_the_account(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch)
+    _seed(tmp_path, "ma_chaine", "01", _ago(minutes=2))
+    _seed(tmp_path, "ma_chaine", "02", _ago(minutes=1))
+    (tmp_path / "output" / "aaaaaaaaaaa" / "01.json").write_text('{"video_id": "aa', encoding="utf-8")
+    pub = FakePublisher()
+    w = _pub_worker(config, pub)
+
+    w.tick()
+    first = next(e for e in _entries(tmp_path) if e["clip_id"] == "01")
+    assert first["status"] == "failed" and first["halted"] is False
+    assert "aaaaaaaaaaa/01" in first["error"]
+    w.tick()
+
+    assert [c["clip"]["caption"] for c in pub.calls] == ["legende 02"]
+
+
+def test_a_sidecar_without_video_id_fails_that_entry_without_halting_the_account(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch)
+    _seed(tmp_path, "ma_chaine", "01", _ago(minutes=1))
+    side = tmp_path / "output" / "aaaaaaaaaaa" / "01.json"
+    data = json.loads(side.read_text(encoding="utf-8"))
+    del data["video_id"]
+    side.write_text(json.dumps(data), encoding="utf-8")
+    pub = FakePublisher()
+
+    _pub_worker(config, pub).tick()
+
+    entry = _entries(tmp_path)[0]
+    assert pub.calls == [] and entry["status"] == "failed" and entry["halted"] is False
+    assert "video_id" in entry["error"]
+
+
+def test_an_exception_after_mark_in_progress_releases_the_mark_before_propagating(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch)
+    _seed(tmp_path, "ma_chaine", "01", _ago(minutes=1))
+    marked = []
+    real_mark = publish.mark_in_progress
+
+    def mark(*args, **kwargs):
+        marked.append(1)
+        return real_mark(*args, **kwargs)
+
+    real_list = accounts_mod.list_accounts
+
+    def list_accounts(cfg):
+        if marked:
+            raise accounts_mod.AccountsError("accounts.json illisible")
+        return real_list(cfg)
+
+    monkeypatch.setattr(publish, "mark_in_progress", mark)
+    monkeypatch.setattr(accounts_mod, "list_accounts", list_accounts)
+    w = _pub_worker(config, FakePublisher())
+
+    with pytest.raises(accounts_mod.AccountsError):
+        w._publish_next()
+
+    entry = _entries(tmp_path)[0]
+    assert not entry.get("in_progress_since") and entry["status"] == "scheduled"
+
+
+def _scheduled_seed(tmp_path, slot_at, **extra):
+    _seed(tmp_path, "ma_chaine", "01", slot_at, publish_mode="scheduled", **extra)
+
+
+def test_a_scheduled_entry_whose_slot_has_passed_is_postponed_to_the_next_free_slot(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch)  # creneaux _WEEK
+    now = _frozen_now(monkeypatch, _CC_NOW)
+    _scheduled_seed(tmp_path, now - timedelta(minutes=30))
+    pub = FakePublisher()
+
+    _pub_worker(config, pub).tick()
+
+    entry = _entries(tmp_path)[0]
+    assert pub.calls == [] and entry["status"] == "scheduled"
+    assert datetime.fromisoformat(entry["slot_at"]) >= now + timedelta(minutes=15)
+    assert "reporté" in entry["postponed_reason"] and "schedule_min_minutes" in entry["postponed_reason"]
+
+
+def test_a_scheduled_entry_within_the_minimum_lead_is_postponed_not_failed(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch)
+    now = _frozen_now(monkeypatch, _CC_NOW)
+    _scheduled_seed(tmp_path, now + timedelta(minutes=5))
+    pub = FakePublisher()
+
+    _pub_worker(config, pub).tick()
+
+    entry = _entries(tmp_path)[0]
+    assert pub.calls == [] and entry["status"] == "scheduled" and not entry.get("error")
+    assert datetime.fromisoformat(entry["slot_at"]) >= now + timedelta(minutes=15)
+
+
+def test_a_scheduled_entry_past_its_slot_waits_with_a_reason_when_the_account_has_no_slot(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch, slots=[])
+    now = _frozen_now(monkeypatch, _CC_NOW)
+    _scheduled_seed(tmp_path, now - timedelta(minutes=30))
+    pub = FakePublisher()
+
+    _pub_worker(config, pub).tick()
+
+    entry = _entries(tmp_path)[0]
+    assert pub.calls == [] and entry["status"] == "scheduled" and not entry.get("error")
+    assert "créneau" in entry["waiting_reason"] and "schedule_min_minutes" in entry["waiting_reason"]
