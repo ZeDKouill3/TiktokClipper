@@ -5745,3 +5745,119 @@ def test_lead_cap_waits_in_the_worker_without_opening_the_browser_then_sends(tmp
     _pub_worker(config, pub).tick()
 
     assert len(pub.calls) == 1 and _cc_zz(tmp_path)["status"] == "published"
+
+
+# --------------------------------------------------------------------------
+# TASK-5ee96 : plus de mort silencieuse (boucle protégée, reprises gardées, battement, kill revérifié)
+# --------------------------------------------------------------------------
+
+
+def test_loop_survives_a_tick_that_raises_and_logs_its_traceback(tmp_path, monkeypatch, caplog):
+    config = _config(tmp_path, poll_interval_s=1)
+    calls = []
+
+    def tick(self):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("queue.json tronqué")
+
+    monkeypatch.setattr(worker.Worker, "tick", tick)
+
+    class _Stop(Exception):
+        pass
+
+    sleeps = []
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            raise _Stop
+
+    monkeypatch.setattr(worker.time, "sleep", fake_sleep)
+    w = worker.Worker(config=config, spawner=FakeSpawner())
+    with caplog.at_level(logging.ERROR, logger=worker.log.name), pytest.raises(_Stop):
+        w.loop()
+
+    assert len(calls) == 2  # la boucle a continué après l'exception
+    failure = [r for r in caplog.records if "tour du worker en échec" in r.getMessage()]
+    assert len(failure) == 1 and failure[0].exc_info is not None
+
+
+def test_loop_exits_with_an_explicit_error_after_n_consecutive_failures(tmp_path, monkeypatch, caplog):
+    config = _config(tmp_path, max_consecutive_failures=3)
+    calls = []
+
+    def tick(self):
+        calls.append(1)
+        raise OSError("disque")
+
+    monkeypatch.setattr(worker.Worker, "tick", tick)
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+
+    w = worker.Worker(config=config, spawner=FakeSpawner())
+    with caplog.at_level(logging.ERROR, logger=worker.log.name), pytest.raises(worker.WorkerError, match="3 échecs"):
+        w.loop()
+
+    assert len(calls) == 3
+
+
+def test_loop_failure_counter_resets_after_a_good_tick(tmp_path, monkeypatch):
+    config = _config(tmp_path, max_consecutive_failures=2)
+    outcomes = iter(["boom", "ok", "boom", "ok", "stop"])
+
+    def tick(self):
+        outcome = next(outcomes)
+        if outcome == "boom":
+            raise ValueError("x")
+        if outcome == "stop":
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(worker.Worker, "tick", tick)
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+    with pytest.raises(KeyboardInterrupt):  # jamais WorkerError : jamais 2 échecs de suite
+        worker.Worker(config=config, spawner=FakeSpawner()).loop()
+
+
+def test_startup_survives_unreadable_queue_in_orphan_and_prefetch_recovery(tmp_path, caplog):
+    config = _config(tmp_path)
+    path = worker._queue_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{tronqué", encoding="utf-8")
+    w = worker.Worker(config=config, spawner=FakeSpawner())
+
+    with caplog.at_level(logging.ERROR, logger=worker.log.name):
+        w._recover_orphans()  # ne lève pas
+        w._recover_prefetch()
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("orphelines" in m for m in messages) and any("préchargement" in m for m in messages)
+
+
+def test_beat_oserror_is_logged_once_per_message_and_never_kills_the_tick(tmp_path, monkeypatch, caplog):
+    config = _hb_config(tmp_path)
+
+    def full_disk(self, *a, **k):
+        raise OSError("disque plein")
+
+    monkeypatch.setattr(Path, "write_text", full_disk)
+    w = worker.Worker(config=config, spawner=FakeSpawner())
+
+    with caplog.at_level(logging.WARNING, logger=worker.log.name):
+        w._beat(force=True)
+        w._beat(force=True)  # même message : pas de seconde ligne
+
+    lines = [r for r in caplog.records if "battement" in r.getMessage() and "disque plein" in r.getMessage()]
+    assert len(lines) == 1
+
+
+def test_terminate_pid_second_kill_rechecks_process_identity(monkeypatch):
+    alive = iter([True, False])  # vivant au contrôle initial, pid réattribué ensuite
+    monkeypatch.setattr(worker, "process_alive", lambda pid, created_at: next(alive))
+    monkeypatch.setattr(worker, "_pid_alive", lambda pid: True)  # le pid « vit » encore (un autre processus)
+    killed = []
+    monkeypatch.setattr(worker.os, "kill", lambda pid, sig: killed.append(sig))
+    monkeypatch.setattr(worker.time, "sleep", lambda s: None)
+
+    worker._terminate_pid(4242, 0.0, created_at=111)
+
+    assert killed == [worker.signal.SIGTERM]  # pas de second kill sur un pid qui n'est plus le nôtre

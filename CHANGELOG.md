@@ -10,6 +10,10 @@ Notes de version détaillées : [`docs/releases/`](docs/releases/).
 
 ## [Non publié]
 
+### Corrigé
+
+- Worker et `serve` : plus de mort silencieuse. Un tour du worker qui lève est journalisé avec sa trace et la boucle continue (`[worker] max_consecutive_failures`, 20 par défaut : sortie en erreur explicite au-delà) ; les reprises de démarrage et le battement (toute `OSError`) sont gardés ; `sys.excepthook` et `threading.excepthook` journalisent en critique ; le journal porte « démarré pid=… » et « arrêté (raison) », Ctrl+C et `uvicorn.run` qui lève compris ; le second kill d'un processus revérifie son identité avant de tuer (pid réattribué).
+
 ### Ajouté
 
 - `[tiktok] schedule_lead_max_hours` (0 par défaut = envoi dès que possible) : une publication programmée n'est envoyée à TikTok qu'à moins de N heures de son créneau ; avant, elle attend avec la raison et l'heure à partir de laquelle l'envoi partira. Relevé du 26/10 au 11/11 sur les trois comptes de clips : envois à moins de 24 h du créneau, aucun post sur 40 sous 20 vues (médiane 708) ; à 2 jours et plus, 64 sur 197 (médiane 41).

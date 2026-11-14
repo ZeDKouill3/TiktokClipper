@@ -5,6 +5,7 @@ import dataclasses
 import importlib.resources
 import json
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -408,15 +409,18 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "worker":
             from clipper import worker as worker_mod
 
-            try:
-                # relecture : le fichier reellement charge et sa base, pas config.toml seul
-                config_path = args.config if args.config is not None else "config.toml"
-                config_base = "config.toml" if args.config is not None else None
-                worker_mod.Worker(config=config, config_path=config_path, config_base=config_base).loop()
-            except worker_mod.WorkerError as exc:  # ex. « un worker tourne déjà (pid N) » (audit 10/10, A1)
-                print(f"erreur : {exc}", file=sys.stderr)
-                return 1
-            return 0
+            def _run_worker() -> int:
+                try:
+                    # relecture : le fichier reellement charge et sa base, pas config.toml seul
+                    config_path = args.config if args.config is not None else "config.toml"
+                    config_base = "config.toml" if args.config is not None else None
+                    worker_mod.Worker(config=config, config_path=config_path, config_base=config_base).loop()
+                except worker_mod.WorkerError as exc:  # ex. « un worker tourne déjà (pid N) » (audit 10/10, A1)
+                    print(f"erreur : {exc}", file=sys.stderr)
+                    return 1
+                return 0
+
+            return _logged_run("worker", _run_worker)
         elif args.command == "drain":
             return _drain(config, args.wait)
         elif args.command == "models":
@@ -453,14 +457,17 @@ def main(argv: list[str] | None = None) -> int:
             config_args = ["--config", args.config] if args.config is not None else []
             from clipper import worker as worker_mod
 
-            worker_proc = _popen([sys.executable, "-m", "clipper", *config_args, "worker"])
-            worker_mod.watch_spawned(worker_proc, config)  # worker refusé (orphelin) : visible dans l'interface
-            try:
-                uvicorn.run(create_app(config=config), host=host, port=int(port))
-            finally:
-                # le worker ET son enfant en cours (ffmpeg, yt-dlp...) : pas d'orphelin (audit 10/10, A2)
-                worker_mod.terminate_tree(worker_proc.pid, float(config.section("worker")["cancel_grace_s"]))
-            return 0
+            def _run_serve() -> int:
+                worker_proc = _popen([sys.executable, "-m", "clipper", *config_args, "worker"])
+                worker_mod.watch_spawned(worker_proc, config)  # worker refusé (orphelin) : visible dans l'interface
+                try:
+                    uvicorn.run(create_app(config=config), host=host, port=int(port))
+                finally:
+                    # le worker ET son enfant en cours (ffmpeg, yt-dlp...) : pas d'orphelin (audit 10/10, A2)
+                    worker_mod.terminate_tree(worker_proc.pid, float(config.section("worker")["cancel_grace_s"]))
+                return 0
+
+            return _logged_run("serve", _run_serve)
         else:
             if args.watch:
                 pipeline.watch_queue(config=config, interval=args.interval)
@@ -476,6 +483,30 @@ def main(argv: list[str] | None = None) -> int:
 
     _report(state)
     return _exit_code(state)
+
+
+def _logged_run(kind: str, run) -> int:
+    """Lance ``run`` (serve ou worker) avec les crochets d'exception posés et une ligne « démarré pid=… » puis
+    « arrêté (raison) » dans le journal, sur sortie normale, code non nul, Ctrl+C ou exception (ADR-ad2e : une
+    mort n'est jamais muette)."""
+    from clipper import journal
+
+    lifecycle = logging.getLogger("clipper.lifecycle")
+    journal.install_crash_hooks()
+    lifecycle.info("%s démarré pid=%d", kind, os.getpid())
+    try:
+        code = run()
+    except KeyboardInterrupt:
+        lifecycle.info("%s arrêté (Ctrl+C)", kind)
+        raise
+    except SystemExit as exc:
+        lifecycle.info("%s arrêté (sortie, code %s)", kind, exc.code)
+        raise
+    except BaseException as exc:
+        lifecycle.critical("%s arrêté sur exception : %s", kind, exc, exc_info=True)
+        raise
+    lifecycle.info("%s arrêté (code %s)", kind, code)
+    return code
 
 
 if __name__ == "__main__":

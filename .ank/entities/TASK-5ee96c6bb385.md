@@ -5,7 +5,7 @@ slug: worker-et-serve-plus-de-mort-silencieuse-boucle
 title: "Worker et serve : plus de mort silencieuse (boucle protégée, crochets d'exception, lignes démarré/arrêté)"
 created: 2026-11-14T07:56:24Z
 author: nicoc@zedk_ordi
-status: open
+status: done
 scope:
   - clipper/worker.py
   - clipper/__main__.py
@@ -20,8 +20,15 @@ done_criteria: |
 criteria_by: creator
 verify: [tests]
 method: tdd
+proof:
+  - type: test
+    ref: local/46f28f32bfb7@354ba37
+    tree: scope/98c1c40d626c
+    criteria: 4fedf6a70ac1
+    verifier: tests@c7b454d16c90
+    via: verifier
 schema: 4
-version: 1
+version: 3
 ---
 
 Revue r-publication du 14/11 (research/reviews/publication.md dans le dépôt principal, sections C1 et M4 : lis-les, elles donnent les lignes exactes). Constat : serve et son worker meurent plusieurs fois par semaine sans aucune ligne dans le journal ; Worker.loop fait while True: tick() sans try, main n'attrape que WorkerError, aucune trace hors stderr. Aucune valeur de secours silencieuse (ADR-ad2e) : tout échec est journalisé. Ne pas toucher au chemin de publication (_publish_next, _publish_one) : une autre tâche s'en occupe. Interdits : state/, config.toml, navigateur, réseau.
