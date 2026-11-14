@@ -5695,3 +5695,53 @@ def test_pending_cap_waits_in_the_worker_without_opening_the_browser(tmp_path, m
     entry = _cc_zz(tmp_path)
     assert pub.calls == [] and entry["status"] == "scheduled"
     assert "plafond schedule_max_pending = 5" in entry["waiting_reason"]
+
+
+# Avance maximale de programmation (schedule_lead_max_hours) : l'entree attend que son creneau soit assez proche.
+
+
+def _lead_reason(hours, slot_in, mode="scheduled"):
+    settings = {**tiktok.CONFIG_DEFAULTS, "schedule_lead_max_hours": hours}
+    return worker.Worker._lead_cap_reason(mode, _CC_NOW + slot_in, settings, _CC_NOW)
+
+
+def test_lead_cap_holds_a_scheduled_entry_until_its_slot_is_close_enough():
+    # _CC_NOW = 15/06 14:00 a Paris ; creneau dans 30 h (16/06 20:00), avance maximale 20 h : envoi des 16/06 00:00
+    assert _lead_reason(20, timedelta(hours=30)) == (
+        "créneau dans plus de 20 h (avance maximale schedule_lead_max_hours) : "
+        "envoi à partir du 16/06 00:00 (heure de Paris)")
+    # reprise le jour meme : l'heure seule
+    assert _lead_reason(2, timedelta(hours=5)) == (
+        "créneau dans plus de 2 h (avance maximale schedule_lead_max_hours) : envoi à partir de 17:00 (heure de Paris)")
+
+
+def test_lead_cap_lets_an_entry_go_when_close_enough_off_or_immediate():
+    assert _lead_reason(20, timedelta(hours=20)) is None
+    assert _lead_reason(20, timedelta(hours=3)) is None
+    assert _lead_reason(0, timedelta(days=5)) is None  # 0 = pas de retenue (defaut)
+    assert _lead_reason(20, timedelta(hours=30), mode="immediate") is None
+    assert tiktok.CONFIG_DEFAULTS["schedule_lead_max_hours"] == 0
+
+
+def test_lead_cap_setting_is_validated():
+    with pytest.raises(tiktok.TikTokError, match="schedule_lead_max_hours"):
+        tiktok.get_settings(Config(mode="review", workspace_dir=Path("."), output_dir=Path("."),
+                                   _sections={"tiktok": {"schedule_lead_max_hours": -1}}))
+
+
+def test_lead_cap_waits_in_the_worker_without_opening_the_browser_then_sends(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch, tiktok_settings={**_CC_SETTINGS, "schedule_lead_max_hours": 20})
+    _frozen_now(monkeypatch, _CC_NOW)
+    _seed(tmp_path, "ma_chaine", "zz", _CC_NOW + timedelta(hours=30), publish_mode="scheduled")
+    pub = FakePublisher()
+
+    _pub_worker(config, pub).tick()
+
+    entry = _cc_zz(tmp_path)
+    assert pub.calls == [] and entry["status"] == "scheduled"
+    assert "schedule_lead_max_hours" in entry["waiting_reason"]
+
+    _frozen_now(monkeypatch, _CC_NOW + timedelta(hours=11))  # creneau a 19 h : l'envoi part
+    _pub_worker(config, pub).tick()
+
+    assert len(pub.calls) == 1 and _cc_zz(tmp_path)["status"] == "published"

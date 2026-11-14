@@ -12,6 +12,7 @@ Notes de version détaillées : [`docs/releases/`](docs/releases/).
 
 ### Ajouté
 
+- `[tiktok] schedule_lead_max_hours` (0 par défaut = envoi dès que possible) : une publication programmée n'est envoyée à TikTok qu'à moins de N heures de son créneau ; avant, elle attend avec la raison et l'heure à partir de laquelle l'envoi partira. Relevé du 26/10 au 11/11 sur les trois comptes de clips : envois à moins de 24 h du créneau, aucun post sur 40 sous 20 vues (médiane 708) ; à 2 jours et plus, 64 sur 197 (médiane 41).
 - `clipper drain [--wait SECONDES]` et `/api/worker/drain` (POST, GET, DELETE) : mise en attente des publications avant de redémarrer `serve`. Le worker ne commence plus aucune publication (TikTok ni YouTube) ni relevé de statistiques, termine celle en cours, et `--wait` rend 0 dès que plus rien n'est piloté (non nul au délai dépassé, sans rien tuer). Un worker qui démarre lève une demande restée posée.
 
 ## [0.8.0] - 2026-10-19

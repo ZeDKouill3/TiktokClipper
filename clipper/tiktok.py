@@ -60,6 +60,9 @@ CONFIG_DEFAULTS: dict[str, object] = {
     "schedule_max_days": 10,           # limite native de TikTok Studio
     "schedule_min_minutes": 15,        # avance minimale native de TikTok Studio
     "schedule_max_pending": 47,        # posts programmes en attente par compte au-dela desquels « Programmer » ne fait plus rien (releve reel 22-28/10 : 2 comptes bloques a 47)
+    "schedule_lead_max_hours": 0,      # avance maximale de programmation : une publication programmee n'est envoyee a TikTok qu'a moins de N h de son creneau
+                                       # (avant, elle attend avec la raison) ; 0 = envoi des que possible. Releve 26/10-11/11 : envois a moins de 24 h du creneau,
+                                       # 0 post sur 40 sous 20 vues (mediane 708) ; a 2 jours et plus, 64 sur 197 (mediane 41)
     "action_timeout_s": 30,            # attente d'un element de la page
     "click_timeout_s": 10,             # attente d'un clic (Playwright : 30 s) ; intercepte par une fenetre : elle est fermee, puis un seul nouvel essai
     "upload_timeout_s": 300,           # attente de la fin de l'envoi du mp4
@@ -165,7 +168,7 @@ def get_settings(config: Config | None) -> dict[str, Any]:
                          ("max_action_delay_s", 0), ("schedule_max_days", 1), ("schedule_min_minutes", 0), ("schedule_max_pending", 1),
                          ("action_timeout_s", 1), ("click_timeout_s", 1), ("upload_timeout_s", 1), ("publish_confirm_timeout_s", 1),
                          ("content_check_timeout_s", 1), ("content_check_retrigger_s", 1), ("content_check_retriggers", 0),
-                         ("content_check_daily_cap", 0),
+                         ("content_check_daily_cap", 0), ("schedule_lead_max_hours", 0),
                          ("poll_interval_s", 1), ("type_delay_ms", 0)):
         value = settings[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < minimum:

@@ -1516,6 +1516,10 @@ class Worker:
             return False
 
         if service == "tiktok":
+            lead_reason = self._lead_cap_reason(mode, slot, settings, now)
+            if lead_reason is not None:  # creneau trop lointain : l'entree attend, ni echec ni arret R4
+                self._wait(entry, name, account, lead_reason, paths["state_dir"])
+                return False
             cap_reason = self._content_check_cap_reason(entry, account, settings, now, scope)
             if cap_reason is not None:  # plafond preventif : l'entree attend, ni echec ni arret R4 (waiting_reason)
                 self._wait(entry, name, account, cap_reason, paths["state_dir"])
@@ -1649,6 +1653,20 @@ class Worker:
         resume = (counted[len(counted) - cap] + timedelta(hours=24)).astimezone(_PARIS)
         when = resume.strftime("%H:%M") if resume.date() == now.astimezone(_PARIS).date() else resume.strftime("%d/%m %H:%M")
         return f"plafond de vérifications TikTok ({cap}/24 h) : reprise vers {when} (heure de Paris)"
+
+    @staticmethod
+    def _lead_cap_reason(mode: str, slot: datetime, settings: dict[str, Any], now: datetime) -> str | None:
+        """Avance maximale de programmation (``[tiktok] schedule_lead_max_hours``, 0 = sans retenue) : une entree
+        programmee n'est envoyee a TikTok qu'a moins de N heures de son creneau. Rend la raison d'attente avec
+        l'heure a partir de laquelle l'envoi partira (heure de Paris), None si l'entree peut partir."""
+        hours = settings["schedule_lead_max_hours"]
+        if mode != "scheduled" or hours <= 0 or slot - now <= timedelta(hours=hours):
+            return None
+        resume = (slot - timedelta(hours=hours)).astimezone(_PARIS)
+        when = (f"de {resume.strftime('%H:%M')}" if resume.date() == now.astimezone(_PARIS).date()
+                else f"du {resume.strftime('%d/%m %H:%M')}")
+        return (f"créneau dans plus de {hours:g} h (avance maximale schedule_lead_max_hours) : "
+                f"envoi à partir {when} (heure de Paris)")
 
     @staticmethod
     def _pending_cap_reason(mode: str, account: str, settings: dict[str, Any], now: datetime,
