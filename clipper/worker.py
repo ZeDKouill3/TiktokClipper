@@ -61,6 +61,9 @@ CONFIG_DEFAULTS: dict[str, object] = {
     "prefetch_download": True,
     # Espace libre minimal du disque (en Go) pour télécharger la vidéo suivante à l'avance.
     "prefetch_min_free_gb": 60,
+    # Un tour (tick) qui lève est journalisé avec sa trace et la boucle continue ; après ce nombre d'échecs
+    # consécutifs le worker sort avec une erreur explicite (code non nul) au lieu de tourner à vide.
+    "max_consecutive_failures": 20,
 }
 
 WORKER_COMMAND = "python -m clipper worker"
@@ -625,6 +628,8 @@ def _terminate_pid(pid: int | None, grace: float, *, created_at: int | None = No
     while _pid_alive(pid) and time.monotonic() < deadline:
         time.sleep(0.05)
     if _pid_alive(pid):
+        if not process_alive(pid, created_at):  # pid réattribué pendant la grâce : plus notre processus
+            return
         try:
             _kill_descendants(pid)
             os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
@@ -884,6 +889,7 @@ class Worker:
         self._prefetch_log_handle: Any | None = None
         self._low_disk_logged: set[str] = set()
         self._pid_created_at = _process_created_at(os.getpid())  # identite de ce worker dans le battement
+        self._beat_errors_logged: set[str] = set()
 
     def startup(self) -> None:
         """Reprises de demarrage du vrai worker (``clipper worker``, appelees par ``loop`` seulement) : refus si un
@@ -970,18 +976,24 @@ class Worker:
         if not force and self._last_beat is not None and now - self._last_beat < float(section["heartbeat_interval_s"]):
             return
         path = heartbeat_path(self.config)
-        path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps({"pid": os.getpid(), "at": datetime.now(timezone.utc).isoformat(),
-                                   "pid_created_at": self._pid_created_at}), encoding="utf-8")
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps({"pid": os.getpid(), "at": datetime.now(timezone.utc).isoformat(),
+                                       "pid_created_at": self._pid_created_at}), encoding="utf-8")
             channel_mod.replace_retrying(tmp, path)  # un lecteur (API web) peut tenir worker.json ouvert sous Windows
-        except PermissionError as exc:
-            # 10/10 : cette erreur tuait la boucle du worker. Un battement manqué n'est qu'un retard : journalisé,
-            # le suivant réessaie au prochain tick (_last_beat inchangé).
-            tmp.unlink(missing_ok=True)
-            log.warning("battement du worker non écrit (%s verrouillé par un lecteur) : %s ; réessai au prochain tick",
-                        path, exc)
+        except OSError as exc:
+            # 10/10 : PermissionError tuait la boucle ; toute OSError (disque plein, antivirus...) pareil. Un
+            # battement manqué n'est qu'un retard : journalisé une fois par message, le suivant réessaie au
+            # prochain tick (_last_beat inchangé).
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            message = f"battement du worker non écrit ({path}) : {exc} ; réessai au prochain tick"
+            if message not in self._beat_errors_logged:
+                self._beat_errors_logged.add(message)
+                log.warning("%s", message)
             return
         self._last_beat = now
 
@@ -989,10 +1001,13 @@ class Worker:
         """Au demarrage, une entree ``running`` dont le processus est mort (worker precedent tombe, ou pid
         reattribue apres un redemarrage du PC) repasse ``waiting`` en tete (SPEC-74e9 §2.4). Une entree
         ``running`` dont l'enfant vit encore est laissee : ``_launch_head`` l'adopte au premier tick."""
-        with _locked(self._path):
-            entries = _read_queue(self._path)
-            if _requeue_dead_running(entries):
-                _write_queue(self._path, entries)
+        try:
+            with _locked(self._path):
+                entries = _read_queue(self._path)
+                if _requeue_dead_running(entries):
+                    _write_queue(self._path, entries)
+        except (WorkerError, OSError, ValueError, KeyError, TypeError) as exc:
+            log.error("reprise des entrées orphelines de la file impossible : %s", exc)
 
     def _recover_prefetch(self) -> None:
         """Au demarrage, un prechargement ``running`` laisse par un worker arrete : son processus, s'il vit encore,
@@ -1000,19 +1015,23 @@ class Worker:
         tour de tete, son download refait par le ``run``."""
         grace = float(self.config.section("worker")["cancel_grace_s"])
         stale: list[dict[str, Any]] = []
-        with _locked(self._path):
-            entries = _read_queue(self._path)
-            for entry in entries:
-                if entry["status"] == "waiting" and entry.get("prefetch") == "running":
-                    stale.append(dict(entry))
-                    for field in _PREFETCH_FIELDS:
-                        entry.pop(field, None)
-            if stale:
-                _write_queue(self._path, entries)
-        for entry in stale:
-            _terminate_pid(entry.get("prefetch_pid"), grace, created_at=entry.get("prefetch_pid_created_at"))
-            _reset_download_step(entry["video_id"], self.config)
-            log.warning("%s : prechargement du download interrompu par l'arret du worker, abandonne", entry["video_id"])
+        try:
+            with _locked(self._path):
+                entries = _read_queue(self._path)
+                for entry in entries:
+                    if entry["status"] == "waiting" and entry.get("prefetch") == "running":
+                        stale.append(dict(entry))
+                        for field in _PREFETCH_FIELDS:
+                            entry.pop(field, None)
+                if stale:
+                    _write_queue(self._path, entries)
+            for entry in stale:
+                _terminate_pid(entry.get("prefetch_pid"), grace, created_at=entry.get("prefetch_pid_created_at"))
+                _reset_download_step(entry["video_id"], self.config)
+                log.warning("%s : prechargement du download interrompu par l'arret du worker, abandonne",
+                            entry["video_id"])
+        except (WorkerError, OSError, ValueError, KeyError, TypeError) as exc:
+            log.error("reprise du préchargement interrompu impossible : %s", exc)
 
     def tick(self) -> None:
         """Une iteration : termine l'entree si l'enfant courant a fini,
@@ -2152,11 +2171,24 @@ class Worker:
     def loop(self) -> None:
         """Boucle jusqu'a interruption, a l'intervalle ``poll_interval_s``
         de CONFIG_DEFAULTS (SPEC-74e9 §2.3)."""
-        interval = float(self.config.section("worker")["poll_interval_s"])
+        section = self.config.section("worker")
+        interval = float(section["poll_interval_s"])
+        max_failures = int(section["max_consecutive_failures"])
         self.startup()
+        failures = 0
         try:
             while True:
-                self.tick()
+                try:
+                    self.tick()
+                    failures = 0
+                except Exception:  # noqa: BLE001 - un tour en échec ne tue jamais le worker (ADR-ad2e : journalisé)
+                    failures += 1
+                    log.exception("tour du worker en échec (%d/%d consécutifs)", failures, max_failures)
+                    if failures >= max_failures:
+                        message = (f"{failures} échecs consécutifs du tour du worker : arrêt "
+                                   "(voir la trace du journal, corrige puis relance « clipper serve »)")
+                        log.critical("%s", message)
+                        raise WorkerError(message)
                 time.sleep(interval)
         finally:
             self.shutdown()

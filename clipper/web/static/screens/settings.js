@@ -45,6 +45,7 @@ const SET_LABELS = {
   "worker.heartbeat_interval_s": "Intervalle de signe de vie (s)",
   "worker.prefetch_download": "Télécharger la vidéo suivante en avance",
   "worker.prefetch_min_free_gb": "Espace libre minimum pour l'avance (Go)",
+  "worker.max_consecutive_failures": "Échecs de tour consécutifs avant arrêt du worker",
   "network.expected_country": "Pays attendu de l'IP",
   "network.geo_url": "Service de géolocalisation de l'IP",
   "network.cache_s": "Durée de cache de l'IP (s)",

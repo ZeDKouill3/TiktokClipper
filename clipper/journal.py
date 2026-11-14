@@ -237,6 +237,30 @@ def install(process_kind: str, config: Any) -> JournalHandler | None:
     return handler
 
 
+def install_crash_hooks() -> None:
+    """Crochets d'exception du processus : une exception non attrapée (fil principal ou autre fil) est journalisée
+    en critique avec sa trace avant de mourir, au lieu de partir sur stderr seulement. Ctrl+C reste à
+    l'interpréteur. L'ancien crochet est rappelé ensuite (trace console inchangée)."""
+    crash_log = logging.getLogger("clipper.crash")
+    previous_sys = sys.excepthook
+    previous_thread = threading.excepthook
+
+    def _sys_hook(exc_type, exc, tb):
+        if not issubclass(exc_type, KeyboardInterrupt):
+            crash_log.critical("exception non attrapée : %s", exc, exc_info=(exc_type, exc, tb))
+        previous_sys(exc_type, exc, tb)
+
+    def _thread_hook(args):
+        if args.exc_type is not SystemExit:
+            name = args.thread.name if args.thread is not None else "?"
+            crash_log.critical("exception non attrapée dans le fil %s : %s", name, args.exc_value,
+                               exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+        previous_thread(args)
+
+    sys.excepthook = _sys_hook
+    threading.excepthook = _thread_hook
+
+
 def tail(config: Any, *, limit: int = 200, text: str | None = None, level: str | None = None) -> dict[str, Any]:
     """Dernieres lignes du journal, tous les fichiers encore presents
     (retention_days jours) concatenes dans l'ordre chronologique, filtrees
