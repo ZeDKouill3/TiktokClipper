@@ -5748,6 +5748,28 @@ def test_lead_cap_waits_in_the_worker_without_opening_the_browser_then_sends(tmp
     assert len(pub.calls) == 1 and _cc_zz(tmp_path)["status"] == "published"
 
 
+def test_lead_cap_entry_already_waiting_is_skipped_without_the_costly_checks(tmp_path, monkeypatch):
+    # 14/11 : 138 entrees retenues repassaient par tous les controles de compte a chaque tour (60 % d'un coeur).
+    config = _pub_env(tmp_path, monkeypatch, tiktok_settings={**_CC_SETTINGS, "schedule_lead_max_hours": 20})
+    _frozen_now(monkeypatch, _CC_NOW)
+    _seed(tmp_path, "ma_chaine", "zz", _CC_NOW + timedelta(hours=30), publish_mode="scheduled")
+    pub = FakePublisher()
+    w = _pub_worker(config, pub)
+    w.tick()  # premier passage : la raison d'attente est posee
+    assert "schedule_lead_max_hours" in _cc_zz(tmp_path)["waiting_reason"]
+
+    seen = []
+    original = worker.Worker._publish_one
+    monkeypatch.setattr(worker.Worker, "_publish_one",
+                        lambda self, *a, **k: (seen.append(a[2]["clip_id"]), original(self, *a, **k))[1])
+    w.tick()
+    assert seen == [] and pub.calls == []  # deja en attente pour cette raison : aucun controle refait
+
+    _frozen_now(monkeypatch, _CC_NOW + timedelta(hours=11))  # la fenetre s'ouvre : l'entree repasse par les controles
+    w.tick()
+    assert seen == ["zz"] and len(pub.calls) == 1 and _cc_zz(tmp_path)["status"] == "published"
+
+
 # --------------------------------------------------------------------------
 # TASK-5ee96 : plus de mort silencieuse (boucle protégée, reprises gardées, battement, kill revérifié)
 # --------------------------------------------------------------------------

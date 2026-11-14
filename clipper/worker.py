@@ -1489,6 +1489,13 @@ class Worker:
                 mode = entry.get("publish_mode") or str(settings["publish_mode"])
                 window = timedelta(days=float(settings["schedule_max_days"])) if mode == "scheduled" else timedelta(0)
                 if slot - window <= now:  # immediat : creneau atteint ; programme : date dans la fenetre TikTok
+                    if service == "tiktok":
+                        # deja retenue pour cette raison (schedule_lead_max_hours) : rien a refaire a ce tour. Sans
+                        # cela chaque entree retenue repassait par tous les controles de compte toutes les 5 s
+                        # (138 entrees, 60 % d'un coeur, releve du 14/11) ; ils reprennent a l'ouverture de la fenetre.
+                        held = self._lead_cap_reason(mode, slot, settings, now)
+                        if held is not None and entry.get("waiting_reason") == held:
+                            continue
                     due.append((slot, name, entry, mode, service, settings))
         due.sort(key=lambda d: (d[0], d[1], d[2]["clip_id"]))
         for slot, name, entry, mode, service, settings in due:
