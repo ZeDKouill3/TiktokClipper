@@ -20,11 +20,14 @@ adopte (surveille jusqu'a sa fin), jamais double.
 
 from __future__ import annotations
 
+import cProfile
 import ctypes
 import functools
+import io
 import json
 import logging
 import os
+import pstats
 import shutil
 import signal
 import sys
@@ -64,6 +67,9 @@ CONFIG_DEFAULTS: dict[str, object] = {
     # Un tour (tick) qui lève est journalisé avec sa trace et la boucle continue ; après ce nombre d'échecs
     # consécutifs le worker sort avec une erreur explicite (code non nul) au lieu de tourner à vide.
     "max_consecutive_failures": 20,
+    # Diagnostic : profile les N premiers tours (cProfile) et ecrit le classement des fonctions les plus couteuses
+    # dans <[journal] dir>/worker-profile.txt ; 0 = jamais. Sert a savoir ou passe le temps d'un tour au repos.
+    "profile_ticks": 0,
 }
 
 WORKER_COMMAND = "python -m clipper worker"
@@ -2245,18 +2251,42 @@ class Worker:
         if entry is not None:
             _reset_download_step(entry["video_id"], self.config)
 
+    def _write_profile(self, profiler: cProfile.Profile, ticks: int) -> Path:
+        """Ecrit le profil des ``ticks`` premiers tours (``[worker] profile_ticks``) : les 45 fonctions les plus
+        couteuses en temps cumule, dans ``<[journal] dir>/worker-profile.txt``."""
+        out = io.StringIO()
+        pstats.Stats(profiler, stream=out).sort_stats("cumulative").print_stats(45)
+        path = Path(str(self.config.section("journal")["dir"])) / "worker-profile.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"profil de {ticks} tour(s) du worker, {_now_iso()}\n" + out.getvalue(), encoding="utf-8")
+        log.info("profil de %d tour(s) du worker écrit dans %s", ticks, path)
+        return path
+
     def loop(self) -> None:
         """Boucle jusqu'a interruption, a l'intervalle ``poll_interval_s``
         de CONFIG_DEFAULTS (SPEC-74e9 §2.3)."""
         section = self.config.section("worker")
         interval = float(section["poll_interval_s"])
         max_failures = int(section["max_consecutive_failures"])
+        profile_ticks = int(section["profile_ticks"])
+        profiler = cProfile.Profile() if profile_ticks > 0 else None
+        profiled = 0
         self.startup()
         failures = 0
         try:
             while True:
                 try:
-                    self.tick()
+                    if profiler is not None:
+                        profiler.enable()
+                    try:
+                        self.tick()
+                    finally:
+                        if profiler is not None:
+                            profiler.disable()
+                            profiled += 1
+                            if profiled >= profile_ticks:
+                                self._write_profile(profiler, profiled)
+                                profiler = None
                     failures = 0
                 except Exception:  # noqa: BLE001 - un tour en échec ne tue jamais le worker (ADR-ad2e : journalisé)
                     failures += 1

@@ -1817,6 +1817,25 @@ def test_a_stats_check_that_found_nothing_due_is_not_repeated_every_tick(tmp_pat
     assert checks == [ACCOUNT, ACCOUNT]
 
 
+def test_profile_ticks_is_off_by_default_and_writes_the_costliest_functions(tmp_path, monkeypatch):
+    import cProfile
+
+    assert worker.CONFIG_DEFAULTS["profile_ticks"] == 0
+    config = Config(mode="review", workspace_dir=tmp_path / "w", output_dir=tmp_path / "output",
+                    _sections={"journal": {"dir": str(tmp_path / "logs")},
+                               "worker": {"queue_path": str(tmp_path / "state" / "queue.json")}})
+    profiler = cProfile.Profile()
+    profiler.enable()
+    sorted(range(1000))
+    profiler.disable()
+
+    path = worker.Worker(config=config, spawner=FakeSpawner())._write_profile(profiler, 3)
+
+    text = path.read_text(encoding="utf-8")
+    assert path == tmp_path / "logs" / "worker-profile.txt" and text.startswith("profil de 3 tour(s) du worker")
+    assert "cumulative" in text
+
+
 def test_tick_never_fetches_stats_when_the_interval_is_zero(tmp_path, monkeypatch):
     config = _pub_env(tmp_path, monkeypatch, tiktok_settings={"stats_interval_h": 0})
     fetcher = FakeStatsFetcher(tmp_path)
