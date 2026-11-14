@@ -3062,3 +3062,37 @@ def test_approve_keeps_the_content_check_attempts_of_a_failed_entry(isolated_cwd
     publish.approve("vid1", "01", "ma_chaine", now=_MON, account=_ACCOUNT, schedule=_TWO_SCHED)
 
     assert publish.list_entries("ma_chaine")[0]["content_check_attempts"] == [_MON.isoformat()]
+
+
+# --------------------------------------------------------------------------
+# TASK-81e04 : sidecar illisible = erreur explicite ; Reessayer replanifie un creneau depasse
+# --------------------------------------------------------------------------
+
+
+def test_an_unreadable_sidecar_is_a_publish_error_not_a_json_error(isolated_cwd):
+    publish = _tiktok_env(isolated_cwd, ("01",))
+    (isolated_cwd / "output" / "vid1" / "01.json").write_text('{"video_id": "vid1", "cl', encoding="utf-8")
+
+    with pytest.raises(publish.PublishError, match="vid1/01"):
+        publish.read_sidecar(isolated_cwd / "output", "vid1", "01")
+
+
+def test_retry_replans_an_entry_whose_slot_has_passed_on_the_next_free_slot(isolated_cwd):
+    publish = _tiktok_env(isolated_cwd, ("01",))  # 01 : lun 28/09 09:00
+    publish.mark_failed("vid1", "01", "ma_chaine", "programmation refusée")
+    late = datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc)
+
+    entry = publish.retry("vid1", "01", "ma_chaine", schedule=_TWO_SCHED, now=late, min_minutes=15)
+
+    assert entry["status"] == "scheduled" and entry["slot_at"] == "2026-09-28T18:00:00+00:00"
+    assert "reporté" in entry["postponed_reason"] and "créneau" in entry["postponed_reason"]
+    assert _read_state(isolated_cwd, "ma_chaine")[0]["slot_at"] == "2026-09-28T18:00:00+00:00"
+
+
+def test_retry_keeps_a_slot_that_is_still_far_enough(isolated_cwd):
+    publish = _tiktok_env(isolated_cwd, ("01",))
+    publish.mark_failed("vid1", "01", "ma_chaine", "x")
+
+    entry = publish.retry("vid1", "01", "ma_chaine", schedule=_TWO_SCHED, now=_MON, min_minutes=15)
+
+    assert entry["slot_at"] == "2026-09-28T09:00:00+00:00" and not entry.get("postponed_reason")

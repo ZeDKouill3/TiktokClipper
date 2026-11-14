@@ -26,6 +26,7 @@ from clipper import tiktok, youtube
 from clipper.config import ConfigError
 
 log = logging.getLogger(__name__)
+_LOGGED_UNREADABLE: set[str] = set()
 
 _DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
@@ -184,7 +185,10 @@ def _read_sidecar(output_dir: str | Path, video_id: str, clip_id: str) -> dict[s
     path = _sidecar_path(output_dir, video_id, clip_id)
     if not path.exists():
         raise PublishError(f"clip introuvable : {video_id}/{clip_id} ({path})")
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:  # sidecar tronque : cette entree echoue seule (TASK-81e04)
+        raise PublishError(f"sidecar illisible : {video_id}/{clip_id} ({path}) : {exc}") from exc
 
 
 def read_sidecar(output_dir: str | Path, video_id: str, clip_id: str) -> dict[str, Any]:
@@ -788,9 +792,18 @@ def retry(
     channel: str,
     *,
     state_dir: str | Path | None = None,
+    schedule: dict[str, Any] | None = None,
+    allowed: Callable[[datetime], str | None] | None = None,
+    now: datetime | None = None,
+    min_minutes: float = 0,
+    presets_dir: str | Path = "presets",
+    base: str | Path = "config.toml",
 ) -> dict[str, Any]:
     """Remet une entree ``failed`` en attente (bouton « Reessayer ») : ``scheduled`` sur son
-    creneau (``approved`` sans creneau), raison, capture et arret du compte effaces."""
+    creneau (``approved`` sans creneau), raison, capture et arret du compte effaces. Quand ``schedule`` (les
+    creneaux du compte, ``accounts.schedule_of``) est donne et que le creneau est passe ou a moins de
+    ``min_minutes`` de ``now``, l'entree est replanifiee au prochain creneau libre du compte (``postpone``)
+    au lieu de retomber sur le creneau perime ; sans ``schedule``, le worker le fait a son prochain passage."""
     path = _state_path(channel, state_dir)
     with _locked(path):
         entries = _load_entries(path)
@@ -806,6 +819,12 @@ def retry(
                      to_verify=False)
         _upsert_entry(entries, entry)
         _save_entries(path, entries)
+    current = _now(now)
+    floor = current + timedelta(minutes=min_minutes)
+    if entry["status"] == "scheduled" and schedule and datetime.fromisoformat(entry["slot_at"]) < floor:
+        return postpone(video_id, clip_id, channel, "créneau dépassé ou trop proche (schedule_min_minutes)",
+                        allowed=lambda c: "trop proche" if c < floor else (allowed(c) if allowed else None),
+                        schedule=schedule, now=current, state_dir=state_dir, presets_dir=presets_dir, base=base)
     return entry
 
 
@@ -907,6 +926,20 @@ def _queue_names(state_dir: str | Path | None, presets_dir: str | Path) -> list[
     return names
 
 
+def _readable_queue(name: str, state_dir: str | Path | None) -> list[dict[str, Any]]:
+    """Les entrees d'une file pour un calcul de compte : une file illisible est journalisee (une fois par message,
+    avec son nom) et ignoree, pour qu'un seul fichier casse ne bloque pas les publications des autres styles
+    (TASK-81e04) ; le worker l'emet aussi en evenement de niveau error."""
+    try:
+        return _load_entries(_state_path(name, state_dir))
+    except (PublishError, ValueError, OSError) as exc:
+        message = f"file de publication {name}.json ignorée dans le calcul des comptes : {exc}"
+        if message not in _LOGGED_UNREADABLE:
+            _LOGGED_UNREADABLE.add(message)
+            log.error(message)
+        return []
+
+
 def _account_entries(
     account: str, state_dir: str | Path | None, presets_dir: str | Path, base: str | Path,
 ) -> list[tuple[str, dict[str, Any]]]:
@@ -914,8 +947,7 @@ def _account_entries(
     found: list[tuple[str, dict[str, Any]]] = []
     try:
         for name in _queue_names(state_dir, presets_dir):
-            found.extend((name, e) for e in _load_entries(_state_path(name, state_dir))
-                         if entry_account(e) == account)
+            found.extend((name, e) for e in _readable_queue(name, state_dir) if entry_account(e) == account)
     except (channel_mod.ChannelError, ConfigError) as exc:
         raise PublishError(f"chaines illisibles pour le compte {account} : {exc}") from exc
     return found
@@ -1657,7 +1689,7 @@ def all_entries(
     found: list[tuple[str, dict[str, Any]]] = []
     try:
         for name in _queue_names(state_dir, presets_dir):
-            found.extend((name, e) for e in _load_entries(_state_path(name, state_dir)))
+            found.extend((name, e) for e in _readable_queue(name, state_dir))
     except channel_mod.ChannelError as exc:
         raise PublishError(f"chaînes illisibles : {exc}") from exc
     return found

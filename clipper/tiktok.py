@@ -190,6 +190,17 @@ def get_settings(config: Config | None) -> dict[str, Any]:
         value = settings[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < minimum:
             raise TikTokError(f"[tiktok] {key} invalide : {value!r} (un nombre >= {minimum} est attendu)")
+    lead = float(settings["schedule_lead_max_hours"])
+    if lead > 0:  # N h trop court : l'instant d'envoi tomberait dans la zone interdite par TikTok (TASK-81e04)
+        needed = float(settings["schedule_min_minutes"]) + 5
+        if settings["content_check"] == "wait":
+            needed += float(settings["content_check_timeout_s"]) / 60
+        if lead * 60 < needed:
+            raise TikTokError(
+                f"[tiktok] schedule_lead_max_hours invalide : {lead:g} h est trop court pour envoyer à temps "
+                f"(minimum {needed:g} min = schedule_min_minutes + 5 min"
+                + (" + content_check_timeout_s/60 car content_check = wait" if settings["content_check"] == "wait" else "")
+                + ") ; mets 0 pour désactiver la retenue")
     if settings["min_action_delay_s"] > settings["max_action_delay_s"]:
         raise TikTokError(
             f"[tiktok] min_action_delay_s ({settings['min_action_delay_s']}) dépasse max_action_delay_s "
@@ -296,6 +307,9 @@ def clip_payload(sidecar: dict[str, Any], output_dir: str | Path) -> dict[str, A
     hashtags = sidecar.get("hashtags")
     if not isinstance(hashtags, list):
         raise TikTokError(f"clip {sidecar.get('video_id')}/{sidecar.get('clip_id')} : hashtags absents du sidecar")
+    for key in ("video_id", "clip_id"):
+        if not isinstance(sidecar.get(key), str) or not sidecar[key]:
+            raise TikTokError(f"sidecar de clip sans {key} : {sidecar.get('video_id')}/{sidecar.get('clip_id')}")
     path = Path(output_dir) / sidecar["video_id"] / f"{sidecar['clip_id']}.mp4"
     return {"video_path": path, "caption": sidecar["caption"], "hashtags": list(hashtags)}
 
