@@ -278,6 +278,11 @@ def _posted_paris(post: dict[str, Any]) -> datetime | None:
     return posted.replace(second=0, microsecond=0)
 
 
+# Un compte dont le releve n'est pas du n'est recontrole qu'apres ce delai : tiktok.stats_due relit l'historique
+# du compte (des centaines de fichiers), ce qui coutait 40 % d'un coeur refait a chaque tour (releve du 14/11).
+_STATS_RECHECK = timedelta(seconds=60)
+
+
 class WorkerError(Exception):
     """Operation de file impossible en l'etat : entree inconnue, doublon en
     attente."""
@@ -878,6 +883,7 @@ class Worker:
         self._logged_repartition_errors: set[str] = set()
         self.login_checker = login_checker or browser.login_state  # connexion verifiee avant chaque publication
         self._stats_attempts: dict[str, datetime] = {}
+        self._stats_checked: dict[str, datetime] = {}  # dernier controle « rien a relever » par compte (_STATS_RECHECK)
         self._content_check_last: dict[str, tuple[str, str]] = {}  # compte -> dernier clip en content_check (streak)
         self._logged_stats_errors: set[str] = set()
         self._path = _queue_path(self.config)
@@ -1243,9 +1249,14 @@ class Worker:
                 tried = self._stats_attempts.get(account)
                 if tried is not None and now - tried < wait:
                     continue
+                checked = self._stats_checked.get(account)
+                if checked is not None and now - checked < _STATS_RECHECK:
+                    continue  # controle deja fait il y a moins d'une minute : pas de relecture de l'historique a chaque tour
                 if publish_mod.halted_account(account, **scope) is not None:
+                    self._stats_checked[account] = now
                     continue
                 if not tiktok.stats_due(account, config=self.config, now=now):
+                    self._stats_checked[account] = now
                     continue
                 self._stats_attempts[account] = now
                 self._mark_stats_running(account)

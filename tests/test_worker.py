@@ -1795,6 +1795,28 @@ def test_tick_fetches_the_stats_of_a_ready_account_then_waits_the_interval(tmp_p
     assert callable(fetcher.calls[0]["on_tick"])  # le battement du worker continue pendant le releve
 
 
+def test_a_stats_check_that_found_nothing_due_is_not_repeated_every_tick(tmp_path, monkeypatch):
+    # 14/11 : tiktok.stats_due relit l'historique du compte (~80 ms) ; refait toutes les 2 s pour 5 comptes,
+    # le worker au repos prenait 40 % d'un coeur.
+    config = _pub_env(tmp_path, monkeypatch)
+    _set_account_state(tmp_path, "ef34ab", ready_to_publish=False)
+    _write_snapshot(tmp_path, ACCOUNT, datetime.now(timezone.utc) - timedelta(minutes=5))  # releve recent : rien a faire
+    fetcher = FakeStatsFetcher(tmp_path)
+    w = _stats_worker(config, fetcher)
+    checks = []
+    original = tiktok.stats_due
+    monkeypatch.setattr(tiktok, "stats_due", lambda account, **kw: (checks.append(account), original(account, **kw))[1])
+
+    for _ in range(3):
+        w.tick()
+
+    assert checks == [ACCOUNT] and fetcher.calls == []  # un seul controle : le suivant attend _STATS_RECHECK
+
+    w._stats_checked[ACCOUNT] -= worker._STATS_RECHECK  # le delai passe : le controle est refait
+    w.tick()
+    assert checks == [ACCOUNT, ACCOUNT]
+
+
 def test_tick_never_fetches_stats_when_the_interval_is_zero(tmp_path, monkeypatch):
     config = _pub_env(tmp_path, monkeypatch, tiktok_settings={"stats_interval_h": 0})
     fetcher = FakeStatsFetcher(tmp_path)
