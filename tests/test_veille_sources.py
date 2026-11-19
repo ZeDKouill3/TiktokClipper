@@ -411,6 +411,124 @@ def test_collect_integration_source_error_ranged_as_status_error(tmp_path, monke
         assert SECRET not in text and YKEY not in text
 
 
+# -- Réessais du transport par défaut (TASK-fc2f36ec0889) ---------------------
+
+RETRY_URL = "https://api.twitch.tv/helix/streams"
+RETRYABLE = ("ConnectError", "ConnectTimeout", "ReadTimeout", "RemoteProtocolError")
+
+
+class _Resp:
+    def __init__(self, status, body=None, headers=None):
+        self.status_code = status
+        self._body = body
+        self.headers = headers or {}
+        self.text = json.dumps(body) if body is not None else ""
+
+    def json(self):
+        if self._body is None:
+            raise ValueError("pas de JSON")
+        return self._body
+
+
+def _flaky(monkeypatch, failures, then=None):
+    """httpx.request lève les exceptions de ``failures`` une à une, puis rend ``then`` ; attente factice."""
+    import httpx
+
+    calls = []
+
+    def fake(method, url, **kwargs):
+        calls.append(url)
+        if failures:
+            raise failures.pop(0)
+        return then or _Resp(200, {"ok": 1})
+
+    waits = []
+    monkeypatch.setattr(httpx, "request", fake)
+    monkeypatch.setattr(veille_sources.time, "sleep", waits.append)
+    return calls, waits
+
+
+def _retry_client(tmp_path, **over):
+    return veille_sources._client(_settings(tmp_path, **over), veille_sources.default_http, ())
+
+
+def test_retry_defaults_are_three_attempts_two_seconds():
+    assert veille.CONFIG_DEFAULTS["http_retry_attempts"] == 3
+    assert veille.CONFIG_DEFAULTS["http_retry_pause_s"] == 2.0
+
+
+@pytest.mark.parametrize("name", RETRYABLE)
+def test_passing_network_error_is_retried_then_succeeds(tmp_path, monkeypatch, name):
+    import httpx
+
+    calls, waits = _flaky(monkeypatch, [getattr(httpx, name)("panne simulée")] * 2)
+    status, body = _retry_client(tmp_path, http_retry_attempts=3, http_retry_pause_s=2.0).request("GET", RETRY_URL)
+    assert (status, body) == (200, {"ok": 1})
+    assert len(calls) == 3
+    assert waits == [2.0, 2.0]
+
+
+def test_each_recovered_attempt_is_logged_once_at_warning(tmp_path, monkeypatch, caplog):
+    import logging
+    import httpx
+
+    _flaky(monkeypatch, [httpx.ConnectError("x"), httpx.ReadTimeout("y")])
+    with caplog.at_level(logging.WARNING, logger="clipper.veille_sources"):
+        _retry_client(tmp_path, http_retry_attempts=3, http_retry_pause_s=0.0).request("GET", RETRY_URL)
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2
+    assert all("api.twitch.tv" in message for message in warnings)
+    assert "essai 1" in warnings[0] and "essai 2" in warnings[1]
+
+
+def test_exhausted_retries_raise_source_error_without_secret(tmp_path, monkeypatch):
+    import httpx
+
+    calls, waits = _flaky(monkeypatch, [httpx.ConnectError("refus")] * 5)
+    with pytest.raises(veille_sources.SourceError, match="requête impossible.*ConnectError") as err:
+        _retry_client(tmp_path, http_retry_attempts=3, http_retry_pause_s=2.0).request(
+            "GET", RETRY_URL, {"client_secret": SECRET})
+    assert SECRET not in str(err.value)
+    assert len(calls) == 3
+    assert waits == [2.0, 2.0]
+
+
+def test_single_attempt_keeps_todays_behaviour(tmp_path, monkeypatch):
+    import httpx
+
+    calls, waits = _flaky(monkeypatch, [httpx.ConnectError("x")])
+    with pytest.raises(veille_sources.SourceError, match="ConnectError"):
+        _retry_client(tmp_path, http_retry_attempts=1, http_retry_pause_s=2.0).request("GET", RETRY_URL)
+    assert len(calls) == 1
+    assert waits == []
+
+
+def test_other_transport_errors_are_not_retried(tmp_path, monkeypatch):
+    import httpx
+
+    calls, waits = _flaky(monkeypatch, [httpx.UnsupportedProtocol("schéma inconnu")])
+    with pytest.raises(veille_sources.SourceError, match="UnsupportedProtocol"):
+        _retry_client(tmp_path, http_retry_attempts=3, http_retry_pause_s=2.0).request("GET", RETRY_URL)
+    assert len(calls) == 1
+    assert waits == []
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
+def test_http_status_answers_are_returned_unchanged_and_not_retried(monkeypatch, status):
+    calls, waits = _flaky(monkeypatch, [], then=_Resp(status, {"error": "réponse"}, {"Retry-After": "30"}))
+    result = veille_sources.default_http("GET", RETRY_URL, attempts=3, pause_s=2.0)
+    assert result[0] == status
+    assert len(calls) == 1
+    assert waits == []
+
+
+@pytest.mark.parametrize("over", [{"http_retry_attempts": 0}, {"http_retry_attempts": 11},
+                                  {"http_retry_pause_s": -1.0}, {"http_retry_pause_s": 61.0}])
+def test_retry_settings_are_validated(tmp_path, over):
+    with pytest.raises(veille.VeilleError, match="http_retry"):
+        veille.settings(_config(tmp_path, **over))
+
+
 # -- IGDB (TASK-3274, SPEC-df51 R12) -----------------------------------------
 
 IGDB_URL = "https://api.igdb.com/v4/games"

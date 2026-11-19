@@ -97,6 +97,8 @@ CONFIG_DEFAULTS: dict[str, object] = {
     "youtube_api_key": "",
     "state_dir": "state/veille",
     "http_timeout_s": 20,
+    "http_retry_attempts": 3,  # essais par requête en cas d'erreur de connexion passagère (1 = aucun réessai)
+    "http_retry_pause_s": 2.0,  # pause entre deux essais
     "steam_rank_gain_min": 5,
     "steam_risers_max": 10,
     "upcoming_days": 14,
@@ -195,13 +197,14 @@ def settings(config: Config) -> dict[str, object]:
                            ("trend_days", 7, 90), ("steam_reviews_retry_max", 0, 10), ("twitch_history_pages_max", 1, 5),
                            ("twitch_history_retry_max", 0, 10), ("twitch_access_attempts", 1, 10),
                            ("twitch_access_workers", 1, 16), ("veille_deadline_s", 60, 3600), ("llm_retry_delay_min", 1, 1440),
-                           ("llm_retry_max", 0, 20)):
+                           ("llm_retry_max", 0, 20), ("http_retry_attempts", 1, 10)):
         value = table[key]
         if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
             raise VeilleError(f"[veille] {key} doit être un entier entre {low} et {high} (reçu {value!r})")
     for key, low, high in (("steam_followers_pause_s", 0.2, 60.0), ("steam_followers_retry_wait_max_s", 1.0, 600.0),
                            ("steam_reviews_pause_s", 0.2, 60.0), ("steam_reviews_retry_wait_max_s", 1.0, 600.0),
-                           ("twitch_history_retry_wait_max_s", 1.0, 600.0), ("twitch_access_retry_pause_s", 0.0, 60.0)):
+                           ("twitch_history_retry_wait_max_s", 1.0, 600.0), ("twitch_access_retry_pause_s", 0.0, 60.0),
+                           ("http_retry_pause_s", 0.0, 60.0)):
         value = table[key]
         if not isinstance(value, (int, float)) or isinstance(value, bool) or not low <= value <= high:
             raise VeilleError(f"[veille] {key} doit être un nombre entre {low} et {high} (reçu {value!r})")
