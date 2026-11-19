@@ -73,7 +73,9 @@ class FakeElement:
         self.page.calls.append(("click", self.selector))
         self.page.click_timeouts.append(kwargs.get("timeout"))
         if self.page.fail_click:
-            raise RuntimeError("Target page, context or browser has been closed")
+            raise RuntimeError(self.page.fail_click_message)
+        if self.page.fail_click_on == self.selector:
+            raise RuntimeError("Locator.click: Target page, context or browser has been closed")
         rank = self.page.modals.index(self.owner) if self.owner in self.page.modals else -1
         if self.page.modals_block_clicks and any(self.page.modals[rank + 1:]):
             # Playwright : l'overlay d'une fenetre PLUS HAUTE recouvre l'element et attend en vain (TimeoutError)
@@ -156,6 +158,9 @@ class FakePage:
         self.waits = 0
         self.keyboard = FakeKeyboard(self)
         self.fail_click = False
+        self.fail_click_message = "Target page, context or browser has been closed"
+        self.fail_click_on: str | None = None  # selecteur dont le clic leve « browser has been closed »
+        self.goto_error: Exception | None = None  # leve par goto (coupure reseau)
         self.url = "about:blank"
         self.calls: list[tuple] = []
         self.html, self.content_error = "<html><body>page</body></html>", None
@@ -167,6 +172,8 @@ class FakePage:
 
     def goto(self, url, **kwargs):
         self.calls.append(("goto", url))
+        if self.goto_error is not None:
+            raise self.goto_error
         self.url = self.redirect or url
 
     def make(self, selector):
@@ -966,11 +973,11 @@ def test_r4_captcha_appearing_mid_flow_stops_before_the_post_click(tmp_path, mon
 
 
 def test_r4_an_unexpected_page_error_is_a_stop_not_a_crash(env):
-    env.page.fail_click = True
+    env.page.fail_click, env.page.fail_click_message = True, "Element is not attached to the DOM"
     with pytest.raises(tiktok.TikTokStop) as stop:
         env.publish()
     assert stop.value.code == "unexpected_page"
-    assert "closed" in str(stop.value)
+    assert "not attached" in str(stop.value)
 
 
 def test_r4_a_failed_screenshot_is_stated_in_the_reason(tmp_path, monkeypatch):
@@ -1367,12 +1374,12 @@ def test_the_click_timeout_is_a_setting_with_a_default_and_is_validated(tmp_path
 
 def test_a_failing_click_without_interception_nor_window_is_not_retried(tmp_path, monkeypatch):
     env = Env(tmp_path, monkeypatch)
-    env.page.fail_click = True
+    env.page.fail_click, env.page.fail_click_message = True, "Element is not attached to the DOM"
 
     with pytest.raises(tiktok.TikTokStop) as stop:
         env.publish()
 
-    assert stop.value.code == "unexpected_page" and "closed" in str(stop.value)
+    assert stop.value.code == "unexpected_page" and "not attached" in str(stop.value)
     assert len(env.page.clicks()) == 1
 
 
@@ -4671,3 +4678,50 @@ def test_a_lead_max_of_zero_or_long_enough_is_accepted():
 def test_a_sidecar_without_video_id_is_a_tiktok_error():
     with pytest.raises(tiktok.TikTokError, match="video_id"):
         tiktok.clip_payload({"clip_id": "01", "caption": "x", "hashtags": []}, Path("o"))
+
+
+# ---------------------------------------------------------------- coupure reseau (TASK-0deb90a88c0c)
+
+
+@pytest.mark.parametrize("code", ["ERR_INTERNET_DISCONNECTED", "ERR_NETWORK_CHANGED", "ERR_NAME_NOT_RESOLVED",
+                                  "ERR_CONNECTION_RESET", "ERR_CONNECTION_REFUSED", "ERR_TIMED_OUT",
+                                  "ERR_ADDRESS_UNREACHABLE"])
+def test_a_network_error_on_the_upload_page_is_network_down_not_an_r4_stop(tmp_path, monkeypatch, code):
+    env = Env(tmp_path, monkeypatch)
+    env.page.goto_error = RuntimeError(f"Page.goto: net::{code} at https://www.tiktok.com/tiktokstudio/upload")
+    with pytest.raises(browser.NetworkDown) as down:
+        env.publish()
+    assert code in str(down.value)
+    assert _sel()["selectors"]["post_button"] not in env.page.clicks()
+
+
+def test_a_closed_browser_before_the_final_click_is_network_down(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch)
+    env.page.fail_click = True
+    with pytest.raises(browser.NetworkDown):
+        env.publish()
+
+
+def test_a_closed_browser_at_the_final_click_stays_an_r4_stop_never_a_retry(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch)
+    env.page.fail_click_on = _sel()["selectors"]["post_button"]
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        env.publish()
+    assert stop.value.code == "unexpected_page"
+
+
+def test_another_goto_error_stays_an_r4_stop(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch)
+    env.page.goto_error = RuntimeError("Page.goto: net::ERR_CERT_AUTHORITY_INVALID at https://x")
+    with pytest.raises(tiktok.TikTokStop) as stop:
+        env.publish()
+    assert stop.value.code == "unexpected_page"
+
+
+def test_a_network_error_in_the_stats_fetch_is_network_down_and_writes_no_failure_history(tmp_path, monkeypatch):
+    env = Env(tmp_path, monkeypatch)
+    env.page.goto_error = RuntimeError("Page.goto: net::ERR_NETWORK_CHANGED at https://www.tiktok.com/tiktokstudio/analytics")
+    with pytest.raises(browser.NetworkDown):
+        tiktok.fetch_stats("ma_chaine", config=env.config, now=NOW, selectors=_sel(), opener=env.opener,
+                           sleep=lambda s: None, rng=random.Random(0))
+    assert tiktok.read_events(config=env.config) == []

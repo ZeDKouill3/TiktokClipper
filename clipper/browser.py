@@ -86,6 +86,26 @@ class BrowserUnavailable(BrowserError):
     """Navigateur refusé pour une condition transitoire (pays de l'IP inconnu) : à réessayer, pas un arrêt sûr."""
 
 
+class NetworkDown(BrowserError):
+    """Coupure reseau (reveil du PC, Wi-Fi absent) pendant le pilotage, avant tout clic final de publication :
+    condition transitoire, jamais un arret R4 ; l'appelant met l'entree en attente avec la raison et reessaie."""
+
+
+_NETWORK_CODES = ("ERR_INTERNET_DISCONNECTED", "ERR_NETWORK_CHANGED", "ERR_NAME_NOT_RESOLVED", "ERR_TIMED_OUT",
+                  "ERR_ADDRESS_UNREACHABLE", "ERR_CONNECTION_")
+
+
+def network_error_reason(exc: BaseException) -> str | None:
+    """Le detail d'une erreur Playwright due au reseau coupe (``net::ERR_...`` d'un ``Page.goto``, delai d'un
+    ``Page.goto``, navigateur ferme sous le pilote), sinon None : toute autre erreur reste un arret R4."""
+    text = f"{type(exc).__name__} : {exc}"
+    if any(f"net::{code}" in text for code in _NETWORK_CODES):
+        return text
+    if "Page.goto: Timeout" in text or type(exc).__name__ == "TargetClosedError" or "has been closed" in text:
+        return text
+    return None
+
+
 def use_playwright(factory: Callable[[], Any] | None) -> None:
     """Branche une fabrique ``sync_playwright`` (tests : faux) ; None = le vrai."""
     global _override

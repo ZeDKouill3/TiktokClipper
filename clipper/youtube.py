@@ -405,6 +405,7 @@ class _Flow:
                  config: Config | None = None) -> None:
         self.page, self.account, self.sel, self.settings = page, account, sel, settings
         self.now, self._sleep, self.rng, self.on_tick, self.config = now, sleep, rng, on_tick, config
+        self.final_clicked = False  # vrai des le clic final : plus de reprise automatique apres
 
     # -- arret sur (R3)
     def stop(self, code: str, reason: str) -> YouTubeStop:
@@ -720,6 +721,7 @@ class _Flow:
             raise self.stop("unexpected_page", f"bouton final « {label} » au lieu de « {expected} » : "
                                                f"la page n'est pas dans l'état voulu")
         self.dismiss_known()
+        self.final_clicked = True  # des ici une erreur ne peut plus etre une simple coupure : risque de doublon
         button.click()
         self.pause()
 
@@ -877,6 +879,9 @@ def publish_draft(
         except YouTubeStop:
             raise
         except Exception as exc:  # noqa: BLE001 - erreur Playwright : arret sur avec capture
+            down = None if flow.final_clicked else browser.network_error_reason(exc)
+            if down is not None:  # coupure reseau avant le clic final : attente, jamais un arret R3
+                raise browser.NetworkDown(f"réseau indisponible : {down}") from exc
             raise flow.stop("unexpected_page", f"page inattendue : {type(exc).__name__} : {exc}") from exc
 
 
@@ -919,6 +924,9 @@ def publish(
         except YouTubeStop:
             raise
         except Exception as exc:  # noqa: BLE001 - erreur Playwright : arret sur avec capture
+            down = None if flow.final_clicked else browser.network_error_reason(exc)
+            if down is not None:  # coupure reseau avant le clic final : attente, jamais un arret R3
+                raise browser.NetworkDown(f"réseau indisponible : {down}") from exc
             raise flow.stop("unexpected_page", f"page inattendue : {type(exc).__name__} : {exc}") from exc
 
 
@@ -1249,7 +1257,12 @@ def fetch_stats(
             except YouTubeStop:
                 raise
             except Exception as exc:  # noqa: BLE001 - erreur Playwright : arret sur avec capture
+                down = browser.network_error_reason(exc)
+                if down is not None:
+                    raise browser.NetworkDown(f"réseau indisponible : {down}") from exc
                 raise flow.stop("unexpected_page", f"page inattendue : {type(exc).__name__} : {exc}") from exc
+    except browser.NetworkDown:
+        raise  # coupure reseau : pas d'arret ecrit, le worker retente apres un court delai
     except (YouTubeStop, browser.BrowserError) as exc:
         _append(account, settings, now.isoformat(), _ERROR_SUFFIX, {
             "at": now.isoformat(), "code": exc.code if isinstance(exc, YouTubeStop) else "browser",
