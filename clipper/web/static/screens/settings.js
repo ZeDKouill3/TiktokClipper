@@ -77,6 +77,8 @@ const SET_LABELS = {
   "veille.steam_sellers_top": "Jeux Steam les plus vendus relevés",
   "veille.state_dir": "Dossier d'état de la veille",
   "veille.http_timeout_s": "Délai maximum d'une requête HTTP (s)",
+  "veille.http_retry_attempts": "Essais par requête en cas d'erreur de connexion",
+  "veille.http_retry_pause_s": "Pause entre deux essais d'une requête (s)",
   "veille.steam_rank_gain_min": "Gain de rang Steam minimum",
   "veille.steam_risers_max": "Jeux Steam en hausse retenus au maximum",
   "veille.upcoming_days": "Sorties à venir affichées (jours)",
