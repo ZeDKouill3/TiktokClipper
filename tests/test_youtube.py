@@ -2123,3 +2123,52 @@ def test_a_footer_that_does_not_move_after_next_stops_explicitly(tmp_path, monke
     page = _many_shorts(5, page_size=3, stuck_next=True)
     with pytest.raises(youtube.YouTubeError, match="page suivante"):
         fetch(tmp_path, monkeypatch, page)
+
+
+# -- coupure reseau (TASK-0deb90a88c0c)
+
+
+def test_a_network_error_before_the_final_click_is_network_down_not_a_stop(tmp_path, monkeypatch):
+    page = FakeUpload()
+
+    def offline(*args, **kwargs):
+        raise RuntimeError("Page.goto: net::ERR_INTERNET_DISCONNECTED at https://studio.youtube.com")
+
+    page.set_input_files = offline
+    with pytest.raises(browser.NetworkDown, match="ERR_INTERNET_DISCONNECTED"):
+        publish(tmp_path, monkeypatch, page)
+    assert not page.final_clicked
+
+
+def test_a_closed_browser_before_the_final_click_is_network_down(tmp_path, monkeypatch):
+    page = FakeUpload()
+
+    def closed(*args, **kwargs):
+        raise RuntimeError("Page.query_selector: Target page, context or browser has been closed")
+
+    page.set_input_files = closed
+    with pytest.raises(browser.NetworkDown):
+        publish(tmp_path, monkeypatch, page)
+
+
+def test_a_closed_browser_at_the_final_click_stays_a_stop_never_a_retry(tmp_path, monkeypatch):
+    page = FakeUpload()
+
+    def closed():
+        raise RuntimeError("Target page, context or browser has been closed")
+
+    page._click_final = closed
+    stop = stop_of(tmp_path, monkeypatch, page)
+    assert stop.code == "unexpected_page" and "has been closed" in stop.reason
+
+
+def test_a_network_error_in_the_stats_fetch_is_network_down_and_writes_no_error_file(tmp_path, monkeypatch):
+    page = _shorts_page()
+
+    def offline(url, **kwargs):
+        raise RuntimeError("Page.goto: net::ERR_NETWORK_CHANGED at https://studio.youtube.com")
+
+    page.goto = offline
+    with pytest.raises(browser.NetworkDown):
+        fetch(tmp_path, monkeypatch, page)
+    assert list((tmp_path / "state").rglob("*error*")) == [] if (tmp_path / "state").exists() else True

@@ -562,6 +562,7 @@ class _Flow:
                  harvest: bool = False, config: Config | None = None,
                  on_file_sent: Callable[[], None] | None = None) -> None:
         self.page, self.account, self.sel, self.settings = page, account, selectors, settings
+        self.final_clicked = False  # vrai des le clic final : plus de reprise automatique apres
         self.on_file_sent = on_file_sent  # rappel du worker : le fichier vient d'etre envoye a TikTok (une tentative de verification)
         self.config = config  # [browser] state_dir : dossier de la capture d'arret
         self.now, self._sleep, self.rng, self.on_tick = now, sleep, rng, on_tick
@@ -1188,6 +1189,7 @@ class _Flow:
         if label != expected:
             raise self.stop("unexpected_page", f"bouton final « {label} » au lieu de « {expected} » : "
                                                f"la page n'est pas en mode {mode}")
+        self.final_clicked = True  # des ici une erreur ne peut plus etre une simple coupure : risque de doublon
         self.click_with(lambda: self.wait("post_button"), first=button)
         self.pause()
 
@@ -1768,6 +1770,9 @@ class BrowserBackend:
             except TikTokStop:
                 raise
             except Exception as exc:  # noqa: BLE001 - erreur Playwright : arret sur avec capture
+                down = None if flow.final_clicked else browser.network_error_reason(exc)
+                if down is not None:  # coupure reseau avant le clic final : attente, jamais un arret R4
+                    raise browser.NetworkDown(f"réseau indisponible : {down}") from exc
                 raise flow.stop("unexpected_page", f"page inattendue : {type(exc).__name__} : {exc}") from exc
 
     def fetch_stats(self, account: str, previous: dict[str, dict[str, Any]], *, settings: dict[str, Any],
@@ -1784,6 +1789,9 @@ class BrowserBackend:
             except TikTokStop:
                 raise
             except Exception as exc:  # noqa: BLE001 - erreur Playwright : arret sur avec capture
+                down = browser.network_error_reason(exc)
+                if down is not None:
+                    raise browser.NetworkDown(f"réseau indisponible : {down}") from exc
                 raise flow.stop("unexpected_page", f"page inattendue : {type(exc).__name__} : {exc}") from exc
 
 
@@ -2075,6 +2083,8 @@ def fetch_stats(
             account, previous, settings=settings, selectors=selectors or load_selectors(), now=now,
             opener=opener or _default_opener(config),
             sleep=sleep, rng=rng or random.Random(), on_tick=on_tick, full=full, config=config)
+    except browser.NetworkDown:
+        raise  # coupure reseau : ni historique d'echec ni evenement, le worker retente apres un court delai
     except (TikTokStop, browser.BrowserError) as exc:
         _record_stats_failure(account, exc, config, settings, now)
         raise

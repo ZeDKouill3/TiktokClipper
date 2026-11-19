@@ -287,6 +287,9 @@ def _posted_paris(post: dict[str, Any]) -> datetime | None:
 # Un compte dont le releve n'est pas du n'est recontrole qu'apres ce delai : tiktok.stats_due relit l'historique
 # du compte (des centaines de fichiers), ce qui coutait 40 % d'un coeur refait a chaque tour (releve du 14/11).
 _STATS_RECHECK = timedelta(seconds=60)
+# Coupure reseau (reveil du PC) : delai borne avant de rouvrir le navigateur, pour une publication / un releve
+_NETWORK_RETRY = timedelta(seconds=60)
+_STATS_NETWORK_RETRY = timedelta(minutes=5)
 
 
 class WorkerError(Exception):
@@ -892,6 +895,9 @@ class Worker:
         self._stats_checked: dict[str, datetime] = {}  # dernier controle « rien a relever » par compte (_STATS_RECHECK)
         self._content_check_last: dict[str, tuple[str, str]] = {}  # compte -> dernier clip en content_check (streak)
         self._logged_stats_errors: set[str] = set()
+        self._network_retry_at: datetime | None = None  # coupure reseau a la publication : pas de nouvel essai avant
+        self._network_down = False  # une coupure est en cours (journalisee une seule fois)
+        self._stats_network_down = False
         self._path = _queue_path(self.config)
         self._process: Any | None = None
         self._entry: dict[str, Any] | None = None
@@ -1268,8 +1274,17 @@ class Worker:
                 self._mark_stats_running(account)
                 try:
                     self.stats_fetcher(account, config=self.config, on_tick=self._beat)
+                except browser.NetworkDown as exc:
+                    # coupure reseau : ni arret ni blocage de stats_interval_h, nouvel essai apres un court delai
+                    self._stats_attempts[account] = now - wait + min(_STATS_NETWORK_RETRY, wait)
+                    if not self._stats_network_down:
+                        self._stats_network_down = True
+                        log.warning("relevé des statistiques TikTok de %s : %s ; nouvel essai dans %d min", account, exc,
+                                    _STATS_NETWORK_RETRY.total_seconds() // 60)
+                    return
                 finally:
                     _stats_running_path(self.config).unlink(missing_ok=True)
+                self._stats_network_down = False
                 log.info("%s : statistiques TikTok relevées", account)
                 return
         except Exception as exc:  # noqa: BLE001 - jamais un worker mort : l'echec est journalise une fois
@@ -1474,6 +1489,8 @@ class Worker:
 
     def _publish_next(self) -> bool:
         now = datetime.now(timezone.utc)
+        if self._network_retry_at is not None and now < self._network_retry_at:
+            return False  # coupure reseau recente : pas de navigateur rouvert a chaque tour
         services = {a["id"]: a.get("service") or "tiktok" for a in accounts_mod.list_accounts(self.config)}
         cache: dict[str, dict[str, Any]] = {}
         watch = self.config.section("watch")
@@ -1693,6 +1710,16 @@ class Worker:
         except youtube.YouTubeStop as stop:
             self._fail(entry, name, stop.reason, halted=True, account=account, capture=stop.capture,
                        state_dir=paths["state_dir"])
+        except browser.NetworkDown as exc:
+            # coupure reseau avant le clic final : le compte reste « pret a publier », l'entree reste programmee avec
+            # la raison visible et sera retentee (jamais un arret R4) ; journalisee une seule fois par coupure
+            publish_mod.release_in_progress(video_id, clip_id, name, str(exc), state_dir=paths["state_dir"])
+            self._network_retry_at = now + _NETWORK_RETRY
+            if not self._network_down:
+                self._network_down = True
+                log.warning("%s/%s : publication en attente : %s", video_id, clip_id, exc)
+                tiktok.emit_event({"level": "warn", "account": account, **where, "reason": str(exc), "capture": None},
+                                  config=self.config)
         except browser.BrowserUnavailable as exc:  # pays devenu inconnu pendant la prise en main : echec reessayable
             self._fail(entry, name, str(exc), halted=False, account=account, state_dir=paths["state_dir"])
         except browser.BrowserError as exc:
@@ -1704,6 +1731,7 @@ class Worker:
             self._fail(entry, name, f"erreur inattendue : {type(exc).__name__} : {exc}", halted=True,
                        account=account, state_dir=paths["state_dir"])
         else:
+            self._network_down, self._network_retry_at = False, None
             if service == "tiktok" and result["state"] == "scheduled_on_tiktok" and not result["post_id"]:
                 # aucune preuve que le post programmé existe : jamais « publiée » (ADR-ad2e), ni reprogrammée seule
                 self._unconfirmed(entry, name, account, result["note"], paths["state_dir"], result.get("publish_at"))

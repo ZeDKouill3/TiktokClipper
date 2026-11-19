@@ -6101,3 +6101,85 @@ def test_an_entry_already_waiting_for_the_same_reason_does_not_reopen_the_public
     _set_account_state(tmp_path, ACCOUNT, paused_at="2026-06-15T10:00:00+00:00")  # la raison change : elle est notee
     w.tick()
     assert len(calls) == 1 and "en pause" in _entries(tmp_path)[0]["waiting_reason"]
+
+
+# ---------------------------------------------------------------- coupure reseau (TASK-0deb90a88c0c)
+
+_OFFLINE = "réseau indisponible : RuntimeError : Page.goto: net::ERR_INTERNET_DISCONNECTED at https://www.tiktok.com/tiktokstudio/upload"
+
+
+def _account_row(config):
+    return next(a for a in accounts_mod.list_accounts(config) if a["id"] == ACCOUNT)
+
+
+def test_a_network_cut_keeps_the_entry_scheduled_with_a_reason_and_the_account_ready_then_retries(
+        tmp_path, monkeypatch, caplog):
+    config = _pub_env(tmp_path, monkeypatch, tiktok_settings={"max_posts_per_day": 5, "min_gap_minutes": 0})
+    monkeypatch.setattr(worker, "_NETWORK_RETRY", timedelta(0))
+    _seed(tmp_path, "ma_chaine", "01", _ago(minutes=2))
+    pub = FakePublisher(error=browser.NetworkDown(_OFFLINE))
+    w = _pub_worker(config, pub)
+
+    with caplog.at_level(logging.WARNING):
+        w.tick()
+        w.tick()
+
+    entry = _entries(tmp_path)[0]
+    assert entry["status"] == "scheduled" and not entry.get("in_progress_since")
+    assert "réseau indisponible" in entry["waiting_reason"] and "ERR_INTERNET_DISCONNECTED" in entry["waiting_reason"]
+    assert _account_row(config)["ready_to_publish"] is True and publish.halted_account(
+        ACCOUNT, state_dir=str(tmp_path / "state" / "publish"), presets_dir=config.section("watch")["presets_dir"],
+        base=config.section("watch")["base_config"]) is None
+    assert len(pub.calls) == 2  # retentee au tour suivant
+    assert caplog.text.count("réseau indisponible") == 1  # journalisee une seule fois par coupure
+
+    pub.error = None  # le Wi-Fi est revenu
+    w.tick()
+    assert len(pub.calls) == 3 and _entries(tmp_path)[0]["status"] == "published"
+    assert not _entries(tmp_path)[0].get("waiting_reason")
+
+
+def test_a_network_cut_is_not_retried_before_the_short_bounded_delay(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch, tiktok_settings={"max_posts_per_day": 5, "min_gap_minutes": 0})
+    _seed(tmp_path, "ma_chaine", "01", _ago(minutes=2))
+    pub = FakePublisher(error=browser.NetworkDown(_OFFLINE))
+    w = _pub_worker(config, pub)
+
+    w.tick()
+    w.tick()
+    w.tick()
+
+    assert len(pub.calls) == 1  # le delai (60 s) n'est pas ecoule : pas de navigateur rouvert a chaque tour
+    assert worker._NETWORK_RETRY <= timedelta(minutes=5)
+
+
+def test_a_network_stats_failure_is_retried_after_a_short_delay_not_after_the_stats_interval(
+        tmp_path, monkeypatch, caplog):
+    config = _pub_env(tmp_path, monkeypatch)
+    _set_account_state(tmp_path, "ef34ab", ready_to_publish=False)
+    monkeypatch.setattr(worker, "_STATS_NETWORK_RETRY", timedelta(0))
+    fetcher = FakeStatsFetcher(tmp_path, error=browser.NetworkDown(_OFFLINE))
+    w = _stats_worker(config, fetcher)
+
+    with caplog.at_level(logging.WARNING):
+        w.tick()
+        w.tick()
+
+    assert len(fetcher.calls) == 2  # pas bloque pendant stats_interval_h
+    assert caplog.text.count("réseau indisponible") == 1
+    fetcher.error = None
+    w.tick()
+    assert len(fetcher.calls) == 3
+
+
+def test_a_network_stats_failure_waits_the_short_delay_between_attempts(tmp_path, monkeypatch):
+    config = _pub_env(tmp_path, monkeypatch)
+    _set_account_state(tmp_path, "ef34ab", ready_to_publish=False)
+    fetcher = FakeStatsFetcher(tmp_path, error=browser.NetworkDown(_OFFLINE))
+    w = _stats_worker(config, fetcher)
+
+    w.tick()
+    w.tick()
+    w.tick()
+
+    assert len(fetcher.calls) == 1 and worker._STATS_NETWORK_RETRY <= timedelta(minutes=15)
