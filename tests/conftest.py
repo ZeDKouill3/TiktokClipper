@@ -55,6 +55,18 @@ def _journal_in_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(journal, "install", lambda kind, config: real_install(kind, _TmpJournalConfig(config)))
 
 
+@pytest.fixture(autouse=True)
+def _learning_memos_reset(monkeypatch):
+    """Les memoires « dernier calcul » de clipper.learning (bilan de veille, alertes « 0 vue ») sont des dicts de
+    module indexes par chemin de fichier d'etat. Avec ``tmp_path_retention_policy = "failed"``, deux tests dont le nom
+    partage ses 30 premiers caracteres recoivent le meme tmp_path l'un apres l'autre : sans remise a zero, le second
+    herite du « dernier calcul » du premier (test rouge selon l'ordre, suite complete du 19/11)."""
+    from clipper import learning
+
+    monkeypatch.setattr(learning, "_veille_report_computed", {})
+    monkeypatch.setattr(learning, "_zero_views_computed", {})
+
+
 @pytest.fixture
 def isolated_cwd(tmp_path, monkeypatch):
     """Run a test with cwd set to an empty temp dir, so config/workspace
