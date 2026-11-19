@@ -1832,6 +1832,8 @@ class Worker:
     def _wait(self, entry: dict[str, Any], channel: str, account: str, reason: str, state_dir: str | Path) -> None:
         """Entree non tentee (SPEC-00d1 R4) : elle reste ``scheduled`` avec la raison visible ; journal et
         evenement console une seule fois par raison."""
+        if entry.get("waiting_reason") == reason:
+            return  # deja notee sur l'entree lue a ce tour : ni relecture du fichier de file, ni journal
         if publish_mod.set_waiting_reason(entry["video_id"], entry["clip_id"], channel, reason, state_dir=state_dir):
             log.warning("%s/%s : publication en attente : %s", entry["video_id"], entry["clip_id"], reason)
             tiktok.emit_event({"level": "warn", "account": account, "channel": channel, "video_id": entry["video_id"],

@@ -1989,3 +1989,72 @@ def test_a_post_deleted_from_tiktok_is_never_linked(tmp_path):
 def test_pct_watched_is_capped_at_one_when_loops_are_counted():
     assert learning._pct_watched(30, 20) == 1.0
     assert learning._pct_watched(10, 20) == 0.5
+
+
+# ---------------------------------------------------------------- tour au repos (19/11 : 3 600 relevés relus par tour)
+
+def _count_history_reads(monkeypatch) -> list:
+    reads: list = []
+    real = tiktok.read_history
+    monkeypatch.setattr(tiktok, "read_history", lambda *a, **k: reads.append(a) or real(*a, **k))
+    return reads
+
+
+def test_link_if_due_does_not_read_the_history_of_an_account_with_nothing_new(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    _sidecar(config, "clip-02")
+    _snapshot(config, "2026-10-07T10:00:00+00:00", ("7000000000000000013", "Un super clip #jeu #fun", "2026-10-07T09:00:00"))
+    learning.link_if_due(datetime(2026, 10, 7, 10, 30, tzinfo=timezone.utc), config=config)
+    reads = _count_history_reads(monkeypatch)
+
+    assert learning.link_if_due(datetime(2026, 10, 7, 10, 30, 2, tzinfo=timezone.utc), config=config) == []
+    assert reads == []  # rien de neuf : les noms de fichiers suffisent, aucun relevé relu
+
+    _snapshot(config, "2026-10-07T11:30:00+00:00", ("7000000000000000014", "Un super clip #jeu #fun", "2026-10-07T09:10:00"))
+    learning.link_if_due(datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc), config=config)
+    assert reads  # un nouveau relevé : l'historique est relu
+
+
+def test_snapshot_newer_than_sync_compares_file_names_without_reading_the_history(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    settings = learning._settings(config)
+    reads = _count_history_reads(monkeypatch)
+    assert learning._snapshot_newer_than_sync(settings, config) is False  # aucun relevé : rien à verser
+
+    _reading(config, "2026-10-10T12:00:00+00:00", (POST, ALERT_POSTED, 5))
+    assert learning._snapshot_newer_than_sync(settings, config) is True
+
+    sync_path = Path(settings["state_dir"]) / "sync.json"
+    sync_path.parent.mkdir(parents=True, exist_ok=True)
+    sync_path.write_text(json.dumps({"snapshots": {ACCOUNT: learning._snapshot_names(ACCOUNT, config)}}), encoding="utf-8")
+    assert learning._snapshot_newer_than_sync(settings, config) is False
+    assert reads == []
+
+
+def test_zero_view_alert_min_interval_is_declared_and_validated(tmp_path):
+    assert learning.CONFIG_DEFAULTS["zero_view_alert_min_interval_s"] == 300
+    for bad in (-1, True, "60"):
+        config = _config(tmp_path, zero_view_alert_min_interval_s=bad)
+        with pytest.raises(learning.LearningError, match="zero_view_alert_min_interval_s"):
+            learning.run_if_due(NOW, config=config)
+
+
+def test_run_if_due_recomputes_the_zero_view_alerts_once_per_interval_or_after_a_new_snapshot(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    _quiet_run(monkeypatch)
+    monkeypatch.setattr(learning, "write_veille_report", lambda *a, **k: None)
+    calls = []
+    monkeypatch.setattr(learning, "log_zero_view_alerts", lambda *a, **k: calls.append(1))
+
+    learning.run_if_due(NOW, config=config)
+    learning.run_if_due(NOW + timedelta(seconds=2), config=config)
+    learning.run_if_due(NOW + timedelta(seconds=299), config=config)
+    assert len(calls) == 1  # les alertes relisent tous les relevés et tous les sidecars : pas à chaque tour
+
+    learning.run_if_due(NOW + timedelta(seconds=301), config=config)
+    assert len(calls) == 2
+
+    monkeypatch.setattr(learning, "_snapshot_newer_than_sync", lambda *a, **k: True)  # un relevé vient d'arriver
+    monkeypatch.setattr(learning, "sync", lambda *a, **k: {})
+    learning.run_if_due(NOW + timedelta(seconds=303), config=config)
+    assert len(calls) == 3

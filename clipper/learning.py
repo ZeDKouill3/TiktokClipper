@@ -40,6 +40,7 @@ CONFIG_DEFAULTS: dict[str, object] = {
     "zero_view_alert_hours": 24,  # age (heures depuis la mise en ligne) a partir duquel un post a 0 vue est signale
     "zero_view_alert_max_views": 0,  # vues au plus au dernier releve pour qu'un post soit en alerte
     "zero_view_alert_account_min": 2,  # posts en alerte d'un meme compte pour une alerte au niveau du compte
+    "zero_view_alert_min_interval_s": 300,  # secondes minimales entre deux calculs des alertes (hors relevé qui vient d'arriver) : ils relisent tous les relevés et tous les sidecars
     "breakdown_min_n": 5,  # clips mûrs sous ce nombre dans un groupe (jeu, streamer, heure, compte) : « trop peu pour conclure »
     "retention_min_n": 30,  # clips scored sous ce nombre : le tableau de retention est montre avec un avertissement, sans conclusion
 }
@@ -94,6 +95,9 @@ def _settings(config: Config | None) -> dict[str, Any]:
     account_min = settings["zero_view_alert_account_min"]
     if isinstance(account_min, bool) or not isinstance(account_min, int) or account_min < 1:
         raise LearningError(f"[learning] zero_view_alert_account_min invalide : {account_min!r} (un entier >= 1 est attendu)")
+    alert_interval_s = settings["zero_view_alert_min_interval_s"]
+    if isinstance(alert_interval_s, bool) or not isinstance(alert_interval_s, (int, float)) or alert_interval_s < 0:
+        raise LearningError(f"[learning] zero_view_alert_min_interval_s invalide : {alert_interval_s!r} (un nombre de secondes >= 0 est attendu)")
     if not isinstance(settings["enabled"], bool):
         raise LearningError(f"[learning] enabled invalide : {settings['enabled']!r} (true ou false attendu)")
     return settings
@@ -285,11 +289,12 @@ def link_if_due(now: datetime, *, config: Config | None = None) -> list[dict[str
     accounts = sorted(p.name for p in stats_dir.iterdir() if p.is_dir()) if stats_dir.is_dir() else []
     done: list[dict[str, str]] = []
     for account in accounts:
-        history = tiktok.read_history(account, config=config)
-        if not history:
+        # Les noms de fichiers décident, sans relire les relevés : au repos chaque tour du worker relisait tout
+        # l'historique de chaque compte (19/11 : ~3 600 fichiers par tour). ``link_posts`` le lit quand il y a du neuf.
+        names = _snapshot_names(account, config)  # avant le traitement : un relevé qui arrive pendant, reste dû
+        if not names:
             continue
         links = _read_links(settings)
-        names = _snapshot_names(account, config)  # avant le traitement : un relevé qui arrive pendant, reste dû
         if _all_seen(names, links["snapshots"].get(account)):
             continue
         done.extend(link_posts(account, config=config, now=now)["linked"])
@@ -574,12 +579,18 @@ def _calibrate(linked: list[tuple[str, str, int]], config: Config | None, now: d
 
 
 def _snapshot_newer_than_sync(settings: dict[str, Any], config: Config | None) -> bool:
+    """Un compte a-t-il un fichier de relevé pas encore versé ? Par les noms seulement, jamais en relisant les relevés
+    (appelé à chaque tour du worker)."""
     seen = _read_sync(settings).get("snapshots") or {}
-    return any(not _all_seen(_snapshot_names(a, config), seen.get(a))
-               for a in _history_accounts(config) if tiktok.read_history(a, config=config))
+    for account in _history_accounts(config):
+        names = _snapshot_names(account, config)
+        if names and not _all_seen(names, seen.get(account)):
+            return True
+    return False
 
 
 _veille_report_computed: dict[str, datetime] = {}  # dernier calcul du bilan par fichier (TASK-1e46f) : mémoire du worker
+_zero_views_computed: dict[str, datetime] = {}  # dernier calcul des alertes « 0 vue » par fichier d'état : idem
 
 
 def run_if_due(now: datetime, *, config: Config | None = None) -> dict[str, Any]:
@@ -611,11 +622,18 @@ def run_if_due(now: datetime, *, config: Config | None = None) -> dict[str, Any]
             exc.where = "veille_report"  # type: ignore[attr-defined]
             raise
         _veille_report_computed[target] = now
-    try:  # apres le releve : une alerte ne se journalise qu'une fois par post (TASK-974e)
-        log_zero_view_alerts(now, config=config)
-    except Exception as exc:
-        exc.where = "zero_views"  # type: ignore[attr-defined]
-        raise
+    # apres le releve : une alerte ne se journalise qu'une fois par post (TASK-974e). Le calcul relit tous les relevés
+    # et tous les sidecars : au plus une fois par intervalle, ou dès qu'un relevé vient d'arriver (un post passe le
+    # seuil d'âge en heures, quelques minutes de retard n'y changent rien).
+    alerts_key = str(_zero_views_path(settings))
+    last_alerts = _zero_views_computed.get(alerts_key)
+    if due or last_alerts is None or now - last_alerts >= timedelta(seconds=settings["zero_view_alert_min_interval_s"]):
+        try:
+            log_zero_view_alerts(now, config=config)
+        except Exception as exc:
+            exc.where = "zero_views"  # type: ignore[attr-defined]
+            raise
+        _zero_views_computed[alerts_key] = now
     try:
         coached = coach_if_due(now, config=config)
     except (jury_coach.CoachError, jury.JuryError, llm.LLMError) as exc:

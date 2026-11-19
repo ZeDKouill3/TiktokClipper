@@ -6080,3 +6080,24 @@ def test_a_scheduled_entry_past_its_slot_waits_with_a_reason_when_the_account_ha
     entry = _entries(tmp_path)[0]
     assert pub.calls == [] and entry["status"] == "scheduled" and not entry.get("error")
     assert "créneau" in entry["waiting_reason"] and "schedule_min_minutes" in entry["waiting_reason"]
+
+
+def test_an_entry_already_waiting_for_the_same_reason_does_not_reopen_the_publication_file(tmp_path, monkeypatch):
+    # 19/11 : 3 comptes non prets, 67 entrees en attente : chacune rechargeait le fichier de file a chaque tour.
+    config = _pub_env(tmp_path, monkeypatch)
+    _set_account_state(tmp_path, ACCOUNT, ready_to_publish=False)
+    _seed(tmp_path, "ma_chaine", "01", _ago(minutes=1))
+    w = _pub_worker(config, FakePublisher(), FakeLogin())
+    w.tick()  # premier passage : la raison d'attente est posee
+    reason = _entries(tmp_path)[0]["waiting_reason"]
+    assert "non prêt à publier" in reason
+
+    calls = []
+    original = publish.set_waiting_reason
+    monkeypatch.setattr(publish, "set_waiting_reason", lambda *a, **k: (calls.append(a), original(*a, **k))[1])
+    w.tick()
+    assert calls == [] and _entries(tmp_path)[0]["waiting_reason"] == reason  # meme raison : rien a relire ni a ecrire
+
+    _set_account_state(tmp_path, ACCOUNT, paused_at="2026-06-15T10:00:00+00:00")  # la raison change : elle est notee
+    w.tick()
+    assert len(calls) == 1 and "en pause" in _entries(tmp_path)[0]["waiting_reason"]
