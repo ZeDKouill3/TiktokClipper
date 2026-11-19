@@ -12,6 +12,8 @@ scope:
   - tests/test_veille_sources.py
   - tests/test_veille.py
   - CHANGELOG.md
+  - clipper/web/static/screens/settings.js
+  - tests/test_web_settings_v3.py
 blocked_by: []
 done_criteria: |
   1) Le transport par défaut de la veille (veille_sources.default_http) réessaie une requête qui échoue par erreur de connexion (httpx.ConnectError, ConnectTimeout, ReadTimeout, RemoteProtocolError) : nombre d'essais et pause bornés, portés par des réglages de [veille] dans CONFIG_DEFAULTS (défaut 3 essais, 2 s de pause), validés ; 1 essai = comportement actuel. 2) Un essai rattrapé est journalisé une fois en WARNING (hôte, numéro d'essai), jamais en silence ; après le dernier essai l'erreur remonte en SourceError comme aujourd'hui. 3) Les réponses HTTP (4xx, 5xx, 429) ne sont pas concernées : leur traitement actuel est inchangé. 4) Tests unitaires sans réseau (httpx simulé ou transport injecté, attente injectée : aucun vrai sleep), suite complète verte, ligne dans CHANGELOG.md.
