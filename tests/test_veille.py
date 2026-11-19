@@ -119,7 +119,7 @@ def test_config_defaults_are_exactly_r1():
         "vod_max_age_h": 36, "twitch_top_games": 20, "twitch_vods_per_game": 10,
         "youtube_max_results": 50, "youtube_min_duration_s": 600, "steam_top": 100,
         "steam_name_lookups_max": 100, "twitch_access_attempts": 5, "twitch_access_retry_pause_s": 3.0, "twitch_access_workers": 4, "twitch_client_id": "", "twitch_client_secret": "", "youtube_api_key": "",
-        "state_dir": "state/veille", "http_timeout_s": 20,
+        "state_dir": "state/veille", "http_timeout_s": 20, "http_retry_attempts": 3, "http_retry_pause_s": 2.0,
         "steam_rank_gain_min": 5, "steam_risers_max": 10, "steam_sellers_top": 50,
         "upcoming_days": 14, "release_window_days": 15, "igdb_min_hypes": 5, "igdb_recent_max": 12,
         "igdb_upcoming_max": 20, "igdb_pages_max": 4, "youtube_game_min_chars": 5,

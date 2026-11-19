@@ -19,6 +19,7 @@ message ni dans un fichier d'état (R3).
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import re
@@ -27,7 +28,7 @@ from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -126,15 +127,31 @@ def _stopped(result: dict[str, Any], count: int) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
+# Erreurs de connexion passagères : seules celles-ci sont réessayées (TASK-fc2f36ec0889).
+_RETRYABLE = (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.RemoteProtocolError)
+
+
 def default_http(method: str, url: str, *, params: dict[str, Any] | None = None,
                  headers: dict[str, str] | None = None, timeout_s: float = 20,
-                 content: str | None = None) -> tuple[int, Any] | tuple[int, Any, dict[str, str]]:
+                 content: str | None = None, attempts: int = 1, pause_s: float = 0.0,
+                 sleep: Callable[[float], None] | None = None) -> tuple[int, Any] | tuple[int, Any, dict[str, str]]:
     """Transport httpx. Une erreur réseau devient une ``SourceError`` sans paramètres.
-    ``content`` : corps texte de la requête (IGDB, Apicalypse)."""
-    try:
-        response = httpx.request(method, url, params=params, headers=headers, content=content, timeout=timeout_s)
-    except httpx.HTTPError as exc:
-        raise SourceError(f"requête impossible sur {url} ({type(exc).__name__})") from None
+    ``content`` : corps texte de la requête (IGDB, Apicalypse).
+    ``attempts`` : essais au total pour une erreur de connexion passagère (``_RETRYABLE``), espacés de
+    ``pause_s`` secondes ; 1 = un seul essai. Une réponse HTTP, quel que soit son code, n'est jamais réessayée."""
+    host = urlparse(url).hostname or url
+    for attempt in range(1, attempts + 1):
+        try:
+            response = httpx.request(method, url, params=params, headers=headers, content=content, timeout=timeout_s)
+            break
+        except _RETRYABLE as exc:
+            if attempt >= attempts:
+                raise SourceError(f"requête impossible sur {url} ({type(exc).__name__})") from None
+            log.warning("veille : essai %d sur %d échoué sur %s (%s), nouvel essai dans %s s",
+                        attempt, attempts, host, type(exc).__name__, pause_s)
+            (sleep or time.sleep)(pause_s)
+        except httpx.HTTPError as exc:
+            raise SourceError(f"requête impossible sur {url} ({type(exc).__name__})") from None
     try:
         body: Any = response.json()
     except ValueError:
@@ -144,6 +161,9 @@ def default_http(method: str, url: str, *, params: dict[str, Any] | None = None,
         if kept:
             return response.status_code, body, kept
     return response.status_code, body
+
+
+_HTTPX_TRANSPORT = default_http  # le vrai transport, même si ``default_http`` est remplacé (tests)
 
 
 def _safe_url(url: str, params: dict[str, Any] | None) -> str:
@@ -279,6 +299,9 @@ def _sdir(settings: dict[str, object]) -> Path:
 
 
 def _client(settings: dict[str, object], http: Http, secrets: tuple[str, ...]) -> _Client:
+    if http is _HTTPX_TRANSPORT:  # transport par défaut : ses réessais viennent de [veille]
+        http = functools.partial(_HTTPX_TRANSPORT, attempts=int(settings["http_retry_attempts"]),  # type: ignore[call-overload]
+                                 pause_s=float(settings["http_retry_pause_s"]))  # type: ignore[arg-type]
     return _Client(http, float(settings["http_timeout_s"]), secrets)  # type: ignore[arg-type]
 
 
