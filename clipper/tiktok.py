@@ -28,6 +28,7 @@ import functools
 import json
 import logging
 import random
+import math
 import re
 import time
 import tomllib
@@ -128,9 +129,15 @@ class _At:
 
 MAX_POPUP_ROUNDS = 5   # fenetres successives fermees par un meme controle avant d'abandonner
 MAX_MONTH_STEPS = 24   # fleches du calendrier cliquees au plus avant d'abandonner
-REQUIRED_STATS_SELECTORS = ("row", "post_link", "likes", "comments", "metric_card", "traffic_sources", "processing",
-                            "views", "visibility", "created", "retention_point", "viewers_card", "engagement_card",
+REQUIRED_STATS_SELECTORS = ("row", "post_link", "likes", "comments", "metric_card", "traffic_card", "chart_script", "traffic_unit", "processing",
+                            "views", "visibility", "created", "retention_card", "viewers_card", "engagement_card",
                             "page_text", "scroll_script", "fyf_notice")
+MAX_CURVE_POINTS = 1000     # bornes d'une courbe de retention lue dans echarts
+MAX_TRAFFIC_SOURCES = 50
+# Champs detailles dont un None sur tous les posts detailles d'un releve (au moins _STALE_MIN_POSTS) signale un repere perime
+EXPECTED_DETAIL_FIELDS = ("retention", "retention_curve", "traffic_sources", "shares", "avg_watch_s", "watched_full",
+                          "new_followers")
+_STALE_MIN_POSTS = 3
 METRICS = ("views", "watch_total", "watch_avg", "watched_full", "new_followers", "retention")
 TILES = ("views", "profile_views", "likes", "comments", "shares")   # tuiles de la page Donnees analytiques (SPEC-86fe R1)
 PERIODS = (7, 28, 60, 365)                                           # periodes relevees, en jours
@@ -1400,15 +1407,31 @@ class _Flow:
         overview = self.account_overview()
         rows = self.list_posts()
         todo = self.pick_details(rows, previous, full=full)
-        posts = []
+        posts, detailed = [], []
         for post_id, row in rows.items():
             if post_id in todo:
                 posts.append(self.read_post(post_id, row))
+                detailed.append(posts[-1])
             elif (previous.get(post_id) or {}).get("detailed_at"):
                 posts.append(dict(row))  # la vue fusionnee garde son detail ancien
             else:
                 posts.append({**row, "detail_not_read": True})
-        return {"overview": overview, "posts": posts}
+        return {"overview": overview, "posts": posts, "warnings": self.stale_landmarks(detailed)}
+
+    def stale_landmarks(self, detailed: list[dict[str, Any]]) -> list[str]:
+        """Champs detailles restes ``None`` sur TOUS les posts detailles de ce releve (au moins
+        ``_STALE_MIN_POSTS``) : un repere perime, indistinguable d'un « pas encore de chiffre » post par post
+        (ADR-ad2e). Une ligne par champ, journalisee et rendue pour le fichier du releve ; un champ lu sur au
+        moins un post ne declenche rien."""
+        if len(detailed) < _STALE_MIN_POSTS:
+            return []
+        lines = []
+        for field in EXPECTED_DETAIL_FIELDS:
+            if all(post.get(field) is None for post in detailed):
+                line = f"champ {field} jamais lu sur {len(detailed)}/{len(detailed)} posts détaillés : repère périmé"
+                logger.warning("TikTok %s : %s", self.account, line)
+                lines.append(line)
+        return lines
 
     def open_page(self, url: str, prefix: str) -> None:
         self.page.goto(url)
@@ -1586,15 +1609,14 @@ class _Flow:
         post: dict[str, Any] = dict(row)
         for key, field, parse in (("views", "views", parse_count), ("watch_total", "watch_total_s", parse_duration),
                                   ("watch_avg", "avg_watch_s", parse_duration), ("watched_full", "watched_full", parse_percent),
-                                  ("new_followers", "new_followers", parse_count), ("retention", "retention", parse_percent)):
+                                  ("new_followers", "new_followers", parse_count)):
             value = cards.get(_squash(self.sel["metrics"][key]).casefold())
             read = self.read_value(value, key, parse, f"post {post_id}")
             post[field] = read if read is not None or field != "views" else row.get("views")
+        post["retention"] = self.read_retention_rate(post_id)
         post["retention_curve"] = self.read_retention_curve(post_id)
         post["fyf_eligible"], post["fyf_notice"] = self.read_fyf_notice(post_id, row)
-        sources = self.page.query_selector(self.sel["stats"]["traffic_sources"])
-        text = _squash(str(sources.inner_text())) if sources is not None else ""
-        post["traffic_sources"] = None if not text or self.sel["stats"]["processing"].casefold() in text.casefold() else text
+        post["traffic_sources"] = self.read_traffic_sources(post_id)
         # Spectateurs et Engagement restent vides (« en cours de traitement », « dès 100 vues ») sous le seuil :
         # les ouvrir coute deux attentes inutiles par post. Releves seulement a partir de stats_audience_min_views.
         views = post.get("views")
@@ -1623,18 +1645,98 @@ class _Flow:
             raise self.reject("unexpected_page", f"bandeau de restriction vide (post {post_id})")
         return False, text
 
+    def read_retention_rate(self, post_id: str) -> float | None:
+        """Taux de retention : valeur qui suit le libelle ``[metrics] retention`` dans la CARTE DE RETENTION (pas
+        dans les cartes de metriques). Carte ou libelle absents : ``None`` ; « en cours de traitement » : ``None``."""
+        card = self.page.query_selector(self.sel["stats"]["retention_card"])
+        if card is None:
+            logger.info("TikTok %s : carte de rétention absente (post %s) : taux de rétention non lu", self.account, post_id)
+            return None
+        parts = [_squash(part) for part in re.split(r"\s*\|\s*|\n+", str(card.inner_text())) if part.strip()]
+        label = _squash(self.sel["metrics"]["retention"]).casefold()
+        index = next((i for i, part in enumerate(parts) if part.casefold() == label), None)
+        if index is None or index + 1 >= len(parts):
+            logger.info("TikTok %s : libellé « %s » absent de la carte de rétention (post %s)", self.account,
+                        self.sel["metrics"]["retention"], post_id)
+            return None
+        return self.read_value(parts[index + 1], "retention", parse_percent, f"post {post_id}")
+
+    def read_chart(self, post_id: str, card_key: str, what: str) -> tuple[list[Any], list[Any] | None] | None:
+        """Donnees d'un graphe echarts (canvas) de la page d'analyse, lues par ``page.evaluate`` sur l'instance de la
+        carte ``card_key`` : ``(series[0].data, axe x ou None)``. Instance absente ou reponse illisible : ``None``,
+        raison journalisee (jamais devinee)."""
+        stats = self.sel["stats"]
+        try:
+            result = self.page.evaluate(stats["chart_script"], stats[card_key])
+        except Exception as exc:  # noqa: BLE001 - dit dans le journal, jamais avale
+            logger.warning("TikTok %s : %s non lue (post %s) : %s : %s", self.account, what, post_id, type(exc).__name__, exc)
+            return None
+        if not isinstance(result, dict) or not isinstance(result.get("data"), list):
+            reason = result.get("error") if isinstance(result, dict) and result.get("error") else f"réponse inattendue {result!r}"
+            logger.warning("TikTok %s : %s non lue (post %s) : %s", self.account, what, post_id, reason)
+            return None
+        axis = result.get("x")
+        return result["data"], axis if isinstance(axis, list) else None
+
     def read_retention_curve(self, post_id: str) -> list[dict[str, Any]] | None:
-        """Courbe de retention : un point par element ``retention_point`` (« instant | part encore presente »)."""
-        points = []
-        for number, element in enumerate(self.page.query_selector_all(self.sel["stats"]["retention_point"]), start=1):
-            parts = [part.strip() for part in re.split(r"\s*\|\s*|\n+", str(element.inner_text())) if part.strip()]
-            if len(parts) != 2:
-                raise self.reject("unexpected_page", f"point {number} de la rétention illisible (post {post_id}) : "
-                                                     f"{str(element.inner_text())!r}")
-            where = f"post {post_id}, point {number} de la rétention"
-            points.append({"t_s": self.read_value(parts[0], "t_s", parse_duration, where),
-                           "share": self.read_value(parts[1], "share", parse_percent, where)})
-        return points or None
+        """Courbe de retention lue dans l'instance echarts de la carte : ``[{t_s, share}]`` (part en fraction),
+        2 a ``MAX_CURVE_POINTS`` points, temps croissant, part entre 0 et 100 %. Sinon ``None``, raison journalisee."""
+        chart = self.read_chart(post_id, "retention_card", "courbe de rétention")
+        if chart is None:
+            return None
+        data, axis = chart
+        points: list[dict[str, Any]] = []
+        try:
+            if not 2 <= len(data) <= MAX_CURVE_POINTS:
+                raise ValueError(f"{len(data)} points (attendu 2 à {MAX_CURVE_POINTS})")
+            for number, item in enumerate(data):
+                value = item.get("value") if isinstance(item, dict) else item
+                if isinstance(value, (list, tuple)) and len(value) == 2:
+                    t, pct = value
+                elif isinstance(value, (int, float)) and not isinstance(value, bool) and axis and number < len(axis):
+                    t, pct = axis[number], value
+                else:
+                    raise ValueError(f"point {number} illisible : {item!r}")
+                if isinstance(t, str):
+                    try:
+                        t = parse_duration(t)
+                    except ValueError:
+                        raise ValueError(f"point {number} : temps illisible ({item!r})") from None
+                for name, num in (("temps", t), ("part", pct)):
+                    if isinstance(num, bool) or not isinstance(num, (int, float)) or not math.isfinite(num):
+                        raise ValueError(f"point {number} : {name} illisible ({item!r})")
+                if t < 0 or not 0 <= pct <= 100 or (points and t < points[-1]["t_s"]):
+                    raise ValueError(f"point {number} hors borne ou à rebours ({item!r})")
+                points.append({"t_s": float(t), "share": round(pct / 100, 6)})
+        except ValueError as exc:
+            logger.warning("TikTok %s : courbe de rétention invalide (post %s) : %s", self.account, post_id, exc)
+            return None
+        return points
+
+    def read_traffic_sources(self, post_id: str) -> str | None:
+        """Sources de trafic, lues dans l'instance echarts de la carte : « nom valeur unite » par source, dans l'ordre.
+        « en cours de traitement » ou carte absente : ``None`` ; donnees invalides : ``None``, raison journalisee."""
+        stats = self.sel["stats"]
+        card = self.page.query_selector(stats["traffic_card"])
+        if card is None or stats["processing"].casefold() in str(card.inner_text()).casefold():
+            return None
+        chart = self.read_chart(post_id, "traffic_card", "sources de trafic")
+        if chart is None:
+            return None
+        parts = []
+        for number, item in enumerate(chart[0]):
+            name = item.get("name") if isinstance(item, dict) else None
+            value = item.get("value") if isinstance(item, dict) else None
+            if (not isinstance(name, str) or not name.strip() or isinstance(value, bool)
+                    or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0):
+                logger.warning("TikTok %s : sources de trafic invalides (post %s) : source %d illisible (%r)",
+                               self.account, post_id, number, item)
+                return None
+            parts.append(f"{_squash(name)} {value:g}{stats['traffic_unit']}")
+        if not parts or len(parts) > MAX_TRAFFIC_SOURCES:
+            logger.warning("TikTok %s : sources de trafic invalides (post %s) : %d sources", self.account, post_id, len(parts))
+            return None
+        return " ".join(parts)
 
     def read_cards(self, url_key: str, post_id: str, card_key: str) -> list[list[str]] | None:
         """Cartes d'un onglet du post, chacune en lignes de texte ; ``None`` quand TikTok dit que l'onglet n'a pas
@@ -2089,7 +2191,8 @@ def fetch_stats(
         _record_stats_failure(account, exc, config, settings, now)
         raise
     snapshot = {"account": account, "fetched_at": now.isoformat(), "source": "tiktok_studio", "origin": "full",
-                "overview": data["overview"], "posts": data["posts"]}
+                "overview": data["overview"], "posts": data["posts"],
+                "warnings": data.get("warnings", [])}
     append_snapshot(account, settings, snapshot)
     return snapshot
 

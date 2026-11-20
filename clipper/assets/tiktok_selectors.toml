@@ -22,7 +22,7 @@
 # probleme (content_check_problem), le clic hors du champ qui ferme les selecteurs
 # (schedule_picker_close), les cellules J'aime / Commentaires de la ligne de la page Publications
 # ([stats] likes, comments : colonnes du tableau, pas de data-tt releve) et le bloc des sources de
-# trafic ([stats] traffic_sources). Le test reel (CLIPPER_TIKTOK_REAL=1, tests/integration/
+# trafic ([stats] traffic_card). Le test reel (CLIPPER_TIKTOK_REAL=1, tests/integration/
 # test_tiktok_real.py) sert a les confirmer.
 #
 # VU SUR LA VRAIE PAGE SANS SELECTEUR CONFIRME (SPEC-86fe, releve FR du 2026-10-01) : les libelles de la page Donnees
@@ -210,8 +210,12 @@ metric_card = "[data-tt='VideoOverviewPage_VideoMetricsCard_FlexItem']"
 # Bandeau en haut de l'analyse d'un post restreint (verifie en reel 2026-10-04) : « Cette vidéo n'est pas éligible à la
 # recommandation dans le fil d'actualité Pour toi... ». Classes generees (css-xxxx) : reperage par le TEXTE, FR et EN.
 fyf_notice = "span:text-matches(\"pas éligible à la recommandation|not eligible for recommendation\", \"i\")"
-# Bloc des sources de trafic (visibles a partir de 100 vues). A VERIFIER SUR LA VRAIE PAGE.
-traffic_sources = "[data-tt='VideoOverviewPage_TrafficSourceCard_FlexRow']"
+# Carte des sources de trafic (visibles a partir de 100 vues) : graphe echarts dessine en canvas, comme la retention,
+# lu par chart_script (donnees {name, value} de series[0]). Repere de la CARTE (pas de ses points) : s'il est
+# perime, le releve complet journalise « champ traffic_sources jamais lu sur N/N posts detailles : repere perime ».
+traffic_card = "[data-tt='VideoOverviewPage_TrafficSourceCard']"
+# Unite ajoutee apres chaque valeur des sources de trafic (valeurs en pourcentage).
+traffic_unit = " %"
 # Valeur affichee tant que TikTok n'a pas fini de calculer (retention, sources) : relevee « null ».
 processing = "en cours de traitement"
 # Cellules de la ligne de la page Publications (verifie en reel 2026-10-02) : vues _6, visibilite (bouton de la
@@ -219,11 +223,25 @@ processing = "en cours de traitement"
 views = "[data-tt='components_RowLayout_FlexRow_6']"
 visibility = "[data-tt='components_PrivacyCell_TUXButton']"
 created = "[data-tt='components_PublishStageLabel_TUXText']"
-# Points de la courbe de retention d'un post (texte « instant | part encore presente »). Releve reel 2026-10-06 : la
-# courbe de la carte « Taux de retention » (VideoOverviewPage_RetentionCard) est un graphe echarts dessine en canvas sous
-# une video, SANS element par point dans le DOM (seuls « 0:00 (100%) » et « 1:01 » en texte). Ce repere ne designe donc
-# aucun element de la vraie page : la courbe est relevee « null », jamais devinee.
-retention_point = "[data-tt='VideoOverviewPage_RetentionCard_Point']"
+# Carte de retention d'un post (releve reel 2026-10-06 : VideoOverviewPage_RetentionCard) : elle porte le libelle
+# « Taux de retention » suivi de sa valeur (hors des cartes de metriques), et un graphe echarts dessine en canvas,
+# SANS element par point dans le DOM. La courbe se lit donc dans l'instance echarts de la carte.
+retention_card = "[data-tt='VideoOverviewPage_RetentionCard']"
+# Script execute dans la page (argument : le repere d'une carte) : instance echarts du graphe de la carte, donnees de
+# series[0] (et de l'axe x quand les points sont de simples nombres). Rend {data, x} ou {error: raison}.
+chart_script = """(selector) => {
+  const card = document.querySelector(selector);
+  if (!card) return {error: "carte absente de la page"};
+  if (!window.echarts || !window.echarts.getInstanceByDom) return {error: "echarts absent de la page"};
+  const holders = [card, ...card.querySelectorAll("div")];
+  const chart = holders.map(el => window.echarts.getInstanceByDom(el)).find(c => c);
+  if (!chart) return {error: "instance echarts absente de la carte"};
+  const option = chart.getOption();
+  const series = option && option.series && option.series[0];
+  if (!series || !Array.isArray(series.data)) return {error: "series[0].data absent de l'instance echarts"};
+  const axis = option.xAxis && option.xAxis[0] && Array.isArray(option.xAxis[0].data) ? option.xAxis[0].data : null;
+  return {data: series.data, x: axis};
+}"""
 # Cartes des onglets Spectateurs et Engagement (verifie en reel 2026-10-06) : une carte = un bloc AnalyticsCard_CardWrapper,
 # texte « titre, puis lignes » (un noeud texte par ligne). Spectateurs : « Total des spectateurs, 1.3K, +1, (contre...) » ;
 # « Types de spectateurs » = les pourcentages d'une barre PUIS ses libelles ; Age / Sexe / Lieux = « libelle, valeur % »
