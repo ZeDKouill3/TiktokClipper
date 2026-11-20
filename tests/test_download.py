@@ -636,6 +636,35 @@ def test_download_retries_on_connection_reset_then_succeeds(isolated_cwd, caplog
     assert "essai 1/15" in caplog.text and "essai 2/15" in caplog.text
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        # Messages reels de yt-dlp les 19-20/11/2026, a chaque decrochage du Wi-Fi de MAIN : la VOD passait
+        # en echec au lieu d'etre reprise (le fichier partiel est garde, une reprise repart de la).
+        "ERROR: [download] Got error: Downloaded 7347313 bytes, expected 7945820 bytes",
+        "ERROR: [download] Got error: [Errno 11001] getaddrinfo failed",
+        "ERROR: [download] Got error: Remote end closed connection without response",
+    ],
+)
+def test_download_retries_on_wifi_drop_errors(isolated_cwd, message):
+    from clipper.download import download
+
+    info = _load_fixture("info_dict_full.json")
+    calls: list = []
+    sleeps: list = []
+    meta = download(
+        f"https://www.youtube.com/watch?v={info['id']}",
+        workspace_dir=isolated_cwd / "workspace",
+        ydl_factory=_flaky_ydl(info, [Exception(message)], calls),
+        sleep=sleeps.append,
+        network_retries=15,
+        network_retry_pause_s=5,
+    )
+    assert meta["video_id"] == info["id"]
+    assert len(calls) == 2
+    assert sleeps == [5]
+
+
 def test_download_network_retries_exhausted_raises_original_error(isolated_cwd):
     from clipper.download import download
 

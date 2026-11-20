@@ -12,6 +12,10 @@ Notes de version détaillées : [`docs/releases/`](docs/releases/).
 
 ### Corrigé
 
+- Téléchargement : un fragment tronqué (« Downloaded X bytes, expected Y »), un DNS perdu (« getaddrinfo failed ») ou une connexion coupée par le serveur (« Remote end closed connection ») sont traités comme une coupure réseau et repris (`[download] network_retries`) au lieu de mettre la VOD en échec. Constaté les 19-20/11 à chaque décrochage du Wi-Fi.
+
+### Corrigé
+
 - Publication et relevé de statistiques (TikTok, YouTube) : une coupure réseau (réveil du PC, `net::ERR_INTERNET_DISCONNECTED`, `ERR_NETWORK_CHANGED`, navigateur fermé avant le clic final…) ne décoche plus le compte. L'entrée reste programmée avec la raison « réseau indisponible », journalisée une fois par coupure, et est retentée après 60 s ; le relevé de statistiques est retenté après 5 min au lieu d'attendre `stats_interval_h`. Après le clic final, l'arrêt R4 est conservé (jamais de doublon).
 
 - Veille : une erreur de connexion passagère (`ConnectError`, `ConnectTimeout`, `ReadTimeout`, `RemoteProtocolError`) ne fait plus tomber toute la source. Le transport par défaut réessaie la requête (`[veille] http_retry_attempts` 3 par défaut, `http_retry_pause_s` 2 s de pause ; 1 = aucun réessai) ; chaque essai rattrapé est journalisé en WARNING (hôte, numéro d'essai) et, après le dernier essai, l'erreur remonte comme avant. Les réponses HTTP (4xx, 5xx, 429) ne sont pas réessayées.

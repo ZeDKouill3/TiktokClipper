@@ -54,6 +54,12 @@ _NETWORK_MARKERS = (
     "connection aborted",
     "forcibly closed",
     "failed to download m3u8 information",
+    # Decrochages Wi-Fi des 19-20/11/2026 : fragment tronque (ContentTooShortError de yt-dlp), DNS
+    # perdu, serveur coupe en pleine reponse. Le fichier partiel est garde : la reprise repart de la.
+    "bytes, expected",
+    "getaddrinfo failed",
+    "11001",
+    "remote end closed connection",
 )
 
 # meilleure qualite jusqu'a 1080p, conteneur mp4 (ADR-b16b: sortie normalisee
