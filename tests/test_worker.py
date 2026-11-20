@@ -6183,3 +6183,69 @@ def test_a_network_stats_failure_waits_the_short_delay_between_attempts(tmp_path
     w.tick()
 
     assert len(fetcher.calls) == 1 and worker._STATS_NETWORK_RETRY <= timedelta(minutes=15)
+
+
+# ---- completion d'un plan valide incomplet (TASK-523e7c507350, SPEC-7bfa R15) : appelee a chaque tour apres le plan
+
+def test_tick_calls_the_plan_completion_every_turn_right_after_the_plan(tmp_path):
+    calls = []
+    w = worker.Worker(
+        config=_learning_config(tmp_path), spawner=FakeSpawner(),
+        learning_runner=lambda now, *, config: calls.append("learning") or {},
+        repartition_runner=lambda now, *, config: calls.append("repartition"),
+        completion_runner=lambda now, *, config: calls.append("completion"),
+    )
+    w._veille_due = lambda: None
+    w.tick()
+    w.tick()
+    assert calls == ["learning", "repartition", "completion", "learning", "repartition", "completion"]
+
+
+def test_the_default_completion_runner_is_repartition_complete_if_due(tmp_path):
+    from clipper import repartition
+
+    assert worker.Worker(config=_learning_config(tmp_path), spawner=FakeSpawner()).completion_runner is repartition.complete_if_due
+
+
+def test_a_completion_error_never_leaves_tick_nor_stops_the_plan_and_is_logged_once(tmp_path, caplog):
+    import logging
+
+    from clipper import repartition
+
+    calls = []
+
+    def completion(now, *, config):
+        raise repartition.RepartitionError("completion illisible (casse-completion.json)")
+
+    w = worker.Worker(config=_learning_config(tmp_path), spawner=FakeSpawner(),
+                      repartition_runner=lambda now, *, config: calls.append("plan"), completion_runner=completion)
+    w._veille_due = lambda: None
+    with caplog.at_level(logging.ERROR):
+        w.tick()
+        w.tick()
+    assert calls == ["plan", "plan"]
+    assert caplog.text.count("casse-completion.json") == 1
+
+
+def test_a_plan_error_does_not_skip_the_completion_of_the_same_turn(tmp_path):
+    calls = []
+
+    def runner(now, *, config):
+        raise ValueError("plan casse")
+
+    w = worker.Worker(config=_learning_config(tmp_path), spawner=FakeSpawner(), repartition_runner=runner,
+                      completion_runner=lambda now, *, config: calls.append("completion"))
+    w._veille_due = lambda: None
+    w.tick()
+    assert calls == ["completion"]
+
+
+def test_completion_disabled_with_the_repartition_calls_nothing(tmp_path):
+    calls = []
+    config = _learning_config(tmp_path)
+    config._sections["repartition"] = {"enabled": False}
+    w = worker.Worker(config=config, spawner=FakeSpawner(), repartition_runner=lambda now, *, config: None,
+                      completion_runner=lambda now, *, config: calls.append(1))
+    w._veille_due = lambda: None
+    w.tick()
+    assert calls == []

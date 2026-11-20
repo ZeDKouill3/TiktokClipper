@@ -127,6 +127,7 @@ def test_r0_defaults_are_exactly_the_spec():
         "prime_end": "22:00", "exploration_per_day": 1, "bonus_window_days": 7, "bonus_min_age_h": 24,
         "bonus_min_posts": 3, "bonus_points": 5.0, "title_ab_enabled": False, "title_ab_start": "2026-10-14",
         "title_ab_accounts": [], "title_ab_styles": ["citation", "promesse", "promesse_emoji"],
+        "auto_complete": False, "auto_complete_every_min": 30,
     }
 
 
@@ -1373,3 +1374,392 @@ def test_title_cap_manual_line_gets_a_warning_not_a_refusal(tmp_path):
     assert "11" in long_line["warning"] and "10" in long_line["warning"] and "titre" in long_line["warning"]
     assert ok_line["warning"] is None
     assert error is None
+
+
+# ---------------------------------------------------------------- R11-R17 : completer un plan valide incomplet (SPEC-7bfa)
+
+from clipper import channel as channel_mod  # noqa: E402
+from clipper import publish  # noqa: E402
+
+SLOTS3 = ["10:00", "14:00", "19:00"]  # samedi 10/10 : trois creneaux fixes, tous dans le futur de NOW
+
+
+def _comp_config(tmp_path, *, tiktok_settings=None, **overrides) -> Config:
+    config = _config(tmp_path, posts_per_day=3, **overrides)
+    # plafonds de TikTok assouplis pour que trois posts par jour passent la previsualisation
+    config._sections["tiktok"].update({"max_posts_per_day": 10, "min_gap_minutes": 60, **(tiktok_settings or {})})
+    return config
+
+
+def _scope(config) -> dict:
+    return {"workspace_dir": Path(config.workspace_dir), "output_dir": Path(config.output_dir),
+            "state_dir": config.section("publish")["state_dir"], "presets_dir": config.section("watch")["presets_dir"],
+            "base": config.section("watch")["base_config"], "settings": tiktok.get_settings(config)}
+
+
+def _validate(config, plan: dict, *, only=None, status="validated") -> dict:
+    """Ce que fait la validation (R8) : une entree programmee par ligne, puis le fichier passe ``validated``."""
+    created = []
+    for account in plan["accounts"]:
+        if only is not None and account["account"] not in only:
+            continue
+        lines = account["lines"]
+        if not lines:
+            continue
+        publish.create_series(
+            mode="manual", style=None, account=account["account"], service="tiktok",
+            selection=[(ln["video_id"], ln["clip_id"]) for ln in lines],
+            clip_dates={(ln["video_id"], ln["clip_id"]): datetime.fromisoformat(ln["slot_at"]) for ln in lines},
+            together=False, schedule={"slots": [], "timezone": "Europe/Paris"}, now=NOW, **_scope(config))
+        created += [{"account": account["account"], "video_id": ln["video_id"], "clip_id": ln["clip_id"]} for ln in lines]
+    stored = repartition.read_plan(plan["day"], config)
+    stored.update(status=status, created=created, validated_at=NOW.isoformat())
+    channel_mod.atomic_write_json(repartition.plan_path(plan["day"], config), stored)
+    return stored
+
+
+def _queue(config) -> list[tuple]:
+    entries = publish.all_entries(state_dir=config.section("publish")["state_dir"],
+                                  presets_dir=config.section("watch")["presets_dir"])
+    return sorted((e["account"], e["video_id"], e["clip_id"], e["status"], e.get("publish_mode")) for _c, e in entries)
+
+
+def _complete(config, *, now=NOW, by="web", day=DAY) -> dict:
+    return repartition.complete_plan(day, now, config=config, completed_by=by)
+
+
+def _incomplete(tmp_path, *, accounts=None, first_clips=1, tiktok_settings=None, **overrides):
+    """Plan valide avec ``first_clips`` ligne(s) sur 3 creneaux : les autres creneaux restent vides."""
+    config = _comp_config(tmp_path, tiktok_settings=tiktok_settings, **overrides)
+    _accounts(config, *(accounts or [_acc("a", slots=SLOTS3)]))
+    for n in range(first_clips):
+        _clip(config, f"V{n}", "01", score=90 - n, game=f"g{n}")
+    plan = _validate(config, _plan(config))
+    return config, plan
+
+
+def _reasons(plan, account="a") -> dict[str, str]:
+    return {datetime.fromisoformat(e["slot_at"]).astimezone(PARIS).strftime("%H:%M"): e["reason"]
+            for e in _acc_plan(plan, account)["empty_slots"]}
+
+
+def test_r14_defaults_and_invalid_values(tmp_path):
+    assert repartition.CONFIG_DEFAULTS["auto_complete"] is False
+    assert repartition.CONFIG_DEFAULTS["auto_complete_every_min"] == 30
+    for override in ({"auto_complete": "oui"}, {"auto_complete_every_min": 0}, {"auto_complete_every_min": True}):
+        config = _comp_config(tmp_path, **override)
+        _accounts(config, _acc("a", slots=SLOTS3))
+        with pytest.raises(repartition.RepartitionError, match="auto_complete"):
+            _plan(config)
+
+
+def test_r14_config_example_files_document_the_new_keys():
+    for path in (REPO_ROOT / "config.example.toml", REPO_ROOT / "clipper" / "assets" / "config.example.toml"):
+        text = path.read_text(encoding="utf-8")
+        assert "auto_complete =" in text and "auto_complete_every_min" in text
+
+
+def test_r11_complete_creates_only_the_empty_future_slots_and_leaves_existing_lines_untouched(tmp_path):
+    config, before = _incomplete(tmp_path)
+    old_line, old_created = dict(before["accounts"][0]["lines"][0]), list(before["created"])
+    _clip(config, "N1", "01", score=70, game="n1")
+    _clip(config, "N2", "01", score=60, game="n2")
+
+    after = _complete(config)
+
+    lines = _acc_plan(after, "a")["lines"]
+    assert len(lines) == 3
+    assert [ln for ln in lines if ln["video_id"] == "V0"] == [old_line]
+    assert after["created"][:1] == old_created
+    assert {c["video_id"] for c in after["created"]} == {"V0", "N1", "N2"}
+    assert after["status"] == "validated"
+    assert all("completed_at" in ln for ln in lines if ln["video_id"] != "V0")
+    queue = _queue(config)
+    assert len(queue) == 3
+    assert {q[4] for q in queue} == {"scheduled"}  # jamais en mode immediat
+    assert _acc_plan(after, "a")["empty_slots"] == []
+
+
+def test_r11_a_slot_past_or_closer_than_fifteen_minutes_is_never_completed(tmp_path):
+    config, _before = _incomplete(tmp_path)
+    _clip(config, "N1", "01", score=70, game="n1")
+    _clip(config, "N2", "01", score=60, game="n2")
+    late = datetime(2026, 10, 10, 13, 50, tzinfo=PARIS)  # 10:00 passe, 14:00 a 10 min, 19:00 libre
+
+    after = _complete(config, now=late)
+
+    assert [ln["video_id"] for ln in _acc_plan(after, "a")["lines"] if ln["video_id"] != "V0"] == []
+    assert _reasons(after) == {"10:00": "past", "14:00": "past"}
+    assert len(_queue(config)) == 1
+    for entry in _acc_plan(after, "a")["empty_slots"]:
+        assert entry["detail"]
+
+
+def test_r11_a_free_future_slot_is_filled_when_the_others_are_past(tmp_path):
+    config, _before = _incomplete(tmp_path, first_clips=0)
+    _clip(config, "N1", "01", score=70, game="n1")
+    plan0 = repartition.read_plan(DAY, config)
+    assert plan0["accounts"][0]["lines"] == []
+    late = datetime(2026, 10, 10, 13, 50, tzinfo=PARIS)
+
+    after = _complete(config, now=late)
+
+    assert [(ln["video_id"], _hour_of(ln)) for ln in _acc_plan(after, "a")["lines"]] == [("N1", "19:00")]
+    assert _reasons(after) == {"10:00": "past", "14:00": "past"}
+
+
+def test_r11_ab_style_of_the_day_is_respected_and_a_mismatch_is_reported(tmp_path):
+    config = _comp_config(tmp_path, title_ab_enabled=True, title_ab_start="2026-10-10", title_ab_accounts=["a", "b"])
+    _accounts(config, _acc("a", slots=SLOTS3), _acc("b", slots=SLOTS3))
+    _styled(config, "V1", style="citation", game="g1")  # style du jour de a (b : promesse)
+    _validate(config, _plan(config))
+    _styled(config, "N1", style="promesse_emoji", game="g2")  # le style d'aucun des deux comptes
+    _styled(config, "N2", style="promesse", game="g3")  # style de b
+
+    after = _complete(config)
+
+    assert [ln["video_id"] for ln in _acc_plan(after, "b")["lines"]] == ["N2"]
+    assert [ln["video_id"] for ln in _acc_plan(after, "a")["lines"]] == ["V1"]
+    assert set(_reasons(after, "a").values()) == {"style_mismatch"}
+    assert set(_reasons(after, "b").values()) == {"style_mismatch"}
+    assert after["title_ab"]["refused"]
+
+
+def test_r11_max_per_source_counts_the_existing_lines(tmp_path):
+    config, _before = _incomplete(tmp_path, max_per_source=1)
+    _clip(config, "S1", "01", score=70, game="g0")  # meme jeu que la ligne existante
+
+    after = _complete(config)
+
+    assert [ln["video_id"] for ln in _acc_plan(after, "a")["lines"]] == ["V0"]
+    assert set(_reasons(after).values()) == {"max_per_source"}
+
+
+def test_r11_exploration_per_day_counts_the_existing_exploration_lines(tmp_path):
+    config = _comp_config(tmp_path, exploration_per_day=1)
+    _accounts(config, _acc("a", slots=SLOTS3))
+    _clip(config, "E0", "01", score=40, game="e0", exploration=True)
+    plan = _validate(config, _plan(config))
+    assert _acc_plan(plan, "a")["lines"][0]["exploration"] is True
+    _clip(config, "E1", "01", score=90, game="e1", exploration=True)
+
+    after = _complete(config)
+
+    assert [ln["video_id"] for ln in _acc_plan(after, "a")["lines"]] == ["E0"]
+    assert set(_reasons(after).values()) == {"no_clip"}
+
+
+def test_r11_a_paused_account_is_not_completed(tmp_path):
+    config, _before = _incomplete(tmp_path)
+    _accounts(config, _acc("a", slots=SLOTS3, paused=True))
+    _clip(config, "N1", "01", score=70, game="n1")
+
+    after = _complete(config)
+
+    assert len(_acc_plan(after, "a")["lines"]) == 1
+    assert set(_reasons(after).values()) == {"account_not_ready"}
+    assert len(_queue(config)) == 1
+
+
+def test_r11_no_clip_is_reported_when_the_pool_is_empty(tmp_path):
+    config, _before = _incomplete(tmp_path)
+
+    after = _complete(config)
+
+    assert set(_reasons(after).values()) == {"no_clip"}
+    assert after["completions"][-1]["created"] == 0 and after["completions"][-1]["empty"] == 2
+
+
+def test_r11_a_line_refused_by_the_account_caps_leaves_the_slot_empty_with_the_refusal(tmp_path):
+    config, _before = _incomplete(tmp_path, tiktok_settings={"max_posts_per_day": 1})
+    _clip(config, "N1", "01", score=70, game="n1")
+
+    after = _complete(config)
+
+    assert len(_acc_plan(after, "a")["lines"]) == 1
+    assert set(_reasons(after).values()) == {"refused"}
+    assert all(e["detail"] for e in _acc_plan(after, "a")["empty_slots"])
+    assert len(_queue(config)) == 1
+
+
+def test_r12_completion_is_traced_and_the_plan_stays_validated(tmp_path):
+    config, _before = _incomplete(tmp_path)
+    _clip(config, "N1", "01", score=70, game="n1")
+
+    after = _complete(config, by="worker")
+
+    assert after["status"] == "validated"
+    assert after["completions"] == [{"at": NOW.isoformat(), "by": "worker", "created": 1, "empty": 1}]
+    assert repartition.read_plan(DAY, config) == after
+
+
+def test_r12_a_refused_account_stops_the_completion_and_keeps_the_previous_ones(tmp_path, monkeypatch):
+    config, _before = _incomplete(tmp_path, accounts=[_acc("a", slots=SLOTS3), _acc("b", slots=SLOTS3)])
+    _clip(config, "N1", "01", score=70, game="n1")
+    _clip(config, "N2", "01", score=60, game="n2")
+    real = publish.create_series
+
+    def flaky(**kwargs):
+        if kwargs["account"] == "b":
+            raise publish.PublishError("plafond atteint pour b")
+        return real(**kwargs)
+
+    monkeypatch.setattr(publish, "create_series", flaky)
+
+    with pytest.raises(repartition.CompletionRefused) as raised:
+        _complete(config)
+
+    assert raised.value.account == "b" and "plafond atteint pour b" in raised.value.detail
+    stored = repartition.read_plan(DAY, config)
+    assert stored["status"] == "validated"
+    assert stored["last_error"] == raised.value.detail
+    assert any(c["account"] == "a" and c["video_id"] != "V0" for c in stored["created"])
+    assert not any(c["account"] == "b" and c["video_id"] != "V0" for c in stored["created"])
+
+
+def test_r12_a_proposed_plan_with_a_partial_created_is_completed_then_validated(tmp_path):
+    config = _comp_config(tmp_path)
+    _accounts(config, _acc("a", slots=SLOTS3), _acc("b", slots=SLOTS3))
+    _clip(config, "V1", "01", score=90, game="g1")
+    _clip(config, "V2", "01", score=80, game="g2")
+    plan = _plan(config)
+    assert _acc_plan(plan, "b")["lines"]
+    _validate(config, plan, only={"a"}, status="proposed")
+    _clip(config, "N1", "01", score=70, game="n1")
+    _clip(config, "N2", "01", score=60, game="n2")
+
+    after = _complete(config)
+
+    assert after["status"] == "validated" and after["validated_at"]
+    assert {c["account"] for c in after["created"]} == {"a", "b"}
+    assert len(_queue(config)) == len(after["created"])
+    assert all(any(ln["video_id"] == c["video_id"] for ln in _acc_plan(after, c["account"])["lines"])
+               for c in after["created"])
+
+
+@pytest.mark.parametrize("make", ["absent", "proposed", "error"])
+def test_r11_refuses_a_plan_that_cannot_be_completed(tmp_path, make):
+    config = _comp_config(tmp_path)
+    _accounts(config, _acc("a", slots=SLOTS3))
+    _clip(config, "V1", "01")
+    if make == "proposed":
+        _plan(config)
+    elif make == "error":
+        path = repartition.plan_path(DAY, config)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        channel_mod.atomic_write_json(path, {"day": DAY.isoformat(), "status": "error", "error": {"message": "boom"}})
+
+    expected = repartition.PlanNotFound if make == "absent" else repartition.RepartitionError
+    with pytest.raises(expected):
+        _complete(config)
+    assert _queue(config) == []
+
+
+def test_r13_every_empty_slot_has_a_reason_of_the_closed_list_after_compute_too(tmp_path):
+    config = _comp_config(tmp_path)
+    _accounts(config, _acc("a", slots=SLOTS3))
+    _clip(config, "V1", "01")
+
+    plan = _plan(config)
+
+    assert len(_acc_plan(plan, "a")["empty_slots"]) == 2
+    for entry in _acc_plan(plan, "a")["empty_slots"]:
+        assert entry["reason"] in repartition.EMPTY_REASONS and entry["detail"]
+
+
+def test_r13_completion_is_logged_once_per_call(tmp_path, caplog):
+    config, _before = _incomplete(tmp_path)
+    _clip(config, "N1", "01", score=70, game="n1")
+
+    with caplog.at_level(logging.INFO, logger="clipper.repartition"):
+        _complete(config, by="worker")
+
+    messages = [r.getMessage() for r in caplog.records if "complété" in r.getMessage()]
+    assert len(messages) == 1 and DAY.isoformat() in messages[0] and "worker" in messages[0]
+
+
+def test_r15_complete_if_due_does_nothing_by_default(tmp_path):
+    config, _before = _incomplete(tmp_path)
+    _clip(config, "N1", "01", score=70, game="n1")
+
+    assert repartition.complete_if_due(NOW, config=config) is None
+    assert len(_queue(config)) == 1
+
+
+def test_r15_complete_if_due_completes_once_then_waits_the_interval(tmp_path):
+    config, _before = _incomplete(tmp_path, auto_complete=True, auto_complete_every_min=30)
+    _clip(config, "N1", "01", score=70, game="n1")
+
+    first = repartition.complete_if_due(NOW, config=config)
+    _clip(config, "N2", "01", score=60, game="n2")
+    too_soon = repartition.complete_if_due(NOW + timedelta(minutes=29), config=config)
+    later = repartition.complete_if_due(NOW + timedelta(minutes=30), config=config)
+
+    assert first is not None and first["completions"][-1]["by"] == "worker"
+    assert too_soon is None
+    assert later is not None and len(later["completions"]) == 2
+    assert len(_queue(config)) == 3
+
+
+def test_r15_complete_if_due_without_an_eligible_clip_does_nothing(tmp_path):
+    config, _before = _incomplete(tmp_path, auto_complete=True)
+
+    assert repartition.complete_if_due(NOW, config=config) is None
+    assert "completions" not in repartition.read_plan(DAY, config)
+
+
+def test_r15_complete_if_due_never_completes_a_proposed_plan(tmp_path):
+    config = _comp_config(tmp_path, auto_complete=True)
+    _accounts(config, _acc("a", slots=SLOTS3))
+    _clip(config, "V1", "01")
+    _plan(config)
+    _clip(config, "N1", "01", score=70, game="n1")
+
+    assert repartition.complete_if_due(NOW, config=config) is None
+    assert _queue(config) == []
+
+
+def test_r15_complete_if_due_also_serves_today_s_plan(tmp_path):
+    config, _before = _incomplete(tmp_path, auto_complete=True)
+    _clip(config, "N1", "01", score=70, game="n1")
+    morning = datetime(2026, 10, 10, 8, 0, tzinfo=PARIS)
+
+    done = repartition.complete_if_due(morning, config=config)
+
+    assert done is not None and done["day"] == DAY.isoformat() and len(_queue(config)) == 2
+
+
+def test_r15_complete_if_due_disabled_module_does_nothing(tmp_path):
+    config, _before = _incomplete(tmp_path, auto_complete=True)
+    config._sections["repartition"]["enabled"] = False
+    _clip(config, "N1", "01", score=70, game="n1")
+
+    assert repartition.complete_if_due(NOW, config=config) is None
+
+
+def test_r15_complete_if_due_writes_the_error_and_logs_it_once(tmp_path, monkeypatch, caplog):
+    config, _before = _incomplete(tmp_path, auto_complete=True, auto_complete_every_min=1)
+    _clip(config, "N1", "01", score=70, game="n1")
+
+    def refuse(**kwargs):
+        raise publish.PublishError("refus x")
+
+    monkeypatch.setattr(publish, "create_series", refuse)
+    repartition._logged_errors.clear()
+
+    with caplog.at_level(logging.WARNING, logger="clipper.repartition"):
+        assert repartition.complete_if_due(NOW, config=config) is None
+        assert repartition.complete_if_due(NOW + timedelta(minutes=5), config=config) is None
+
+    assert "refus x" in repartition.read_plan(DAY, config)["last_error"]
+    assert len([r for r in caplog.records if "refus x" in r.getMessage()]) == 1
+    assert len(_queue(config)) == 1
+
+
+def test_r15_complete_if_due_with_invalid_settings_logs_and_does_not_raise(tmp_path, caplog):
+    bad = _comp_config(tmp_path, auto_complete="oui")
+
+    with caplog.at_level(logging.WARNING, logger="clipper.repartition"):
+        assert repartition.complete_if_due(NOW, config=bad) is None
+
+    assert any("auto_complete" in r.getMessage() for r in caplog.records)

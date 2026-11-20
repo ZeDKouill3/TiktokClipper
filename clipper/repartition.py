@@ -46,6 +46,8 @@ CONFIG_DEFAULTS: dict[str, object] = {
     "title_ab_start": "2026-10-14",  # premier jour (AAAA-MM-JJ, heure de Paris) de la semaine 1 de la rotation
     "title_ab_accounts": [],  # ids des comptes TikTok du test, dans l'ordre de la rotation (hors liste : inchangés)
     "title_ab_styles": ["citation", "promesse", "promesse_emoji"],  # styles de titre, dans l'ordre de la rotation
+    "auto_complete": False,  # vrai : le worker complete seul un plan valide incomplet (SPEC-7bfa R15) ; faux : rien sans un clic
+    "auto_complete_every_min": 30,  # intervalle minimal (minutes) entre deux completions automatiques d'un meme plan
 }
 
 PARIS = ZoneInfo("Europe/Paris")
@@ -58,8 +60,24 @@ _CLIP_NUMBER = re.compile(r"^(\d+)")
 TITLE_STYLES = ("citation", "promesse", "promesse_emoji")  # SPEC-810f ; les memes que [captions] screen_title_style
 
 
+EMPTY_REASONS = ("past", "account_not_ready", "no_clip", "style_mismatch", "max_per_source", "refused")  # R13
+
+
 class RepartitionError(Exception):
     """Reglage hors domaine, fichier d'etat ou de travail illisible, plan deja valide : jamais corrige en silence."""
+
+
+class PlanNotFound(RepartitionError):
+    """Aucun plan pour ce jour (la route repond 404)."""
+
+
+class CompletionRefused(RepartitionError):
+    """Un compte refuse la creation d'une completion (R12) : les comptes precedents restent crees, ``last_error`` est
+    ecrit dans le plan. ``detail`` est la raison, ``account`` le compte refuse, ``created`` les lignes deja creees."""
+
+    def __init__(self, detail: str, account: str, created: list[dict[str, str]], next_at: str | None = None) -> None:
+        super().__init__(detail)
+        self.detail, self.account, self.created, self.next_at = detail, account, created, next_at
 
 
 # ---------------------------------------------------------------- reglages (R0)
@@ -105,6 +123,9 @@ def _settings(config: Config | None) -> dict[str, Any]:
     if not isinstance(sources, list) or not all(isinstance(s, str) for s in sources):
         raise RepartitionError(f"[repartition] excluded_sources invalide : {sources!r} (une liste de chaines est attendue)")
     _check_title_ab(settings)
+    if not isinstance(settings["auto_complete"], bool):
+        raise RepartitionError(f"[repartition] auto_complete invalide : {settings['auto_complete']!r} (true ou false est attendu)")
+    _integer(settings, "auto_complete_every_min", 1)
     return settings
 
 
@@ -580,9 +601,8 @@ def _reserve_exploration(states: list[dict[str, Any]], remaining: list[dict[str,
         notes.append(f"exploration : {clip['video_id']}/{clip['clip_id']} sur {state['account']['label']} à {at}")
 
 
-def _build(day: date, now: datetime, settings: dict[str, Any], config: Config, computed_by: str) -> dict[str, Any]:
-    world = World(config)
-    notes: list[str] = []
+def _active_accounts(config: Config, notes: list[str]) -> list[dict[str, Any]]:
+    """Comptes TikTok actifs (R1) ; un compte d'un autre service prêt est dit dans ``notes``."""
     active: list[dict[str, Any]] = []
     for account in accounts.list_accounts(config):
         ready = account["ready_to_publish"] and not account.get("paused_at")
@@ -591,8 +611,13 @@ def _build(day: date, now: datetime, settings: dict[str, Any], config: Config, c
         elif account["service"] != "tiktok" and ready:
             notes.append(f"{account['label']} : compte {accounts.SERVICE_LABELS.get(account['service'], account['service'])}"
                          " prêt, hors périmètre v1 (non planifié)")
+    return active
 
-    ab_styles = {a["id"]: style for a in active if (style := title_style_for(a["id"], day, settings))}
+
+def _candidates(world: World, active: list[dict[str, Any]], settings: dict[str, Any], day: date, now: datetime,
+                notes: list[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, str]],
+                                           list[dict[str, str]], list[dict[str, Any]]]:
+    """Clips choisissables classés par score ajusté (R2-R4) : ``(candidats, vivier, exclus, refus A/B, titres trop longs)``."""
     ab_refused: list[dict[str, str]] = []
     title_refused: list[dict[str, Any]] = []
     pool, excluded = _pool(world, active, settings, notes, day, ab_refused, title_refused)
@@ -609,6 +634,64 @@ def _build(day: date, now: datetime, settings: dict[str, Any], config: Config, c
             "adjusted": None if score is None else round(score + bonus, 2),
             "exploration": world.exploration(clip["video_id"], clip["clip_id"], notes)})
     candidates.sort(key=lambda c: (c["adjusted"] is None, -(c["adjusted"] or 0), c["video_id"], c["clip_id"]))
+    return candidates, pool, excluded, ab_refused, title_refused
+
+
+def _fill(states: list[dict[str, Any]], remaining: list[dict[str, Any]], settings: dict[str, Any]) -> None:
+    """R5 : tourniquet entre comptes, meilleur clip disponible sur le premier créneau libre (soir d'abord)."""
+    progressed = True
+    while progressed:
+        progressed = False
+        for state in states:
+            if not state["free"]:
+                continue
+            for clip in remaining:
+                if state["account"]["id"] not in clip["accounts"] or clip["exploration"]:
+                    continue
+                if state["counts"].get(clip["source_key"], 0) >= int(settings["max_per_source"]):
+                    continue
+                _take(state, state["free"][0], clip)
+                remaining.remove(clip)
+                progressed = True
+                break
+
+
+def _advance(config: Config) -> timedelta:
+    """Avance minimale de publication (celle de ``publish.preview_series`` : ``[tiktok] schedule_min_minutes``)."""
+    return timedelta(minutes=int(tiktok.get_settings(config)["schedule_min_minutes"]))
+
+
+def _why_empty(slot_at: datetime, now: datetime, advance: timedelta, state: dict[str, Any],
+               remaining: list[dict[str, Any]], ab_refused: list[dict[str, str]], settings: dict[str, Any],
+               used: set[tuple[str, str]], refused: dict[str, str]) -> dict[str, str]:
+    """R13 : raison (``EMPTY_REASONS``) et phrase lisible d'un créneau resté sans ligne."""
+    if slot_at < now + advance:
+        return {"reason": "past", "detail": f"créneau passé ou à moins de {int(advance.total_seconds() // 60)} min : "
+                "il n'est plus complété"}
+    if slot_at.isoformat() in refused or "*" in refused:
+        return {"reason": "refused", "detail": refused.get(slot_at.isoformat(), refused.get("*", ""))}
+    account_id = state["account"]["id"]
+    eligible = [c for c in remaining if account_id in c["accounts"] and not c["exploration"]]
+    if eligible and all(state["counts"].get(c["source_key"], 0) >= int(settings["max_per_source"]) for c in eligible):
+        return {"reason": "max_per_source", "detail": f"les {len(eligible)} clip(s) restant(s) dépassent déjà "
+                f"{settings['max_per_source']} clip(s) de la même source ce jour-là sur ce compte"}
+    mismatched = [r for r in ab_refused if r["account"] == account_id and (r["video_id"], r["clip_id"]) not in used]
+    if not eligible and mismatched:
+        return {"reason": "style_mismatch", "detail": f"{len(mismatched)} clip(s) disponible(s), aucun du style de "
+                "titre de ce compte ce jour-là (test A/B)"}
+    if not eligible and any(c["exploration"] and account_id in c["accounts"] for c in remaining):
+        return {"reason": "no_clip", "detail": "seuls des clips d'exploration restent et le quota du jour est atteint"}
+    return {"reason": "no_clip", "detail": "aucun clip disponible pour ce compte"}
+
+
+def _build(day: date, now: datetime, settings: dict[str, Any], config: Config, computed_by: str) -> dict[str, Any]:
+    world = World(config)
+    notes: list[str] = []
+    active = _active_accounts(config, notes)
+    advance = _advance(config)
+
+    ab_styles = {a["id"]: style for a in active if (style := title_style_for(a["id"], day, settings))}
+    candidates, pool, excluded, ab_refused, title_refused = _candidates(world, active, settings, day, now, notes)
 
     states: list[dict[str, Any]] = []
     for rank, account in enumerate(active):
@@ -628,21 +711,7 @@ def _build(day: date, now: datetime, settings: dict[str, Any], config: Config, c
 
     remaining = list(candidates)
     _reserve_exploration(states, remaining, settings, notes)
-    progressed = True
-    while progressed:
-        progressed = False
-        for state in states:
-            if not state["free"]:
-                continue
-            for clip in remaining:
-                if state["account"]["id"] not in clip["accounts"] or clip["exploration"]:
-                    continue
-                if state["counts"].get(clip["source_key"], 0) >= int(settings["max_per_source"]):
-                    continue
-                _take(state, state["free"][0], clip)
-                remaining.remove(clip)
-                progressed = True
-                break
+    _fill(states, remaining, settings)
 
     plan_accounts = []
     for state in states:
@@ -650,8 +719,11 @@ def _build(day: date, now: datetime, settings: dict[str, Any], config: Config, c
         notes_here = list(state["notes"])
         if state["free"]:
             notes_here.append(f"{len(state['free'])} créneau(x) sans clip : vivier insuffisant")
+        empties = [{"slot_at": s["slot_at"], **_why_empty(datetime.fromisoformat(s["slot_at"]), now, advance, state,
+                                                          remaining, ab_refused, settings, set(), {})}
+                   for s in sorted(state["free"], key=lambda f: datetime.fromisoformat(f["slot_at"]))]
         plan_accounts.append({"account": state["account"]["id"], "label": state["account"]["label"],
-                              "slots": state["slots"], "lines": lines, "notes": notes_here,
+                              "slots": state["slots"], "lines": lines, "notes": notes_here, "empty_slots": empties,
                               **({"title_style": ab_styles.get(state["account"]["id"])} if ab_styles else {})})
     notes.extend(world.notes)
     plan = {"day": day.isoformat(), "computed_at": now.isoformat(), "computed_by": computed_by,
@@ -735,6 +807,348 @@ def run_if_due(now: datetime, *, config: Config | None = None) -> dict[str, Any]
     except (RepartitionError, *_HANDLED) as exc:
         _record_error(path, day, now, exc)
         return None
+
+
+# ---------------------------------------------------------------- compléter un plan validé incomplet (SPEC-7bfa R11-R16)
+
+
+def _utc(value: str) -> datetime:
+    return datetime.fromisoformat(value)
+
+
+def _ready_error(account: dict[str, Any] | None, account_id: str) -> str | None:
+    """Compte absent, en pause ou non prêt : la phrase de la validation (``_require_ready_account``), ou ``None``."""
+    if account is None:
+        return f"compte inconnu : {account_id!r} (écran Comptes)"
+    name = account["label"] or account_id
+    if account.get("paused_at"):
+        return (f"compte {name} en pause (manuel) depuis le {accounts.paused_since(account)} : recoche « Prêt à publier » "
+                "dans l'écran Comptes pour reprendre, ou choisis un autre compte")
+    if not account["ready_to_publish"]:
+        return (f"compte {name} non prêt à publier : « prêt à publier » est automatique : connecte-le (Se connecter) "
+                "ou règle l'arrêt en attente dans l'écran Comptes")
+    return None
+
+
+def _preview_refusals(world: World, config: Config, account_id: str, lines: list[dict[str, Any]], now: datetime,
+                      schedule: dict[str, Any]) -> dict[tuple[str, str], str | None]:
+    """``refusal`` de chaque ligne d'après ``publish.preview_series`` (mode manuel, une date par clip, chaque clip seul) :
+    plafonds, avance minimale, créneau déjà pris. Un lot refusé en bloc est rejoué ligne à ligne."""
+    settings = tiktok.get_settings(config)
+
+    def preview(subset: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return publish.preview_series(
+            mode="manual", style=None, account=account_id, service="tiktok",
+            selection=[(ln["video_id"], ln["clip_id"]) for ln in subset],
+            clip_dates={(ln["video_id"], ln["clip_id"]): _utc(ln["slot_at"]) for ln in subset}, together=False,
+            settings=settings, now=now, workspace_dir=world.workspace, output_dir=world.output,
+            state_dir=world.publish_dir, presets_dir=world.presets_dir, base=world.base_config,
+            schedule=schedule)["items"]
+
+    out: dict[tuple[str, str], str | None] = {}
+    try:
+        items = preview(lines)
+    except publish.PublishError:
+        keep = []
+        for line in lines:
+            try:
+                preview([line])
+                keep.append(line)
+            except publish.PublishError as exc:
+                out[(line["video_id"], line["clip_id"])] = str(exc)
+        items = preview(keep) if keep else []
+    out.update({(item["video_id"], item["clip_id"]): item["refusal"] for item in items})
+    return out
+
+
+def _propose(plan: dict[str, Any], day: date, now: datetime, settings: dict[str, Any], config: Config) -> dict[str, Any]:
+    """Ce que Compléter poserait (R11), sans rien écrire : ``new`` = lignes par compte, ``empty`` = créneaux restés
+    vides par compte avec leur raison (R13). Les lignes du plan, créées ou non, ne bougent pas."""
+    world = World(config)
+    active = _active_accounts(config, [])
+    by_active = {a["id"]: a for a in active}
+    advance = _advance(config)
+    notes: list[str] = []
+    candidates, _pool_list, _excluded, ab_refused, _title = _candidates(world, active, settings, day, now, notes)
+    ab_styles = {a["id"]: style for a in active if (style := title_style_for(a["id"], day, settings))}
+    used = {(ln["video_id"], ln["clip_id"]) for pacc in plan["accounts"] for ln in pacc["lines"]}
+    remaining = [c for c in candidates if (c["video_id"], c["clip_id"]) not in used]
+    made = {(m["account"], m["video_id"], m["clip_id"]) for m in plan.get("created") or []}
+    explored = sum(1 for pacc in plan["accounts"] for ln in pacc["lines"] if ln.get("exploration"))
+    local = {**settings, "exploration_per_day": max(0, int(settings["exploration_per_day"]) - explored)}
+
+    states: list[dict[str, Any]] = []
+    for pacc in plan["accounts"]:
+        acc_id = pacc["account"]
+        have = {_utc(ln["slot_at"]) for ln in pacc["lines"]}
+        free_all = [s for s in pacc["slots"] if _utc(s["slot_at"]) not in have]
+        todo = [s for s in free_all if _utc(s["slot_at"]) >= now + advance]
+        counts: dict[str, int] = {}
+        if acc_id in by_active:
+            counts = _entry_counts(world, acc_id, day)
+            for ln in pacc["lines"]:
+                if (acc_id, ln["video_id"], ln["clip_id"]) not in made:
+                    counts[ln["source_key"]] = counts.get(ln["source_key"], 0) + 1
+        order = [s for s in todo if s["prime"]] + [s for s in todo if not s["prime"]]
+        states.append({"account": {"id": acc_id, "label": pacc["label"]}, "free_all": free_all, "free": order if acc_id in by_active else [],
+                       "counts": counts, "lines": [], "notes": [], "ab": bool(ab_styles), "inactive": acc_id not in by_active})
+    _reserve_exploration(states, remaining, local, notes)
+    _fill(states, remaining, local)
+
+    refused: dict[str, dict[str, str]] = {}
+    by_account = {pacc["account"]: pacc for pacc in plan["accounts"]}
+    for state in states:
+        acc_id = state["account"]["id"]
+        if not state["lines"]:
+            continue
+        pending = [ln for ln in by_account[acc_id]["lines"] if (acc_id, ln["video_id"], ln["clip_id"]) not in made]
+        schedule = accounts.schedule_of(by_active[acc_id])
+        while True:
+            refusals = _preview_refusals(world, config, acc_id, pending + state["lines"], now, schedule)
+            bad = [ln for ln in state["lines"] if refusals.get((ln["video_id"], ln["clip_id"]))]
+            if not bad:
+                break
+            for line in bad:
+                state["lines"].remove(line)
+                state["counts"][line["source_key"]] -= 1
+                refused.setdefault(acc_id, {})[line["slot_at"]] = str(refusals[(line["video_id"], line["clip_id"])])
+                refused[acc_id]["*"] = refused[acc_id][line["slot_at"]]  # un clip a été refusé pour ce compte
+
+    new: dict[str, list[dict[str, Any]]] = {}
+    empty: dict[str, list[dict[str, str]]] = {}
+    for state in states:
+        acc_id = state["account"]["id"]
+        taken = {ln["slot_at"] for ln in state["lines"]}
+        new[acc_id] = sorted(state["lines"], key=lambda ln: _utc(ln["slot_at"]))
+        empty[acc_id] = [
+            {"slot_at": s["slot_at"], **(
+                {"reason": "account_not_ready", "detail": _ready_error(by_active.get(acc_id), acc_id)
+                 or "compte non prêt à publier"} if state["inactive"] and _utc(s["slot_at"]) >= now + advance
+                else _why_empty(_utc(s["slot_at"]), now, advance, state, remaining, ab_refused, local, used,
+                                refused.get(acc_id, {})))}
+            for s in sorted(state["free_all"], key=lambda f: _utc(f["slot_at"])) if s["slot_at"] not in taken]
+    return {"world": world, "new": new, "empty": empty, "advance": advance,
+            "late": [a["label"] for a in active if a["id"] not in by_account]}
+
+
+def _entry_counts(world: World, account_id: str, day: date) -> dict[str, int]:
+    """Publications déjà prévues ce jour-là sur le compte, par source (R3), files comprises."""
+    counts: dict[str, int] = {}
+    for _name, entry in publish._account_entries(account_id, world.publish_dir, world.presets_dir, world.base_config):
+        when = entry_time(entry)
+        if when is not None and _paris(when).date() == day:
+            key = world.source(entry["video_id"])["source_key"]
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _completable(plan: Any, day: date) -> dict[str, Any]:
+    """R11 : un plan ``validated``, ou ``proposed`` à ``created`` partiel ; sinon ``PlanNotFound`` ou ``RepartitionError``."""
+    if not isinstance(plan, dict):
+        raise PlanNotFound(f"aucun plan pour le {day.isoformat()} : calcule-le d'abord (Recalculer)")
+    status = plan.get("status")
+    if status == "validated" or (status == "proposed" and plan.get("created")):
+        return plan
+    if status == "proposed":
+        raise RepartitionError(f"le plan du {day.isoformat()} n'est pas validé : Compléter ne s'applique qu'à un plan "
+                               "validé (ou validé en partie) ; recalcule-le ou valide-le")
+    message = (plan.get("error") or {}).get("message")
+    raise RepartitionError(f"le plan du {day.isoformat()} est en erreur ({message}) : recalcule-le")
+
+
+def complete_plan(day: date | str, now: datetime, *, config: Config | None = None,
+                  completed_by: str = "web") -> dict[str, Any]:
+    """R11-R13 : pose et crée (``publish.create_series``, mode programmé, jamais immédiat) des lignes pour les seuls
+    créneaux sans ligne situés à au moins l'avance minimale de publication après ``now``, sous le verrou du fichier.
+    Les lignes existantes et ``created`` ne bougent pas. Un compte refusé arrête la complétion (``CompletionRefused``,
+    ``last_error`` écrit, comptes précédents créés). Rend le plan écrit."""
+    config = config or load_config()
+    settings = _settings(config)
+    if completed_by not in ("worker", "web"):
+        raise RepartitionError(f"completed_by invalide : {completed_by!r} (worker ou web est attendu)")
+    target = _as_day(day)
+    path = Path(settings["state_dir"]) / f"{target.isoformat()}.json"
+    with channel.file_lock(path):
+        plan = _completable(_read_json(path, None), target)
+        proposal = _propose(plan, target, now, settings, config)
+        world: World = proposal["world"]
+        by_id = {a["id"]: a for a in accounts.list_accounts(config)}
+        entries = publish.all_entries(state_dir=world.publish_dir, presets_dir=world.presets_dir)
+        tk = tiktok.get_settings(config)
+        created = list(plan.get("created") or [])
+        done = {(m["account"], m["video_id"], m["clip_id"]) for m in created}
+        failure: dict[str, Any] | None = None
+        made_now = 0
+        tried: list[str] = []
+        for pacc in plan["accounts"]:
+            acc_id = pacc["account"]
+            new = proposal["new"].get(acc_id, [])
+            batch = [ln for ln in pacc["lines"] if (acc_id, ln["video_id"], ln["clip_id"]) not in done] + new
+            if not batch:
+                continue
+            tried.append(acc_id)
+            try:
+                problem = _ready_error(by_id.get(acc_id), acc_id)
+                if problem:
+                    raise publish.PublishError(problem)
+                for line in batch:  # exclusions rejouées : config ou file changées depuis le calcul
+                    problem = line_error(world, acc_id, target, video_id=line["video_id"], clip_id=line["clip_id"],
+                                         slot_at=_utc(line["slot_at"]), entries=entries)
+                    if problem:
+                        where = f"{line['video_id']}/{line['clip_id']}"
+                        raise publish.PublishError(problem if where in problem else f"{where} : {problem}")
+                publish.create_series(
+                    mode="manual", style=None, account=acc_id, service="tiktok",
+                    selection=[(ln["video_id"], ln["clip_id"]) for ln in batch],
+                    clip_dates={(ln["video_id"], ln["clip_id"]): _utc(ln["slot_at"]) for ln in batch},
+                    together=False, settings=tk, now=now, workspace_dir=world.workspace, output_dir=world.output,
+                    state_dir=world.publish_dir, presets_dir=world.presets_dir, base=world.base_config,
+                    schedule=accounts.schedule_of(by_id[acc_id]))
+            except (*_HANDLED, RepartitionError, channel.ChannelError) as exc:
+                next_at = getattr(exc, "next_at", None)
+                failure = {"detail": str(exc), "account": acc_id,
+                           "next_at": next_at.isoformat() if next_at is not None else None}
+                break
+            for line in new:
+                pacc["lines"].append({**line, "completed_at": now.isoformat()})
+            pacc["lines"].sort(key=lambda ln: _utc(ln["slot_at"]))
+            created.extend({"account": acc_id, "video_id": ln["video_id"], "clip_id": ln["clip_id"]} for ln in batch)
+            done.update((acc_id, ln["video_id"], ln["clip_id"]) for ln in batch)
+            made_now += len(batch)
+
+        failed_from = tried[-1] if failure else None
+        reached = False
+        for pacc in plan["accounts"]:
+            acc_id = pacc["account"]
+            reached = reached or acc_id == failed_from
+            gaps = list(proposal["empty"].get(acc_id, []))
+            if reached:  # compte refusé, puis ceux qui n'ont pas été tentés : leurs lignes posées ne sont pas créées
+                why = failure["detail"] if acc_id == failed_from else (
+                    f"non tenté : le compte {failed_from} a été refusé avant ({failure['detail']})")
+                gaps += [{"slot_at": ln["slot_at"], "reason": "refused", "detail": why}
+                         for ln in proposal["new"].get(acc_id, [])]
+            pacc["empty_slots"] = sorted(gaps, key=lambda e: _utc(e["slot_at"]))
+        for label in proposal["late"]:
+            note = f"{label} : non planifié : compte activé après le calcul"
+            if note not in plan["notes"]:
+                plan["notes"].append(note)
+        plan["created"] = created
+        plan["last_attempt_at"] = now.isoformat()
+        empty_count = sum(len(pacc["empty_slots"]) for pacc in plan["accounts"])
+        plan["completions"] = [*plan.get("completions", []), {
+            "at": now.isoformat(), "by": completed_by, "created": made_now, "empty": empty_count}]
+        if failure is not None:
+            plan["last_error"] = failure["detail"]
+            channel.atomic_write_json(path, plan)
+            raise CompletionRefused(failure["detail"], failure["account"], created, failure["next_at"])
+        if plan["status"] != "validated":
+            plan.update(status="validated", validated_at=now.isoformat())
+        plan.pop("last_error", None)
+        channel.atomic_write_json(path, plan)
+    log.info("répartition du %s : complété par %s, %d ligne(s) créée(s), %d créneau(x) resté(s) vide(s)",
+             target.isoformat(), completed_by, made_now, empty_count)
+    return plan
+
+
+_AUTO_CHECK_EVERY = timedelta(seconds=60)  # le calcul d'éligibilité lit les clips : pas à chaque tour du worker
+_last_auto_check: dict[str, datetime] = {}
+
+
+def _record_completion_error(path: Path, day: date, now: datetime, exc: Exception) -> None:
+    """Journalise une fois et écrit ``last_error`` / ``last_attempt_at`` dans le plan du jour (jamais propagé)."""
+    message = str(exc) or type(exc).__name__
+    key = (day.isoformat(), type(exc).__name__, message)
+    if key not in _logged_errors:
+        _logged_errors.add(key)
+        log.warning("répartition du %s : complétion impossible (%s : %s)", day.isoformat(), type(exc).__name__, message)
+    try:
+        with channel.file_lock(path):
+            current = _read_json(path, None)
+            if isinstance(current, dict) and current.get("status") == "validated":
+                current.update(last_error=message, last_attempt_at=now.isoformat())
+                channel.atomic_write_json(path, current)
+    except (RepartitionError, OSError, ValueError) as write_exc:
+        log.warning("répartition du %s : erreur de complétion non écrite (%s)", day.isoformat(), write_exc)
+
+
+def _last_try(plan: dict[str, Any]) -> datetime | None:
+    stamps = [plan.get("last_attempt_at"), *(c.get("at") for c in plan.get("completions") or [])]
+    found = [_utc(s) for s in stamps if isinstance(s, str)]
+    return max(found) if found else None
+
+
+def complete_if_due(now: datetime, *, config: Config | None = None) -> dict[str, Any] | None:
+    """R15, appelée par le worker à chaque tour : si ``auto_complete`` est vrai, complète le plan validé d'aujourd'hui puis
+    celui de demain (Paris) qui a un créneau à compléter, au plus une fois par ``auto_complete_every_min``, et seulement
+    si un clip peut le remplir. Rend le dernier plan complété, ``None`` sinon. Une erreur est écrite dans le plan
+    (``last_error``) et journalisée une fois, jamais propagée."""
+    config = config or load_config()
+    raw = config.section("repartition")
+    if raw.get("enabled") is False:
+        return None
+    local = _paris(now)
+    try:
+        settings = _settings(config)
+    except RepartitionError as exc:
+        key = (local.date().isoformat(), "settings", str(exc))
+        if key not in _logged_errors:
+            _logged_errors.add(key)
+            log.warning("répartition : complétion automatique impossible (%s)", exc)
+        return None
+    if not settings["auto_complete"]:
+        return None
+    result: dict[str, Any] | None = None
+    for day in (local.date(), local.date() + timedelta(days=1)):
+        path = Path(settings["state_dir"]) / f"{day.isoformat()}.json"
+        try:
+            plan = _read_json(path, None)
+            if not isinstance(plan, dict) or plan.get("status") != "validated":
+                continue
+            last = _last_try(plan)
+            if last is not None and now - last < timedelta(minutes=int(settings["auto_complete_every_min"])):
+                continue
+            checked = _last_auto_check.get(str(path))
+            if checked is not None and timedelta(0) <= now - checked < _AUTO_CHECK_EVERY:
+                continue
+            advance = _advance(config)
+            have = {_utc(ln["slot_at"]) for pacc in plan["accounts"] for ln in pacc["lines"]}
+            if not any(_utc(s["slot_at"]) >= now + advance and _utc(s["slot_at"]) not in have
+                       for pacc in plan["accounts"] for s in pacc["slots"]):
+                continue
+            _last_auto_check[str(path)] = now
+            if not any(_propose(plan, day, now, settings, config)["new"].values()):
+                continue
+            result = complete_plan(day, now, config=config, completed_by="worker")
+        except (*_HANDLED, RepartitionError, channel.ChannelError) as exc:
+            _record_completion_error(path, day, now, exc)
+    return result
+
+
+def plan_gaps(plan: dict[str, Any], now: datetime, config: Config | None = None) -> dict[str, Any]:
+    """R16 : par compte ``empty_slots`` (raison et phrase de chaque créneau sans ligne) et ``to_complete`` (créneaux à
+    compléter, R11), et ``incomplete`` : le total à compléter d'un plan validé (ou validé en partie), sinon 0.
+    Un créneau devenu passé depuis le calcul est dit ``past`` ; un créneau vidé à la main, sans raison écrite,
+    est dit ``no_clip`` avec sa phrase."""
+    advance = _advance(config or load_config())
+    out: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for pacc in plan.get("accounts") or []:
+        have = {_utc(ln["slot_at"]) for ln in pacc["lines"]}
+        stored = {_utc(e["slot_at"]): e for e in pacc.get("empty_slots") or []}
+        free = [s for s in pacc["slots"] if _utc(s["slot_at"]) not in have]
+        empty, todo = [], []
+        for slot in free:
+            at = _utc(slot["slot_at"])
+            if at < now + advance:
+                empty.append({"slot_at": slot["slot_at"], "reason": "past",
+                              "detail": f"créneau passé ou à moins de {int(advance.total_seconds() // 60)} min : "
+                                        "il n'est plus complété"})
+                continue
+            todo.append(slot)
+            empty.append(stored.get(at) or {"slot_at": slot["slot_at"], "reason": "no_clip",
+                                            "detail": "créneau laissé vide (ligne retirée ou aucun clip choisi)"})
+        out[pacc["account"]] = {"empty_slots": empty, "to_complete": todo}
+    open_plan = plan.get("status") == "validated" or bool(plan.get("created"))
+    return {"accounts": out, "incomplete": sum(len(v["to_complete"]) for v in out.values()) if open_plan else 0}
 
 
 # ---------------------------------------------------------------- API publique (écran et routes web)

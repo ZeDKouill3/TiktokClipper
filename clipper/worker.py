@@ -859,6 +859,7 @@ class Worker:
         stats_fetcher: Callable[..., dict[str, Any]] | None = None,
         learning_runner: Callable[..., dict[str, Any]] | None = None,
         repartition_runner: Callable[..., Any] | None = None,
+        completion_runner: Callable[..., Any] | None = None,
         login_checker: Callable[..., dict[str, Any]] | None = None,
         youtube_publisher: Callable[..., dict[str, Any]] | None = None,
         veille_collectors: dict[str, Callable[..., dict[str, Any]]] | None = None,
@@ -889,6 +890,7 @@ class Worker:
         self.learning_runner = learning_runner or learning.run_if_due  # rattachement puis versement apres releve
         self._logged_learning_errors: set[str] = set()
         self.repartition_runner = repartition_runner or repartition.run_if_due  # plan du lendemain (SPEC-78dc R7)
+        self.completion_runner = completion_runner or repartition.complete_if_due  # plan valide incomplet (SPEC-7bfa R15)
         self._logged_repartition_errors: set[str] = set()
         self.login_checker = login_checker or browser.login_state  # connexion verifiee avant chaque publication
         self._stats_attempts: dict[str, datetime] = {}
@@ -1344,21 +1346,30 @@ class Worker:
         return self._repartition_config
 
     def _repartition_due(self) -> None:
-        """Plan du lendemain (SPEC-78dc R7) : ``repartition.run_if_due`` à chaque tour, après l'apprentissage ; coupé
-        par ``[repartition] enabled = false``. L'erreur est écrite dans le fichier du jour par la bibliothèque et
-        journalisée une seule fois ici, jamais propagée hors du tour (ADR-ad2e)."""
+        """Plan du lendemain (SPEC-78dc R7) : ``repartition.run_if_due`` à chaque tour, après l'apprentissage, puis la
+        complétion d'un plan validé incomplet (SPEC-7bfa R15, ``auto_complete`` faux par défaut) ; tout coupé par
+        ``[repartition] enabled = false``. L'erreur de l'un n'arrête pas l'autre : elle est écrite dans le fichier du
+        jour par la bibliothèque et journalisée une seule fois ici, jamais propagée hors du tour (ADR-ad2e)."""
         try:
             config = self._reloaded_repartition_config()
             if not config.section("repartition")["enabled"]:
                 return
-            self.repartition_runner(datetime.now(timezone.utc), config=config)
         except Exception as exc:  # noqa: BLE001 - jamais un worker mort : l'echec est journalise une fois
-            message = str(exc) if isinstance(
-                exc, (repartition.RepartitionError, publish_mod.PublishError, accounts_mod.AccountsError,
-                      tiktok.TikTokError, ConfigError, OSError, ValueError)) else f"{type(exc).__name__} : {exc}"
-            if message not in self._logged_repartition_errors:
-                self._logged_repartition_errors.add(message)
-                log.error("répartition du lendemain impossible : %s", message)
+            self._log_repartition_error(exc)
+            return
+        for runner in (self.repartition_runner, self.completion_runner):
+            try:
+                runner(datetime.now(timezone.utc), config=config)
+            except Exception as exc:  # noqa: BLE001 - jamais un worker mort : l'echec est journalise une fois
+                self._log_repartition_error(exc)
+
+    def _log_repartition_error(self, exc: Exception) -> None:
+        message = str(exc) if isinstance(
+            exc, (repartition.RepartitionError, publish_mod.PublishError, accounts_mod.AccountsError,
+                  tiktok.TikTokError, ConfigError, OSError, ValueError)) else f"{type(exc).__name__} : {exc}"
+        if message not in self._logged_repartition_errors:
+            self._logged_repartition_errors.add(message)
+            log.error("répartition du lendemain impossible : %s", message)
 
     def _reconcile_scheduled(self) -> None:
         """Rapprochement au releve : une entree ``scheduled_on_tiktok`` sans id de post (meme apres le rattachement

@@ -3450,6 +3450,10 @@ def create_app(config: Config | None = None) -> FastAPI:
     def _rep_call(fn, *args: Any, **kwargs: Any) -> Any:
         try:
             return _accounts_call(_publication_call, fn, *args, **kwargs)
+        except repartition_mod.CompletionRefused:
+            raise  # la route Compléter rend le détail et les comptes déjà créés (409)
+        except repartition_mod.PlanNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except repartition_mod.RepartitionError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except OSError as exc:
@@ -3543,6 +3547,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         made = {(m["account"], m["video_id"], m["clip_id"]) for m in base.get("created") or []}
         entries = [] if base["status"] == "validated" else _rep_call(
             publish_mod.all_entries, state_dir=_publish_dir(config), presets_dir=_PRESETS_DIR)
+        # créneaux sans ligne, raisons et total à compléter (SPEC-7bfa R16) : calculés par la bibliothèque
+        gaps_all = _rep_call(repartition_mod.plan_gaps, base, datetime.now(_PARIS), rep_config) if base.get("accounts") else None
         for account in base.get("accounts") or []:
             account_id = account["account"]
             # une ligne déjà créée est en file : la prévisualiser la refuserait, c'est précisément ce qui est fait
@@ -3560,8 +3566,11 @@ def create_app(config: Config | None = None) -> FastAPI:
                       "refusal": refusals.get((line["video_id"], line["clip_id"])),
                       "warning": line.get("warning")} for line in account["lines"]]
             pool = _series_units_view(repartition_mod.account_pool(account["account"], world=world, settings=settings, day=day))
-            accounts_out.append({**account, "lines": lines, "pool": pool})
+            gaps = (gaps_all["accounts"].get(account_id) or {}) if gaps_all else {}
+            accounts_out.append({**account, "lines": lines, "pool": pool, **gaps})
         base["accounts"] = accounts_out
+        base["auto_complete"] = settings["auto_complete"]
+        base["incomplete"] = gaps_all["incomplete"] if gaps_all else 0
         return base
 
     @app.get("/api/repartition")
@@ -3691,6 +3700,25 @@ def create_app(config: Config | None = None) -> FastAPI:
             plan.pop("last_error", None)
             channel_mod.atomic_write_json(path, plan)
         return _rep_view(plan, day)
+
+    @app.post("/api/repartition/{day}/complete")
+    def complete_repartition(day: str) -> Any:
+        """Complète un plan validé (ou validé en partie) : crée les lignes des créneaux sans clip encore à venir, comme la
+        validation (tout ou rien par compte, jamais en immédiat). Rien à compléter : 200 avec ``completion.created`` à 0 et
+        les raisons de chaque créneau vide. Un compte refusé : 409, les comptes précédents restent créés."""
+        day = _rep_day(day)
+        try:
+            plan = _rep_call(repartition_mod.complete_plan, day, datetime.now(_PARIS), config=_rep_config(),
+                             completed_by="web")
+        except repartition_mod.CompletionRefused as exc:
+            stored = _rep_call(repartition_mod.read_plan, day, config) or {}
+            return JSONResponse(status_code=409, content={
+                "detail": exc.detail, "account": exc.account, "next_at": exc.next_at,
+                "status": stored.get("status"), "created": exc.created})
+        view = _rep_view(plan, day)
+        last = (plan.get("completions") or [{}])[-1]
+        view["completion"] = {"created": last.get("created", 0), "empty": last.get("empty", 0)}
+        return view
 
     @app.get("/api/publish/{video_id}/{clip_id}/capture")
     def publish_capture(video_id: str, clip_id: str) -> FileResponse:

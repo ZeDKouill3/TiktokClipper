@@ -406,7 +406,7 @@ function pubView(body) {
    score, plafond ni créneau n'est calculé ici (ADR-49cd) : une modification renvoie les lignes au serveur, qui
    les redécrit, les prévisualise (refusal) et les valide. */
 
-const pubRep = { data: null, error: null, loading: null, busy: null, busyPromise: null, at: 0 };
+const pubRep = { data: null, today: null, error: null, loading: null, busy: null, busyPromise: null, at: 0 };
 
 function repLoad() {
   if (pubRep.loading) return pubRep.loading;
@@ -414,6 +414,12 @@ function repLoad() {
     try {
       pubRep.data = await api("/api/repartition");
       pubRep.error = null;
+      /* Le plan d'aujourd'hui (SPEC-7bfa R16) : affiché seulement s'il est validé avec des créneaux à compléter. */
+      try {
+        pubRep.today = await api(`/api/repartition?day=${new Date().toLocaleDateString("sv-SE", { timeZone: PUB_TZ })}`);
+      } catch (err) {
+        pubRep.today = null;
+      }
     } catch (err) {
       pubRep.error = err;
     } finally {
@@ -474,9 +480,10 @@ function repLineRow(d, account, row, editable) {
 
 function repEmptyRow(d, account, row, editable) {
   const pick = editable ? repClipSelect(d, account, `@${row.slot.slot_at}`, "") : "";
+  const why = (account.empty_slots || []).find((e) => repInstant(e.slot_at) === row.at);
   return `<div class="list-item rep-row rep-empty" data-rep-row>
     <span class="rep-hour">${esc(repClock(row.slot.slot_at))}</span>
-    <div class="li-main grow"><div class="li-sub muted">aucun clip disponible</div>${pick}</div></div>`;
+    <div class="li-main grow"><div class="li-sub muted">aucun clip disponible</div>${why ? `<div class="li-sub muted" data-rep-reason="${esc(why.reason)}">${esc(why.detail)}</div>` : ""}${pick}</div></div>`;
 }
 
 function repAccountHtml(d, account, editable) {
@@ -496,9 +503,20 @@ function repStateChip(d) {
   return `<span class="chip pending">aucun plan</span>`;
 }
 
-function repSection(body, chip) {
-  return `<section id="pub-plan" class="rep-plan"><div class="section-head"><h3>Plan de demain</h3>${chip || ""}</div>
+function repSection(body, chip, title = "Plan de demain", id = "pub-plan") {
+  return `<section id="${id}" class="rep-plan"><div class="section-head"><h3>${title}</h3>${chip || ""}</div>
     <div class="card" data-size="sm"><section>${body}</section></div></section>`;
+}
+
+/* Un plan validé (ou validé en partie) avec des créneaux sans clip : le compte est dit par le serveur (incomplete). */
+function repCompleteHtml(d) {
+  const open = d.status === "validated" || (d.created || []).length > 0;
+  if (!open) return "";
+  const missing = Number(d.incomplete) || 0;
+  const reason = pubRep.busy ? "Une opération sur le plan est en cours." : missing > 0 ? "" : "Aucun créneau à compléter.";
+  const said = missing > 0 ? `<p class="li-sub warn">${missing} créneau(x) sans clip</p>` : "";
+  const auto = d.auto_complete ? `<p class="li-sub muted">complétion automatique active</p>` : "";
+  return `${said}${auto}<div class="rep-buttons"><button type="button" class="btn" data-variant="outline" data-size="sm" data-rep-complete="${esc(d.day)}"${reason ? ` disabled title="${esc(reason)}"` : ""}>${pubRep.busy === `complete:${d.day}` ? "Complétion en cours…" : "Compléter"}</button></div>`;
 }
 
 /* Pourquoi « Valider le plan » est grisé (SPEC-7715 R : un bouton grisé dit toujours pourquoi) ; "" s'il est actif. */
@@ -512,7 +530,19 @@ function repValidateReason(d, accepted) {
   return "";
 }
 
+function repTodayHtml() {
+  const t = pubRep.today;
+  if (!t || t.status !== "validated" || !(Number(t.incomplete) > 0)) return "";
+  const head = `<p class="muted rep-day">${esc(t.day ? pubFmt(t.day, { weekday: "long", day: "numeric", month: "long" }) : "")}</p>`;
+  const accounts = (t.accounts || []).map((a) => repAccountHtml(t, a, false)).join("");
+  return repSection(`${head}${repCompleteHtml(t)}${accounts}`, repStateChip(t), "Plan d'aujourd'hui", "pub-plan-today");
+}
+
 function repHtml() {
+  return `${repTodayHtml()}${repTomorrowHtml()}`;
+}
+
+function repTomorrowHtml() {
   const d = pubRep.data;
   if (!d) {
     return repSection(pubRep.error ? `<p class="reason bad">Chargement impossible : ${esc(pubRep.error.message || pubRep.error)}</p>` : `<div class="skeleton skeleton-line"></div>`);
@@ -534,7 +564,7 @@ function repHtml() {
     <button type="button" class="btn" data-variant="outline" data-size="sm" data-rep-compute ${canCompute ? "" : "disabled"}>${pubRep.busy === "compute" ? "Calcul en cours…" : `${icon("wand-sparkles", "i-sm")}${d.status === "absent" ? "Calculer" : "Recalculer"}`}</button>
     <button type="button" class="btn" data-size="sm" data-rep-validate${validateReason ? ` disabled title="${esc(validateReason)}"` : ""}>${pubRep.busy === "validate" ? "Validation en cours…" : "Valider le plan"}</button></div>`;
   const notes = (d.notes || []).map((n) => `<p class="li-sub muted">${esc(n)}</p>`).join("");
-  return repSection(`${head}${computed}${failure}${absent}${last}${buttons}${accounts.map((a) => repAccountHtml(d, a, proposed)).join("")}${notes}`, repStateChip(d));
+  return repSection(`${head}${computed}${failure}${absent}${last}${buttons}${repCompleteHtml(d)}${accounts.map((a) => repAccountHtml(d, a, proposed)).join("")}${notes}`, repStateChip(d));
 }
 
 /* Une requête à la fois : pendant qu'elle court, les boutons sont désactivés et libellés « en cours ». */
@@ -570,6 +600,18 @@ const repValidate = () => repRun("validate", "Impossible de valider le plan", as
   pubUi.at = 0; pubLoad();
 });
 
+const repComplete = (day) => repRun(`complete:${day}`, "Impossible de compléter le plan", async () => {
+  if (!(await netGuard())) return;
+  const res = await api(`/api/repartition/${pubEnc(day)}/complete`, { method: "POST" });
+  if (pubRep.data && pubRep.data.day === day) pubRep.data = res;
+  else if (pubRep.today && pubRep.today.day === day) pubRep.today = res;
+  const made = (res.completion && res.completion.created) || 0, left = (res.completion && res.completion.empty) || 0;
+  toast({ kind: made > 0 ? "ok" : "info", title: `${made} publication${made > 1 ? "s" : ""} créée${made > 1 ? "s" : ""}, ${left} créneau(x) toujours vide(s)`,
+    body: made > 0 ? "Elles sont dans « En attente » et au calendrier." : "Chaque créneau vide dit pourquoi dans le plan.", ms: 3600 });
+  pubPosts.at = 0; pubPostsLoad();
+  pubUi.at = 0; pubLoad();
+});
+
 /* Remplace les lignes d'un compte (PUT) : le serveur redécrit chaque ligne et renvoie le plan à jour. */
 function repSave(accountId, change) {
   const d = pubRep.data;
@@ -594,6 +636,7 @@ function repWire(body) {
   const compute = $("[data-rep-compute]", body), validate = $("[data-rep-validate]", body);
   if (compute) compute.onclick = () => repCompute();
   if (validate) validate.onclick = () => repValidate();
+  $$("[data-rep-complete]", body).forEach((b) => (b.onclick = () => repComplete(b.dataset.repComplete)));
   $$("[data-rep-remove]", body).forEach((b) => (b.onclick = () => repRemove(...repSplit(b.dataset.repRemove))));
   $$("[data-rep-time]", body).forEach((input) => (input.onchange = () => { if (input.value) repSetTime(...repSplit(input.dataset.repTime), input.value); }));
   $$("[data-rep-clip]", body).forEach((select) => (select.onchange = () => { if (select.value) repSetClip(...repSplit(select.dataset.repClip), select.value); }));

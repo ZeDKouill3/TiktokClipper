@@ -528,11 +528,15 @@ Réglages `[repartition]` (défauts du code, `clipper/repartition.py`) :
 | `title_ab_start` | `"2026-10-14"` | premier jour (heure de Paris) de la semaine 1 de la rotation |
 | `title_ab_accounts` | `[]` | ids des comptes TikTok du test, dans l'ordre de la rotation |
 | `title_ab_styles` | `["citation", "promesse", "promesse_emoji"]` | styles de titre, dans l'ordre de la rotation |
+| `auto_complete` | `false` | vrai : le worker complète seul un plan validé incomplet ; faux : rien ne part sans un clic sur « Compléter » |
+| `auto_complete_every_min` | `30` | intervalle minimal (minutes) entre deux complétions automatiques d'un même plan |
 
 Un réglage hors domaine (heure non `HH:MM`, `prime_end` avant `prime_start`,
 `bonus_points` négatif...) est refusé avec son nom : il n'est jamais corrigé en
 silence. Les plafonds `[tiktok] max_posts_per_day` et `min_gap_minutes` restent
 appliqués par-dessus.
+
+Un plan validé qui garde des créneaux sans clip (vivier insuffisant le soir, compte refusé en route) se complète : le bouton **Compléter** de la section « Plan de demain » crée, par compte, les lignes des seuls créneaux encore à venir (au moins 15 minutes), sans toucher aux publications déjà créées. Chaque créneau resté vide dit pourquoi (`past`, `account_not_ready`, `no_clip`, `style_mismatch`, `max_per_source`, `refused`).
 
 ## Statistiques TikTok
 
