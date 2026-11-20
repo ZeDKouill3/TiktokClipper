@@ -1,0 +1,342 @@
+---
+id: SPEC-7bfa9f70f321
+type: spec
+slug: r-partition-automatique-du-lendemain-v3-compl-te
+title: "Répartition automatique du lendemain v3 : compléter un plan validé incomplet (bouton et API Compléter, complétion auto optionnelle, créneaux vides motivés)"
+created: 2026-11-20T07:43:30Z
+author: w-spec-i4
+status: proposed
+scope:
+  - clipper/repartition.py
+  - clipper/publish.py
+  - clipper/accounts.py
+  - clipper/worker.py
+  - clipper/web/**
+  - tests/test_repartition.py
+  - tests/test_worker.py
+  - tests/test_web.py
+  - config.example.toml
+  - clipper/assets/config.example.toml
+references: [SPEC-1ed39f032124, SPEC-6076cbce2d7f, SPEC-f348954318c1, SPEC-47e204a92fd0, SPEC-042cf36b034b, ADR-49cdd4316d6e, ADR-ad2e562b1810, ADR-35b778a98d22, ADR-b16b71007578, ADR-1cf0b17d48b3]
+supersedes: SPEC-6d1f4b17653a
+schema: 4
+version: 1
+---
+
+## Objet
+Chaque soir, Clipper prépare seul le plan des publications du lendemain pour chaque
+compte TikTok actif (décision utilisateur du 2026-10-09 ; aujourd'hui fait à la main,
+cf. plan du 2026-10-10 : 3 comptes × 6 posts). L'utilisateur le voit dans l'écran
+Publication, change une ligne s'il veut, clique « Valider » ; rien n'est créé ni
+envoyé sans ce clic. Après validation, les publications sont celles de SPEC-1ed3
+(une entrée `create_post` par ligne, mode programmé), exécutées par le worker comme
+aujourd'hui. Tout vit dans la bibliothèque `clipper/repartition.py` (ADR-b16b : pas
+une étape, n'importe ni `clipper.web` ni une étape ; importe `publish`, `accounts`,
+`tiktok`, `channel`), état JSON atomique sous `state/repartition/` (ADR-35b7 §3),
+aucun chiffre inventé ni repli silencieux (ADR-ad2e), heure de Paris à l'affichage
+(SPEC-5e50 R8), aucun nom réel dans le code, les tests et les entités.
+
+## R0. Réglages `[repartition]` (CONFIG_DEFAULTS de clipper/repartition.py)
+| clé | défaut | rôle |
+|---|---|---|
+| enabled | true | faux : le worker ne calcule rien, l'écran le dit |
+| state_dir | "state/repartition" | un fichier `<AAAA-MM-JJ>.json` par jour planifié |
+| compute_time | "20:00" | heure de Paris à partir de laquelle le worker calcule le plan du lendemain |
+| posts_per_day | 6 | posts visés par compte et par jour (R1) |
+| default_grid_start | "08:00" | grille par défaut d'un compte sans créneau fixe ce jour-là (R1) |
+| default_grid_end | "22:00" | dernière heure de la grille par défaut (incluse) |
+| default_grid_gap_min | 150 | écart minimal (minutes) entre deux posts d'un même compte, grille et compléments |
+| account_stagger_min | 30 | décalage entre comptes à même heure de grille (R1) |
+| max_per_source | 2 | clips d'une même source (jeu connu, sinon VOD) par compte et par jour (R3) |
+| excluded_sources | [] | chaînes sources (nom du streamer de `meta.json["channel"]`) ou styles jamais planifiés (R2) |
+| prime_start | "18:00" | début des créneaux du soir (R5) |
+| prime_end | "22:00" | fin (incluse) des créneaux du soir |
+| exploration_per_day | 1 | clips d'exploration au plus par jour, tous comptes confondus (R6) |
+| bonus_window_days | 7 | fenêtre des posts relevés qui servent au bonus (R4) |
+| bonus_min_age_h | 24 | âge minimal (heures) d'un post relevé pour compter dans le bonus : les vues mûrissent (R4) |
+| bonus_min_posts | 3 | posts relevés d'une source au moins pour qu'elle ait un bonus |
+| bonus_points | 5.0 | amplitude maximale du bonus, en points de score (R4) |
+Un réglage hors domaine (heure non `HH:MM`, entier < 1, `prime_end` <= `prime_start`,
+`default_grid_end` < `default_grid_start`, `bonus_points` < 0, `excluded_sources`
+non liste de chaînes) est une `RepartitionError` à la lecture, jamais corrigé en
+silence. Les plafonds `[tiktok] max_posts_per_day` / `min_gap_minutes` restent ceux
+de leur module et s'appliquent par-dessus (R7).
+
+## R1. Comptes et créneaux
+`repartition.compute_plan(day, now, config=)` planifie le jour `day` (heure de Paris)
+pour chaque compte TikTok « actif » : `service == "tiktok"`, `ready_to_publish`
+vrai, sans `paused_at` (SPEC-f348 R3/R7). Un compte YouTube prêt est listé dans
+`notes` (« hors périmètre v1 »), jamais planifié. Par compte, les créneaux du jour
+sont, dans l'ordre : (a) ses créneaux fixes de ce jour de semaine
+(`accounts.schedule_of`, SPEC-6076 R2), tous gardés ; (b) s'il en manque pour
+atteindre `posts_per_day`, des heures de la grille par défaut (`default_grid_start`
+à `default_grid_end` par pas de `default_grid_gap_min`, décalée de
+`account_stagger_min` × rang du compte dans l'ordre de l'écran Comptes), prises
+dans l'ordre des heures en écartant celle qui serait à moins de
+`default_grid_gap_min` d'un créneau déjà retenu ou d'une publication déjà prévue ce
+jour-là sur ce compte (`publish.planned_times`). Les publications déjà prévues ce
+jour-là sur le compte (manuelles, séries) comptent dans `posts_per_day` : le plan
+complète, il ne double pas. Moins de créneaux possibles que de posts voulus : le
+plan le dit (`notes`), jamais un créneau rapproché en silence.
+
+## R2. Vivier
+`publish.available_series_clips(style=None, together=False)` (clips `ready`,
+QA non rejetée puisque `ready` l'exige, absents de toute file de publication quel que
+soit le statut et le compte : jamais deux fois le même clip ; plus les clips
+approuvés sans créneau pour ce compte ou sans compte), moins : tout clip d'une série en
+plusieurs parties (sidecar `part` non nul ; décision utilisateur du 2026-10-09 : une
+série se programme à la main avec « Programmer une série »), les clips dont la vidéo vient d'une
+source de `excluded_sources` (comparaison insensible à la casse avec
+`meta.json["channel"]` de la vidéo et avec le style de `pipeline.json["channel"]`),
+les clips dont la vidéo est encore dans la file de traitement. Chaque exclusion est
+comptée par raison dans le plan (`excluded: [{video_id, clip_id, reason}]`). Une
+entrée de `excluded_sources` qui ne correspond à aucune vidéo du vivier est notée
+(« aucune vidéo pour cette source »), pas une erreur.
+
+## R3. Source d'un clip et plafond par source
+`source_key` d'un clip = `"jeu:<clé normalisée>"` si le jeu de la vidéo est connu,
+sinon `"vod:<video_id>"`. Le jeu connu vient, dans l'ordre, de
+`meta.json["game"]` (champ absent aujourd'hui, réservé) puis de l'instantané
+`state/veille/seen.json` (`queued[].game_name` pour ce `video_id`, SPEC-8a45 R32).
+Jamais déduit du titre par le plan. Au plus `max_per_source` clips de même
+`source_key` par compte et par jour, publications déjà prévues ce jour-là comprises.
+Chaque ligne du plan porte `source_key`, `game_name` (ou null) et
+`source_from` (`"meta" | "veille" | "vod"`), affiché « jeu inconnu : regroupé par
+VOD » quand c'est la VOD.
+
+## R4. Bonus aux sources qui marchent (relevés réels seulement)
+Pour chaque compte actif, les posts relevés (`tiktok.read_history` +
+`tiktok.merged_posts`) avec `posted_at` (heure de Paris naïve) dans les `bonus_window_days` derniers jours
+et au moins `bonus_min_age_h` heures avant le calcul (un post plus récent n'a pas ses vues finales :
+45-95 % à 12 h, 86-97 % à 24 h, relevés réels du 09/10), et `views` non null, reliés à un clip Clipper par `sidecar["tiktok_post"]["id"]`
+(tous comptes confondus : un jeu qui marche sur A compte pour B), donnent par
+`source_key` une médiane de vues ; référence = médiane de vues de tous ces posts
+reliés. Bonus d'une source = `bonus_points × clamp(médiane_source / référence − 1,
+−1, +1)`, seulement si la source a au moins `bonus_min_posts` posts relevés dans la
+fenêtre ; sinon 0 avec la raison (`"no_stats"`, `"below_min_posts"`). Sans aucun
+relevé : bonus 0 partout, note « aucun relevé récent ». Score ajusté =
+`sidecar["score"] + bonus` ; un clip sans score est classé dernier. La ligne porte
+`score`, `bonus`, `bonus_reason` (ex. « 4 posts, médiane 12 000 vues, référence
+7 500, posts d'au moins 24 h »). Jamais une valeur estimée.
+
+## R5. Attribution aux créneaux
+Les clips du vivier sont pris par score ajusté décroissant (ex æquo : `video_id`,
+`clip_id`), un compte après l'autre dans l'ordre de l'écran Comptes, un clip par
+tour (tourniquet : le meilleur à A, le suivant à B, etc.), sous R3 et R6 ; un clip
+refusé pour un compte est proposé au suivant. Dans un compte, les créneaux sont
+remplis par ordre de valeur : d'abord ceux du soir (`prime_start` <= heure locale
+<= `prime_end`) par heure croissante, puis les autres par heure croissante ; le
+meilleur clip prend le premier créneau de cette liste.
+
+## R6. Exploration
+Un clip est d'exploration si `workspace/<video_id>/moments.json` porte
+`exploration: true` sur le moment `int(clip_id[:2])` (SPEC-00db R9). Avant le
+remplissage par score (R5), le calcul réserve min(`exploration_per_day`, clips
+d'exploration du vivier) créneaux, au plus un par compte, comptes dans l'ordre du
+tourniquet, chacun sur le créneau le moins cher du compte (le premier hors soir ;
+s'il n'y en a pas, le compte n'en reçoit pas), avec le meilleur clip d'exploration
+que ce compte peut prendre (R2, R3) ; une note du plan nomme chaque réservation.
+Sans aucun créneau hors soir, rien n'est réservé et une note le dit (ADR-1cf0 point
+4 : sans publication, l'exploration n'apprend rien). Un `moments.json` absent ou illisible : clip traité comme non exploration,
+compté dans `notes`.
+
+## R7. Fichier de plan, calcul, obsolescence
+`state/repartition/<AAAA-MM-JJ>.json` = `{"day", "computed_at", "computed_by":
+"worker" | "web", "status": "proposed" | "validated", "accounts": [{"account",
+"label", "slots": [...], "lines": [{"slot_at" (ISO avec fuseau), "video_id",
+"clip_id", "score", "bonus", "bonus_reason", "adjusted", "source_key",
+"game_name", "source_from", "exploration", "prime"}], "notes": [...]}],
+"pool": n, "excluded": [...], "notes": [...], "validated_at", "created":
+[{account, video_id, clip_id}]}`. Écriture atomique sous verrou
+(`channel.file_lock`, `atomic_write_json`). `run_if_due(now, config=)` (appelé par
+`Worker.tick` à chaque tour, après `_learning_due`) calcule le plan de demain quand
+l'heure de Paris a passé `compute_time` et qu'aucun fichier `proposed` ou
+`validated` n'existe pour demain ; une `RepartitionError`, `PublishError`,
+`AccountsError`, `TikTokError`, `ConfigError`, `OSError`, `ValueError` est écrite
+dans le fichier (`{"status": "error", "error": {...}}`) et journalisée une fois,
+jamais propagée hors du tour. Un plan `proposed` n'est jamais recalculé tout seul
+(les modifications de l'utilisateur sont gardées) ; « Recalculer » (R8) le
+remplace. Les plafonds par compte (`[tiktok]`) et les refus de date sont ceux de
+`publish.preview_series` (R8), pas recopiés ici.
+
+## R8. API (clipper/web/app.py), aucune logique dans la page (ADR-49cd)
+- `GET /api/repartition?day=` (défaut : demain, Paris) : le fichier du jour avec,
+  par ligne, `screen_title`, `thumbnail_url`, `publish_at_paris`, et les
+  `refusal` de `publish.preview_series(mode="manual", account=, selection=,
+  clip_dates=, together=False, schedule=accounts.schedule_of)` ligne par ligne
+  (plafonds, < 15 min, créneau déjà pris) ; plus, sous CHAQUE compte, `pool` (clips
+  que ce compte peut prendre pour remplacer une ligne, avec les exclusions de R2 :
+  jamais un clip validé pour un autre compte, ni une partie de série, ni une source
+  exclue, ni une vidéo en traitement ; mêmes champs que `/api/publications/series/clips`).
+- `POST /api/repartition/compute` `{day}` : recalcule (`computed_by: "web"`) ;
+  409 si le plan du jour est `validated`.
+- `PUT /api/repartition/{day}` `{accounts: [{account, lines: [{slot_at, video_id,
+  clip_id}]}]}` : remplace les lignes (modifier un clip, une heure, retirer une
+  ligne) ; une ligne que R2 exclut (partie de série, source exclue, vidéo en
+  traitement, clip validé pour un autre compte) ou dont le créneau tombe un autre
+  jour (heure de Paris) que `day` : 422 explicite, fichier inchangé ; sinon chaque
+  ligne est re-décrite (R3, R4, R6) et re-prévisualisée ; une ligne
+  qui viole R3 ou R6 est acceptée avec un `warning` visible (c'est le choix de
+  l'utilisateur), une ligne qui viole les plafonds ou une date impossible garde
+  son `refusal` ; 409 si `validated`. Les avertissements R3/R6 ne comptent pas deux
+  fois les lignes des comptes déjà créés (`created`).
+- `POST /api/repartition/{day}/validate` : pour chaque compte, dans l'ordre,
+  `publish.create_series(mode="manual", account=, selection=, clip_dates=,
+  together=False, schedule=, settings=)` (tout-ou-rien par compte, annulation des
+  entrées créées si échec en route, comme aujourd'hui) ; un compte refusé (409
+  avec le détail de `create_series`) arrête la validation, les comptes déjà
+  validés restent créés et sont listés dans `created` ; le fichier passe
+  `validated` seulement quand tous les comptes sont créés, sinon il garde
+  `proposed` avec `created` partiel et `last_error` ; aucune ligne n'est créée en
+  mode immédiat. Compte non prêt ou en pause au moment de valider : 409 explicite
+  (`_require_ready_account`), rien de créé pour lui.
+- Un événement SSE `repartition` par changement de fichier sous `state_dir`
+  (`_watched_state_roots`).
+
+## R9. Écran Publication (SPEC-c100 E6)
+Section « Plan de demain » en haut du panneau de gauche, au-dessus de « En
+attente » : date, heure de calcul, état (proposé / validé le … / erreur avec le
+message / désactivé), bouton « Recalculer », bouton « Valider le plan » (actif
+seulement si au moins une ligne sans `refusal`). Par compte : libellé, puis une
+ligne par créneau (heure de Paris, vignette, titre d'écran, score et bonus avec sa
+raison au survol, jeu ou « jeu inconnu : VOD », badge « exploration », badge
+« soir », `refusal` en rouge, `warning` en orange) avec « Changer le clip » (liste
+`pool`), « Changer l'heure », « Retirer ». Créneau sans clip (vivier insuffisant) :
+ligne vide « aucun clip disponible ». Les `notes` du plan sont affichées telles
+quelles. Après validation : toast « N publications créées », les lignes
+apparaissent dans « En attente » et au calendrier comme aujourd'hui. Aucun calcul
+dans la page.
+
+## R10. Tests, sans réseau ni navigateur ni vrai Claude, CPU seulement
+`tests/test_repartition.py` sur `tmp_path` (sidecars, `pipeline.json`,
+`moments.json`, `meta.json`, `state/accounts.json`, `state/publish/*.json`,
+`state/stats/tiktok/<compte>/*.json`, `state/veille/seen.json`, `now` injecté) :
+comptes actifs seulement (pause, non prêt, youtube exclus avec note) ; créneaux
+fixes gardés puis grille complétée avec écart et décalage par compte ; posts déjà
+prévus comptés ; vivier (ready seulement, jamais une entrée existante, série
+multi-parties exclue, source exclue par streamer et par style, note pour une source sans
+vidéo) ; `source_key` meta > veille > vod ; `max_per_source` par compte avec prévu
+compris ; bonus (médiane, borne ±, `bonus_min_posts`, aucun relevé → 0 et note,
+jamais de post non relié) ; meilleurs scores le soir ; tourniquet entre comptes ;
+exploration ≤ 1 par jour sur un créneau hors soir ; fichier déterministe hors
+`computed_at` ; `run_if_due` (avant l'heure : rien ; après : un calcul ; plan
+existant : pas de recalcul ; erreur écrite et journalisée une fois ;
+`enabled=false`) ; réglages invalides refusés. `tests/test_worker.py` : appel à
+chaque tour avec coureur injecté. `tests/test_web.py` : GET avec refus par ligne,
+compute, PUT (modification, warning R3, 409 si validé), validate (entrées créées
+via `create_post` avec `publish_mode = "scheduled"`, tout-ou-rien par compte,
+compte en pause 409, fichier `validated`), événement SSE, rendu de la section
+(node). `python -m pytest -q` vert.
+
+
+## R11. Compléter un plan (défaut I4, research/reviews/publication.md)
+Origine : un plan validé avec des créneaux vides (vivier insuffisant le soir) restait
+figé (`_compute_locked` lève `RepartitionError`, `run_if_due` rend `None`,
+`_rep_editable` répond 409 « déjà validé ») alors que des clips du bon style sont
+rendus dans la journée ; même blocage pour un compte refusé au milieu de la
+validation. Les règles R1-R10 et SPEC-042c restent entières ; R11-R16 s'y ajoutent.
+- Un plan `validated` garde ses lignes créées (`created`) intouchées : jamais
+  recalculées, déplacées, retirées ni recréées par Compléter, le worker ou le PUT.
+- Créneau à compléter d'un compte = créneau de `slots` du fichier (R1, R7) qui
+  n'a aucune ligne (même `slot_at`) ET dont l'heure est au moins à l'avance minimale
+  de publication (15 min, celle de `publish.preview_series`) après l'instant du
+  calcul. Un créneau déjà passé ou trop proche n'est jamais complété : il est
+  listé avec la raison `past` (R13). Les `slots` ne sont pas recalculés (pas de
+  nouveau créneau, pas de nouveau compte : un compte devenu actif après le calcul
+  est dit dans `notes`, « non planifié : compte activé après le calcul »).
+- `repartition.complete_plan(day, now, config=, completed_by="web" | "worker")`
+  (bibliothèque, sous le verrou du fichier) rejoue le calcul de `_build` restreint
+  aux créneaux à compléter, avec les mêmes règles : comptes actifs (R1 ; un compte
+  en pause ou non prêt n'est pas complété, raison `account_not_ready`), vivier
+  (R2 : jamais un clip déjà dans une file ni une ligne d'un autre compte du plan),
+  plafond par source (R3, lignes existantes et publications prévues du jour
+  comprises), bonus (R4), soir d'abord et tourniquet (R5), exploration (R6 :
+  `exploration_per_day` compte les lignes d'exploration déjà présentes dans le
+  plan, tous comptes), style A/B du jour (SPEC-042c R4, refus dans
+  `title_ab.refused`), refus de date et plafonds par compte de
+  `publish.preview_series` (une ligne qui serait refusée n'est pas posée : le
+  créneau reste vide avec la raison `refused` et le détail). Plan `proposed` sans
+  `created` : 409 (il se recalcule, R8) ; plan `error` ou absent : 409 / 404.
+
+## R12. Création des lignes complétées
+Les lignes posées par Compléter sont créées dans le même appel, exactement comme la
+validation (R8) : par compte, `publish.create_series(mode="manual", account=,
+selection=, clip_dates=, together=False, schedule=, settings=)`, tout-ou-rien par
+compte, exclusions rejouées (`line_error`), `_require_ready_account` ; jamais en mode
+immédiat. Elles sont ajoutées aux `lines` du compte (marquées `"completed_at"`) et à
+`created` ; le plan reste `validated`. Un compte refusé arrête la complétion : les
+comptes déjà complétés restent créés, `last_error` est écrit, réponse 409 avec le
+détail comme la validation. Chaque complétion est tracée dans
+`completions: [{"at", "by", "created": n, "empty": n}]`. Plan `proposed` avec
+`created` partiel (compte refusé au milieu de la validation) : Compléter s'applique
+aux comptes non créés (leurs lignes existantes sont validées comme par
+`validate`, puis leurs créneaux vides complétés) et le plan passe `validated` quand
+tous les comptes sont créés ; le PUT reste permis sur les comptes non créés et
+refuse (409) toute modification d'une ligne d'un compte déjà créé.
+
+## R13. Rien de silencieux (ADR-ad2e)
+Après chaque calcul ou complétion, chaque compte porte `empty_slots: [{"slot_at",
+"reason", "detail"}]` pour tout créneau resté sans ligne, `reason` parmi : `past`
+(créneau passé ou à moins de l'avance minimale), `account_not_ready` (pause ou non
+prêt), `no_clip` (aucun clip du vivier pour ce compte), `style_mismatch` (des clips
+existent mais aucun du style A/B du jour du compte, avec le nombre refusé),
+`max_per_source` (les seuls clips restants dépassent le plafond par source),
+`refused` (refus de `publish.preview_series`, détail repris tel quel). `detail` est
+une phrase lisible. La complétion est journalisée une ligne par appel (jour,
+par qui, lignes créées, créneaux restés vides).
+
+## R14. Réglages ajoutés à `[repartition]` (CONFIG_DEFAULTS)
+| clé | défaut | rôle |
+|---|---|---|
+| auto_complete | false | vrai : le worker complète seul un plan validé incomplet (R15) ; faux : rien ne part sans un clic |
+| auto_complete_every_min | 30 | intervalle minimal (minutes) entre deux complétions automatiques d'un même plan |
+`auto_complete` non booléen ou `auto_complete_every_min` entier < 1 :
+`RepartitionError` à la lecture, comme R0.
+
+## R15. Complétion automatique par le worker (désactivée par défaut)
+`repartition.complete_if_due(now, config=)`, appelée par `Worker.tick` après
+`run_if_due` (même gestion d'erreur que R7 : écrite dans le plan sous `last_error`,
+journalisée une fois, jamais propagée hors du tour). Ne fait rien si
+`auto_complete` est faux ou `enabled` faux. Sinon, pour le plan du jour et celui de
+demain (heure de Paris), seulement s'il est `validated`, qu'il a au moins un
+créneau à compléter (R11), que la dernière complétion date d'au moins
+`auto_complete_every_min` et que le vivier contient au moins un clip qu'un compte
+au créneau vide peut prendre (R2, R3, SPEC-042c R4) : appelle `complete_plan(...,
+completed_by="worker")`. Le fichier change, l'événement SSE `repartition` part (R8).
+Aucune complétion de plan `proposed`.
+
+## R16. API et écran
+- `POST /api/repartition/{day}/complete` (clipper/web/app.py) : appelle
+  `complete_plan(completed_by="web")` via la bibliothèque (ADR-49cd : aucune
+  logique dans la route ni la page), rend la vue du plan (`_rep_view`) avec
+  `empty_slots` ; 404 sans plan, 409 plan `proposed` sans `created`, `error`, ou
+  compte refusé (détail). Rien à compléter : 200 avec `created: 0` et les raisons.
+- `GET /api/repartition` ajoute par compte `empty_slots` et `to_complete` (créneaux
+  à compléter, R11), et au plan `incomplete: n` (total) ; `GET /api/repartition?day=`
+  sert aussi le plan du jour.
+- Écran Publication (`clipper/web/static/screens/publish.js`, section « Plan de
+  demain ») : un plan validé incomplet affiche « validé le … — N créneau(x) sans
+  clip » et un bouton « Compléter » (actif si `incomplete` > 0) ; chaque créneau
+  vide montre sa raison (`detail`). Tant que le plan du jour (aujourd'hui, Paris)
+  est validé avec des créneaux à compléter, la section l'affiche aussi (« Plan
+  d'aujourd'hui ») au-dessus de celui de demain, avec le même bouton. Après
+  Compléter : toast « N publications créées, M créneau(x) toujours vide(s) ».
+  `auto_complete` vrai : l'écran le dit (« complétion automatique active »).
+
+## R17. Tests (ajoutés à R10), sans réseau ni navigateur ni vrai Claude
+`tests/test_repartition.py` : plan validé avec créneaux vides puis clips du bon
+style rendus → `complete_plan` pose et crée les lignes des seuls créneaux vides
+futurs, lignes existantes et `created` inchangés à l'octet près ; créneau passé ou à
+< 15 min jamais complété (`past`) ; style A/B respecté (clip d'un autre style refusé,
+`style_mismatch`) ; `max_per_source` et `exploration_per_day` comptent les lignes
+existantes ; compte en pause → `account_not_ready` ; aucune entrée en mode immédiat ;
+compte refusé au milieu → comptes précédents créés, `last_error`, plan `validated`
+inchangé pour le reste ; plan `proposed` à `created` partiel complété puis passé
+`validated` ; chaque créneau resté vide a une raison ; `completions` tracé ;
+`complete_if_due` (désactivé par défaut : rien ; activé : complète une fois, puis
+pas avant `auto_complete_every_min` ; vivier sans clip éligible : rien ; erreur
+écrite et journalisée une fois) ; réglages invalides refusés. `tests/test_worker.py` :
+appel à chaque tour avec coureur injecté. `tests/test_web.py` : route `complete`
+(200 avec créations, 404, 409 cas listés), GET avec `empty_slots`/`incomplete` et
+plan du jour, PUT refusé sur une ligne d'un compte créé, rendu « N créneaux sans
+clip » + bouton Compléter (node). `python -m pytest -q` vert.
