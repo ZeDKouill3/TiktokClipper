@@ -1675,7 +1675,8 @@ def _engagement():
 
 
 def _curve():
-    return [FakeCell("0:00 | 100%"), FakeCell("0:05 | 63%"), FakeCell("0:10 | 23%")]
+    """Ce que l'instance echarts de la carte de retention donne : points (seconde, pourcentage)."""
+    return [[0, 100], [5, 63], [10, 23]]
 
 
 ID_A, ID_B, ID_C = "7300000000000000001", "7300000000000000002", "7300000000000000003"
@@ -1690,8 +1691,9 @@ class Post:
     """Ce que TikTok Studio affiche pour un post : une ligne de la page Publications et ses pages d'analyse."""
 
     def __init__(self, post_id, *, row=None, cards=None, curve=None, sources=None, viewers="ok", engagement="ok",
-                 notice=None):
+                 notice=None, retention=None):
         self.id = post_id
+        self.retention = retention  # texte de la valeur dans la carte de retention (« 63% »), ou None
         self.notice = notice  # bandeau « pas eligible au fil Pour toi » affiche en haut de l'analyse, ou None
         self.row = _row(post_id) if row is None else row
         self.cards = _cards() if cards is None else cards
@@ -1751,10 +1753,11 @@ class FakeStudio(FakePage):
                 return list(self.posts[post].cards)
             if selector == stats["fyf_notice"] and self.posts[post].notice is not None:
                 return [FakeCell(self.posts[post].notice)]
-            if selector == stats["retention_point"]:
-                return list(self.posts[post].curve)
-            if selector == stats["traffic_sources"] and self.posts[post].sources is not None:
-                return [FakeCell(self.posts[post].sources)]
+            if selector == stats["retention_card"] and self.posts[post].retention is not None:
+                return [FakeCell(f"{sel['metrics']['retention']}\n{self.posts[post].retention}")]
+            if selector == stats["traffic_card"] and self.posts[post].sources is not None:
+                src = self.posts[post].sources
+                return [FakeCell(src if isinstance(src, str) else "Sources de trafic")]
         if view in ("viewers", "engagement") and post in self.posts:
             data = getattr(self.posts[post], view)
             if selector == stats["viewers_card" if view == "viewers" else "engagement_card"] and data != "unavailable":
@@ -1781,7 +1784,14 @@ class FakeStudio(FakePage):
             raise TimeoutError(f"Timeout {timeout}ms exceeded waiting for {selector}")
         return found[0]
 
-    def evaluate(self, script):
+    def evaluate(self, script, arg=None):
+        stats = _sel()["stats"]
+        if script == stats["chart_script"]:  # l'instance echarts d'une carte (canvas : rien dans le DOM)
+            self.calls.append(("chart", arg))
+            post = self.posts[self.view[1]]
+            data = (None if post.curve == "absent" else post.curve) if arg == stats["retention_card"] else (
+                None if isinstance(post.sources, str) else post.sources)
+            return {"error": "instance echarts absente"} if data is None else {"data": data}
         self.calls.append(("evaluate", script))
         self.scrolled = min(self.scrolled + 1, len(self.batches) - 1)
         return self.scrolled == len(self.batches) - 1  # true = bas du conteneur atteint
@@ -2178,19 +2188,88 @@ def test_a_metric_the_page_does_not_show_is_an_explicit_null_never_an_invented_z
         assert key in got and got[key] is None
 
 
-def test_the_retention_curve_is_read_point_by_point(tmp_path, monkeypatch):
+def test_the_retention_curve_is_read_from_the_echarts_instance(tmp_path, monkeypatch):
     env = StatsEnv(tmp_path, monkeypatch, [Post(ID_A)])
 
     assert env.fetch()["posts"][0]["retention_curve"] == [
         {"t_s": 0.0, "share": 1.0}, {"t_s": 5.0, "share": 0.63}, {"t_s": 10.0, "share": 0.23}]
+    assert ("chart", _sel()["stats"]["retention_card"]) in env.page.calls
 
 
-def test_traffic_sources_are_kept_as_displayed_and_null_when_absent(tmp_path, monkeypatch):
-    env = StatsEnv(tmp_path, monkeypatch, [Post(ID_A, sources="Pour toi 74 % Abonnés 12 %"), Post(ID_B)])
+def test_a_missing_echarts_instance_is_a_null_with_the_reason_logged(tmp_path, monkeypatch, caplog):
+    env = StatsEnv(tmp_path, monkeypatch, [Post(ID_A, curve="absent")])
+
+    with caplog.at_level("WARNING"):
+        got = env.fetch()["posts"][0]
+
+    assert got["retention_curve"] is None
+    assert any("instance echarts absente" in r.getMessage() and ID_A in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("bad", [
+    [[0, 100]],                              # un seul point : pas une courbe
+    [[0, 100], [5, 140]],                    # pourcentage hors 0..100
+    [[0, 100], [5, 60], [3, 40]],            # temps qui recule
+    [[0, 100], [5, "x"]],                    # valeur illisible
+    [[i, 50] for i in range(5000)],          # hors borne
+    "n'importe quoi"])
+def test_invalid_chart_data_gives_no_curve_and_a_logged_reason(tmp_path, monkeypatch, caplog, bad):
+    env = StatsEnv(tmp_path, monkeypatch, [Post(ID_A, curve=bad)])
+
+    with caplog.at_level("WARNING"):
+        got = env.fetch()["posts"][0]
+
+    assert got["retention_curve"] is None
+    assert any("rétention" in r.getMessage() and ID_A in r.getMessage() for r in caplog.records)
+
+
+def test_the_retention_rate_is_read_in_the_retention_card_not_in_the_metric_cards(tmp_path, monkeypatch):
+    env = StatsEnv(tmp_path, monkeypatch, [Post(ID_A, retention="63%"), Post(ID_B)])
+
+    by_id = {p["post_id"]: p for p in env.fetch()["posts"]}
+
+    assert by_id[ID_A]["retention"] == 0.63 and by_id[ID_B]["retention"] is None
+
+
+def test_traffic_sources_come_from_the_echarts_instance_and_are_null_when_absent(tmp_path, monkeypatch):
+    sources = [{"name": "Pour toi", "value": 74}, {"name": "Abonnés", "value": 12}]
+    env = StatsEnv(tmp_path, monkeypatch, [Post(ID_A, sources=sources), Post(ID_B)])
 
     by_id = {p["post_id"]: p for p in env.fetch()["posts"]}
 
     assert by_id[ID_A]["traffic_sources"] == "Pour toi 74 % Abonnés 12 %" and by_id[ID_B]["traffic_sources"] is None
+
+
+def test_invalid_traffic_data_is_a_null_with_the_reason_logged(tmp_path, monkeypatch, caplog):
+    env = StatsEnv(tmp_path, monkeypatch, [Post(ID_A, sources=[{"name": "Pour toi", "value": -3}])])
+
+    with caplog.at_level("WARNING"):
+        got = env.fetch()["posts"][0]
+
+    assert got["traffic_sources"] is None
+    assert any("sources de trafic" in r.getMessage() and ID_A in r.getMessage() for r in caplog.records)
+
+
+def test_a_field_never_read_on_all_detailed_posts_is_warned_once_and_written_in_the_snapshot(tmp_path, monkeypatch, caplog):
+    posts = [Post(post_id, curve="absent") for post_id in (ID_A, ID_B, ID_C)]
+    env = StatsEnv(tmp_path, monkeypatch, posts)
+
+    with caplog.at_level("WARNING"):
+        snapshot = env.fetch()
+
+    line = "champ retention_curve jamais lu sur 3/3 posts détaillés : repère périmé"
+    assert line in snapshot["warnings"]
+    assert sum(line in r.getMessage() for r in caplog.records) == 1
+    saved = json.loads(next(env.folder.glob("2026*.json")).read_text(encoding="utf-8"))
+    assert line in saved["warnings"]
+    assert not any(w.startswith("champ avg_watch_s") for w in snapshot["warnings"])  # celui-la est lu
+
+
+def test_a_field_read_on_some_posts_or_too_few_detailed_posts_triggers_no_warning(tmp_path, monkeypatch):
+    partial = StatsEnv(tmp_path / "a", monkeypatch, [Post(ID_A, curve="absent"), Post(ID_B), Post(ID_C, curve="absent")])
+    assert not any("retention_curve" in w for w in partial.fetch()["warnings"])
+    few = StatsEnv(tmp_path / "b", monkeypatch, [Post(ID_A, curve="absent"), Post(ID_B, curve="absent")])
+    assert few.fetch()["warnings"] == []
 
 
 def test_the_viewers_tab_gives_types_age_gender_and_locations(tmp_path, monkeypatch):
@@ -3017,7 +3096,7 @@ def test_stats_selectors_live_in_the_selectors_file_marked_to_verify():
     assert data["urls"]["stats"].startswith("https://") and data["expect"]["stats_url_prefix"].startswith("https://")
     for key in tiktok.REQUIRED_STATS_SELECTORS:
         assert data["stats"][key]
-    assert text.count("A VERIFIER SUR LA VRAIE PAGE") >= 2  # un second marquage pour les pages de statistiques
+    assert text.count("A VERIFIER SUR LA VRAIE PAGE") >= 1  # les sources de trafic ne le portent plus (TASK-7176)
 
 
 def test_the_account_page_selectors_and_labels_are_in_the_selectors_file():
@@ -3329,7 +3408,7 @@ def _real_post(**kwargs):
 
 def test_the_selectors_of_the_three_unconfirmed_landmarks_are_no_longer_marked_to_verify():
     text = (Path(tiktok.__file__).parent / "assets" / "tiktok_selectors.toml").read_text(encoding="utf-8")
-    for key in ("retention_point", "viewers_card", "engagement_card"):
+    for key in ("retention_card", "viewers_card", "engagement_card"):
         line = next(i for i, row in enumerate(text.splitlines()) if row.startswith(f"{key} = "))
         assert "A VERIFIER" not in text.splitlines()[line - 1].upper().replace("É", "E"), key
 
@@ -3358,13 +3437,10 @@ def test_the_engagement_tab_of_the_real_page_is_read_and_an_unfilled_card_is_a_n
     assert got["engagement"]["comment_words"] is None  # « Tu pourras voir ces informations quand suffisamment de données... »
 
 
-def test_the_retention_curve_of_the_real_page_is_a_chart_without_point_elements_so_it_is_a_null(tmp_path, monkeypatch):
-    # releve reel : la rétention est un graphe echarts (canvas) sous une video, aucun element par point dans le DOM
+def test_the_retention_curve_landmark_is_the_card_and_the_chart_is_never_looked_for_as_dom_points():
     stats = _sel()["stats"]
-    assert _real_cells("overview", stats["retention_point"]) == []
-    got = StatsEnv(tmp_path, monkeypatch, [_real_post(curve=[])]).fetch()["posts"][0]
-
-    assert got["retention_curve"] is None
+    assert "retention_point" not in stats and "A VERIFIER" not in stats["traffic_card"].upper()
+    assert "getInstanceByDom" in stats["chart_script"]
 
 
 # ---------------------------------------------------------------- relance de la vérification bloquée (TASK-aa57)
@@ -3754,7 +3830,14 @@ class ScrollingStudioPage(StudioPage):
         super().goto(url, **kwargs)
         self.scrolled = 0  # la page rechargee repart du haut
 
-    def evaluate(self, script):
+    def evaluate(self, script, arg=None):
+        stats = _sel()["stats"]
+        if script == stats["chart_script"]:  # l'instance echarts d'une carte (canvas : rien dans le DOM)
+            self.calls.append(("chart", arg))
+            post = self.posts[self.view[1]]
+            data = (None if post.curve == "absent" else post.curve) if arg == stats["retention_card"] else (
+                None if isinstance(post.sources, str) else post.sources)
+            return {"error": "instance echarts absente"} if data is None else {"data": data}
         self.calls.append(("evaluate", script))
         self.scrolled = min(self.scrolled + 1, len(self.windows) - 1)
         return self.scrolled == len(self.windows) - 1

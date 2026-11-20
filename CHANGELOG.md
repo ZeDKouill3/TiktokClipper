@@ -12,6 +12,8 @@ Notes de version détaillées : [`docs/releases/`](docs/releases/).
 
 ### Corrigé
 
+- Relevés TikTok : la courbe de rétention et les sources de trafic (graphes echarts dessinés en canvas) sont enfin lues, par `page.evaluate` sur l'instance echarts de leur carte, avec points bornés et validés (sinon `null` et raison journalisée) ; le taux de rétention est lu dans la carte de rétention et non plus parmi les cartes de métriques ; un champ détaillé (rétention, courbe, sources, partages, durée moyenne, vu en entier, nouveaux followers) resté vide sur tous les posts détaillés d'un relevé (au moins 3) est signalé une fois (« champ X jamais lu sur N/N posts détaillés : repère périmé », journal et clé `warnings` du fichier du relevé) (TASK-7176).
+
 - Téléchargement : un fragment tronqué (« Downloaded X bytes, expected Y »), un DNS perdu (« getaddrinfo failed ») ou une connexion coupée par le serveur (« Remote end closed connection ») sont traités comme une coupure réseau et repris (`[download] network_retries`) au lieu de mettre la VOD en échec. Constaté les 19-20/11 à chaque décrochage du Wi-Fi.
 
 ### Corrigé
