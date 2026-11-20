@@ -69,6 +69,8 @@ output_dir = "output"
 # title_ab_start = "2026-10-14"  # premier jour (heure de Paris) de la semaine 1 de la rotation
 # title_ab_accounts = []         # ids des comptes TikTok du test, dans l'ordre de la rotation (hors liste : inchanges)
 # title_ab_styles = ["citation", "promesse", "promesse_emoji"]  # styles de titre, dans l'ordre de la rotation
+# auto_complete = false        # vrai : le worker complete seul un plan valide incomplet (SPEC-7bfa) ; faux : rien sans un clic
+# auto_complete_every_min = 30  # intervalle minimal (minutes) entre deux completions automatiques d'un meme plan
 #
 # [action]  # etape action (SPEC-b0f3, ADR-4e57) : passages d'action des VOD gaming (pics audio, plans, images decrites par le LLM)
 # # Desactivee par defaut : action.json vide, aucun appel LLM, scenes.json inchange. Activee (style gaming

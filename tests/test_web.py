@@ -12404,3 +12404,212 @@ def test_the_stats_screen_offers_the_accounts_of_both_services():
     for needle in ("/api/stats/youtube", "/api/stats/youtube/open", "/api/stats/youtube/refresh", "service",
                    "J'aime", "avg_view_s", "watched_share", "swiped_share", "Relever maintenant"):
         assert needle in js, needle
+
+
+# --------------------------------------------------------------------------
+# TASK-523e7c507350 : compléter un plan validé incomplet (SPEC-7bfa R11-R16)
+# --------------------------------------------------------------------------
+
+
+def _rep_write_slots(tmp_path, day: str, accounts, status: str = "proposed", **extra) -> None:
+    """Plan écrit à la main avec ses créneaux : ``accounts`` = [(compte, lignes, [heures de créneau])]."""
+    plan = {"day": day, "computed_at": "2026-10-09T20:00:00+02:00", "computed_by": "worker", "status": status,
+            "accounts": [{"account": acc, "label": acc, "lines": lines, "notes": [],
+                          "slots": [{"slot_at": _rep_slot(day, hhmm), "kind": "fixed", "prime": hhmm >= "18:00"}
+                                    for hhmm in hours]} for acc, lines, hours in accounts],
+            "pool": 6, "excluded": [], "notes": [], "validated_at": None, "created": [], **extra}
+    path = _rep_path(tmp_path, day)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(plan), encoding="utf-8")
+
+
+def _rep_validated_with_one_line(tmp_path, c, day: str, hours=("10:00", "13:00", "16:00")) -> None:
+    _rep_write_slots(tmp_path, day, [(READY, [_rep_line(day, hours[0], "01")], list(hours))])
+    assert c.post(f"/api/repartition/{day}/validate").status_code == 200
+
+
+def test_repartition_complete_creates_the_lines_of_the_empty_future_slots_only(tmp_path, isolated_cwd):
+    c, day = _rep_client(tmp_path, repartition={"max_per_source": 5}), _rep_day()
+    _rep_validated_with_one_line(tmp_path, c, day)
+
+    resp = c.post(f"/api/repartition/{day}/complete")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["status"] == "validated" and data["completion"] == {"created": 2, "empty": 0}
+    entries = _rep_scheduled(tmp_path)
+    assert [e["account"] for e in entries] == [READY] * 3 and entries[0]["clip_id"] == "01"
+    assert {e["publish_mode"] for e in entries} == {"scheduled"}
+    assert [datetime.fromisoformat(e["slot_at"]) for e in entries] == [
+        datetime.fromisoformat(_rep_slot(day, hhmm)) for hhmm in ("10:00", "13:00", "16:00")]
+    plan = _rep_read(tmp_path, day)
+    assert len(plan["created"]) == 3 and plan["completions"][0]["created"] == 2 and plan["completions"][0]["by"] == "web"
+    assert c.get("/api/repartition", params={"day": day}).json()["incomplete"] == 0
+
+
+def test_repartition_complete_without_an_eligible_clip_answers_200_with_created_zero_and_the_reasons(tmp_path, isolated_cwd):
+    c, day = _rep_client(tmp_path, repartition={"max_per_source": 1}), _rep_day()
+    _rep_validated_with_one_line(tmp_path, c, day)
+
+    resp = c.post(f"/api/repartition/{day}/complete")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["completion"] == {"created": 0, "empty": 2}
+    assert {e["reason"] for e in data["accounts"][0]["empty_slots"]} == {"max_per_source"}
+    assert len(_rep_scheduled(tmp_path)) == 1
+
+
+def test_repartition_complete_refuses_an_absent_proposed_or_error_plan(tmp_path, isolated_cwd):
+    c, day = _rep_client(tmp_path), _rep_day()
+    absent = c.post(f"/api/repartition/{day}/complete")
+    _rep_write_slots(tmp_path, day, [(READY, [_rep_line(day, "10:00", "01")], ["10:00", "13:00"])])
+    proposed = c.post(f"/api/repartition/{day}/complete")
+    path = _rep_path(tmp_path, day)
+    path.write_text(json.dumps({"day": day, "status": "error", "error": {"type": "X", "message": "boum"}}), encoding="utf-8")
+    failed = c.post(f"/api/repartition/{day}/complete")
+
+    assert absent.status_code == 404
+    assert proposed.status_code == 409 and "validé" in proposed.json()["detail"]
+    assert failed.status_code == 409 and "boum" in failed.json()["detail"]
+    assert _rep_scheduled(tmp_path) == []
+
+
+def test_repartition_complete_with_a_refused_account_keeps_the_previous_ones_and_answers_409(tmp_path, isolated_cwd):
+    c, day = _rep_client(tmp_path, repartition={"max_per_source": 5}), _rep_day()
+    _rep_write_slots(tmp_path, day, [
+        (READY, [_rep_line(day, "10:00", "01")], ["10:00", "13:00"]),
+        (SPARE, [_rep_line(day, "10:30", "03")], ["10:30"])])
+    _rep_pause(tmp_path, SPARE)
+    first = c.post(f"/api/repartition/{day}/validate")  # READY créé, SPARE refusé (en pause) : plan proposé à created partiel
+    assert first.status_code == 409
+
+    resp = c.post(f"/api/repartition/{day}/complete")
+
+    assert resp.status_code == 409 and "pause" in resp.json()["detail"] and resp.json()["account"] == SPARE
+    assert [(e["account"]) for e in _rep_scheduled(tmp_path)] == [READY, READY]  # 01 puis le complément de 13:00
+    plan = _rep_read(tmp_path, day)
+    assert plan["status"] == "proposed" and "pause" in plan["last_error"]
+    assert {x["account"] for x in plan["created"]} == {READY}
+
+
+def test_repartition_complete_finishes_a_partially_validated_plan(tmp_path, isolated_cwd):
+    c, day = _rep_client(tmp_path, repartition={"max_per_source": 5}), _rep_day()
+    _rep_write_slots(tmp_path, day, [
+        (READY, [_rep_line(day, "10:00", "01")], ["10:00"]),
+        (SPARE, [_rep_line(day, "10:30", "03")], ["10:30", "13:30"])])
+    _rep_pause(tmp_path, SPARE)
+    c.post(f"/api/repartition/{day}/validate")
+    _rep_write_accounts_back(tmp_path)
+
+    resp = c.post(f"/api/repartition/{day}/complete")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "validated"
+    assert sorted((e["account"], e["clip_id"]) for e in _rep_scheduled(tmp_path))[0] == (READY, "01")
+    assert {e["account"] for e in _rep_scheduled(tmp_path)} == {READY, SPARE} and len(_rep_scheduled(tmp_path)) == 3
+
+
+def _rep_write_accounts_back(tmp_path) -> None:
+    path = tmp_path / "state" / "accounts.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for row in data["accounts"]:
+        row["paused_at"] = None
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_repartition_get_exposes_the_empty_slots_what_to_complete_and_the_incomplete_total(tmp_path, isolated_cwd):
+    c, day = _rep_client(tmp_path, repartition={"auto_complete": True}), _rep_day()
+    _rep_validated_with_one_line(tmp_path, c, day)
+
+    data = c.get("/api/repartition", params={"day": day}).json()
+
+    assert data["incomplete"] == 2 and data["auto_complete"] is True
+    account = data["accounts"][0]
+    assert [s["slot_at"] for s in account["to_complete"]] == [_rep_slot(day, "13:00"), _rep_slot(day, "16:00")]
+    assert [e["slot_at"] for e in account["empty_slots"]] == [_rep_slot(day, "13:00"), _rep_slot(day, "16:00")]
+    assert all(e["reason"] in ("no_clip", "style_mismatch", "max_per_source", "refused") and e["detail"]
+               for e in account["empty_slots"])
+
+
+def test_repartition_get_serves_today_s_plan_and_a_past_slot_is_not_to_complete(tmp_path, isolated_cwd):
+    c, today = _rep_client(tmp_path), _rep_day(0)
+    past = _rep_past()
+    plan_day = datetime.fromisoformat(past).date().isoformat()
+    path = _rep_path(tmp_path, today)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "day": today, "computed_at": past, "computed_by": "worker", "status": "validated", "pool": 1, "excluded": [],
+        "notes": [], "validated_at": past, "created": [], "accounts": [{
+            "account": READY, "label": READY, "notes": [], "lines": [], "slots": [{"slot_at": past, "kind": "grid", "prime": False}]}]}),
+        encoding="utf-8")
+
+    resp = c.get("/api/repartition", params={"day": today})
+
+    assert resp.status_code == 200 and plan_day
+    data = resp.json()
+    assert data["status"] == "validated" and data["incomplete"] == 0
+    assert [e["reason"] for e in data["accounts"][0]["empty_slots"]] == ["past"]
+    assert data["accounts"][0]["to_complete"] == []
+
+
+def test_repartition_put_is_refused_on_a_line_of_an_account_already_created(tmp_path, isolated_cwd):
+    c, day = _rep_client(tmp_path), _rep_day()
+    _rep_write_slots(tmp_path, day, [
+        (READY, [_rep_line(day, "10:00", "01")], ["10:00"]), (SPARE, [_rep_line(day, "10:30", "03")], ["10:30"])])
+    _rep_pause(tmp_path, SPARE)
+    c.post(f"/api/repartition/{day}/validate")  # READY créé, SPARE refusé
+
+    resp = c.put(f"/api/repartition/{day}", json={"accounts": [{"account": READY, "lines": [_rep_put_line(day, "11:00", "02")]}]})
+    other = c.put(f"/api/repartition/{day}", json={"accounts": [{"account": SPARE, "lines": [_rep_put_line(day, "11:30", "04")]}]})
+
+    assert resp.status_code == 409 and "déjà créées" in resp.json()["detail"]
+    assert other.status_code == 200, other.text
+
+
+@_REP_NODE
+def test_plan_section_shows_the_incomplete_count_the_complete_button_and_the_reasons():
+    plan = _rep_plan(status="validated", validated_at="2026-10-09T21:10:00+02:00", incomplete=2, auto_complete=True)
+    plan["accounts"][0]["empty_slots"] = [
+        {"slot_at": f"{_REP_DAY}T21:00:00+02:00", "reason": "no_clip", "detail": "aucun clip disponible pour ce compte"}]
+
+    html = _rep_js("repHtml()", plan)
+
+    assert "2 créneau(x) sans clip" in html and "validé le" in html
+    assert re.search(r"data-rep-complete[^>]*>[^<]*Compléter", html) and not re.search(r"data-rep-complete[^>]*disabled", html)
+    assert "aucun clip disponible pour ce compte" in html
+    assert "complétion automatique active" in html
+
+
+@_REP_NODE
+def test_plan_section_complete_button_is_disabled_when_nothing_is_missing():
+    html = _rep_js("repHtml()", _rep_plan(status="validated", validated_at="2026-10-09T21:10:00+02:00", incomplete=0))
+
+    assert re.search(r"data-rep-complete[^>]*disabled", html) and "créneau(x) sans clip</p>" not in html
+
+
+@_REP_NODE
+def test_complete_calls_the_route_and_toasts_the_counts():
+    done = _rep_plan(status="validated", validated_at="2026-10-09T21:10:00+02:00", incomplete=1,
+                     completion={"created": 2, "empty": 1})
+    out = _rep_js("""(async () => {
+      __render(); repWire({});
+      $$('[data-rep-complete]')[0].onclick(); await pubRep.busyPromise;
+      return { posts: calls.filter((c) => c.method === 'POST').map((c) => c.url), toasts, shown: repHtml() };
+    })()""", _rep_plan(status="validated", validated_at="2026-10-09T21:10:00+02:00", incomplete=3),
+        {f"POST /api/repartition/{_REP_DAY}/complete": done})
+
+    assert out["posts"] == [f"/api/repartition/{_REP_DAY}/complete"]
+    assert out["toasts"][0]["title"] == "2 publications créées, 1 créneau(x) toujours vide(s)"
+    assert "1 créneau(x) sans clip" in out["shown"]
+
+
+@_REP_NODE
+def test_today_s_incomplete_validated_plan_is_shown_above_tomorrow_s():
+    today = _rep_plan(status="validated", validated_at="2026-10-09T21:10:00+02:00", incomplete=1, day="2026-10-09")
+    out = _rep_js("""(async () => { pubRep.today = %s; return repHtml(); })()""" % json.dumps(today), _rep_plan())
+
+    assert out.index("Plan d'aujourd'hui") < out.index("Plan de demain")
+    assert re.search(r'data-rep-complete="2026-10-09"', out)
+    absent = _rep_js("repHtml()", _rep_plan(), setup="pubRep.today = {status: 'validated', incomplete: 0, day: '2026-10-09'};")
+    assert "Plan d'aujourd'hui" not in absent
