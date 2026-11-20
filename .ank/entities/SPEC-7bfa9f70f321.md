@@ -5,7 +5,7 @@ slug: r-partition-automatique-du-lendemain-v3-compl-te
 title: "Répartition automatique du lendemain v3 : compléter un plan validé incomplet (bouton et API Compléter, complétion auto optionnelle, créneaux vides motivés)"
 created: 2026-11-20T07:43:30Z
 author: w-spec-i4
-status: proposed
+status: accepted
 scope:
   - clipper/repartition.py
   - clipper/publish.py
@@ -19,8 +19,12 @@ scope:
   - clipper/assets/config.example.toml
 references: [SPEC-1ed39f032124, SPEC-6076cbce2d7f, SPEC-f348954318c1, SPEC-47e204a92fd0, SPEC-042cf36b034b, ADR-49cdd4316d6e, ADR-ad2e562b1810, ADR-35b778a98d22, ADR-b16b71007578, ADR-1cf0b17d48b3]
 supersedes: SPEC-6d1f4b17653a
+ratified: f5124f86f2ab
+verified:
+  - by: nicoc@zedk_ordi
+    at: 2026-11-20T08:04:41Z
 schema: 4
-version: 1
+version: 2
 ---
 
 ## Objet
